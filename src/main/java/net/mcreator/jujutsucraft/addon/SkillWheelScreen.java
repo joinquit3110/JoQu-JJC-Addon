@@ -146,7 +146,7 @@ public class SkillWheelScreen extends net.minecraft.client.gui.screens.Screen {
             // (e.g. rapid TAB press) does not re-trigger the condition.
             if (this.hoveredIndex != -1 && !this.closing) {
                 Minecraft.getInstance().getSoundManager().play(
-                    SimpleSoundInstance.forUI(SoundEvents.UI_LOOM_SELECT, 0.008f, 1.0f + this.hoveredIndex * 0.015f));
+                    SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 0.008f, 1.0f + this.hoveredIndex * 0.015f));
             }
             this.lastHoveredTickIndex = this.hoveredIndex;
         }

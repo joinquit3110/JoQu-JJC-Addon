@@ -1,9 +1,10 @@
 package net.mcreator.jujutsucraft.addon.limb;
 
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import net.mcreator.jujutsucraft.addon.limb.LimbCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.limb.LimbData;
-import net.mcreator.jujutsucraft.addon.limb.LimbType;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -13,7 +14,6 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.entity.living.LivingEvent;
-import net.minecraftforge.event.entity.living.LivingJumpEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -38,6 +38,10 @@ public class LimbGameplayHandler {
     private static final UUID LEFT_ARM_MINING_UUID = UUID.fromString("a1b2c3d4-1111-4000-8000-000000000001");
     private static final UUID RIGHT_ARM_ATTACK_UUID = UUID.fromString("a1b2c3d4-2222-4000-8000-000000000002");
     private static final UUID LEG_SPEED_UUID = UUID.fromString("a1b2c3d4-3333-4000-8000-000000000003");
+
+    // Tracks the previous tick's Y velocity for each player — used to detect jump starts
+    // without relying on a ground-state method (not available in this Forge version).
+    private static final Map<UUID, Double> PREV_DELTA_Y = new ConcurrentHashMap<>();
 
     // EquipmentSlot entries for each hand
     private static final EquipmentSlot[] HAND_SLOTS = {
@@ -98,19 +102,22 @@ public class LimbGameplayHandler {
     }
 
     /**
-     * Every tick: drops held items if an arm is missing, and cancels
-     * sprinting if both legs are gone.
+     * Dampens or cancels the player's jump based on how many legs are missing.
      *
-     * Items are dropped one tick after they are picked up while the arm
-     * is missing. Items are also forcibly dropped every 20 ticks as a
-     * safety net for edge cases (e.g. creative mode give).
+     * <ul>
+     *   <li>2 legs lost: jump is fully negated (Y velocity zeroed).</li>
+     *   <li>1 leg lost: jump height reduced to 40%.</li>
+     * </ul>
+     *
+     * Since {@link LivingJumpEvent} is not available in this Forge version,
+     * we detect jumps by watching for the transition from grounded to airborne
+     * with positive Y velocity on the server side.
      */
     @SubscribeEvent
     public static void onPlayerTick(LivingEvent.LivingTickEvent event) {
-        LivingEntity livingEntity = event.getEntity();
-        if (!(livingEntity instanceof Player player)) return;
+        LivingEntity entity = event.getEntity();
+        if (!(entity instanceof Player player)) return;
         if (player.level().isClientSide) return;
-        if (player.tickCount % 20 != 0) return;
 
         LimbCapabilityProvider.get(player).ifPresent(data -> {
             int missingArms = data.countSeveredArms();
@@ -144,36 +151,24 @@ public class LimbGameplayHandler {
                 }
             }
         });
-    }
 
-    /**
-     * Dampens or cancels the player's jump based on how many legs are missing.
-     *
-     * <ul>
-     *   <li>2 legs lost: jump is fully negated (Y velocity zeroed).</li>
-     *   <li>1 leg lost: jump height reduced to 40%.</li>
-     * </ul>
-     *
-     * Note: {@link LivingJumpEvent} is not cancelable in this version of Forge,
-     * so we use velocity clamping on the {@link LivingEvent.LivingTickEvent} instead.
-     *
-     * @see LivingJumpEvent
-     */
-    @SubscribeEvent
-    public static void onPlayerJump(LivingJumpEvent event) {
-        LivingEntity livingEntity = event.getEntity();
-        if (!(livingEntity instanceof Player player)) return;
-        if (player.level().isClientSide) return;
-
+        // ── Jump dampening: detect jump starts by velocity change ───────────
         LimbCapabilityProvider.get(player).ifPresent(data -> {
             int missingLegs = data.countSeveredLegs();
-            if (missingLegs >= 2) {
-                // Fully block the jump by zeroing vertical velocity.
-                player.setDeltaMovement(player.getDeltaMovement().multiply(1.0, 0.0, 1.0));
-            } else if (missingLegs == 1) {
-                // Severe limp: only 40% of normal jump height
-                player.setDeltaMovement(player.getDeltaMovement().multiply(1.0, 0.4, 1.0));
+            if (missingLegs == 0) return;
+
+            UUID uuid = player.getUUID();
+            double prevY = PREV_DELTA_Y.getOrDefault(uuid, 0.0);
+            double currY = player.getDeltaMovement().y;
+            // A jump starts when Y velocity transitions from ≤ 0 to > 0
+            if (prevY <= 0 && currY > 0) {
+                if (missingLegs >= 2) {
+                    player.setDeltaMovement(player.getDeltaMovement().multiply(1.0, 0.0, 1.0));
+                } else if (missingLegs == 1) {
+                    player.setDeltaMovement(player.getDeltaMovement().multiply(1.0, 0.4, 1.0));
+                }
             }
+            PREV_DELTA_Y.put(uuid, currY);
         });
     }
 }

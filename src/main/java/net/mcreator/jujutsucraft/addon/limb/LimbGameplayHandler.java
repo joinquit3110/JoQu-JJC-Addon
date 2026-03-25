@@ -5,6 +5,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.mcreator.jujutsucraft.addon.limb.LimbCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.limb.LimbData;
+import net.mcreator.jujutsucraft.addon.limb.LimbType;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -40,13 +41,8 @@ public class LimbGameplayHandler {
     private static final UUID LEG_SPEED_UUID = UUID.fromString("a1b2c3d4-3333-4000-8000-000000000003");
 
     // Tracks the previous tick's Y velocity for each player — used to detect jump starts
-    // without relying on a ground-state method (not available in this Forge version).
+    // without relying on isOnGround() (not available in this Forge version).
     private static final Map<UUID, Double> PREV_DELTA_Y = new ConcurrentHashMap<>();
-
-    // EquipmentSlot entries for each hand
-    private static final EquipmentSlot[] HAND_SLOTS = {
-        EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND
-    };
 
     /**
      * Applies movement speed penalty based on how many legs are missing.
@@ -120,35 +116,36 @@ public class LimbGameplayHandler {
         if (player.level().isClientSide) return;
 
         LimbCapabilityProvider.get(player).ifPresent(data -> {
-            int missingArms = data.countSeveredArms();
             int missingLegs = data.countSeveredLegs();
 
             if (missingLegs >= 2) {
                 player.setSprinting(false);
             }
 
-            if (missingArms <= 0) return;
-
-            // ── Drop items currently held in either hand ──────────────
-            for (EquipmentSlot slot : HAND_SLOTS) {
-                ItemStack stack = player.getItemBySlot(slot);
-                if (!stack.isEmpty()) {
-                    player.setItemSlot(slot, ItemStack.EMPTY);
-                    player.drop(stack, false);
+            // ── Drop items held in each severed arm's corresponding hand ───
+            // LEFT_ARM  → offhand slot  (EquipmentSlot.OFFHAND)
+            // RIGHT_ARM → mainhand slot (EquipmentSlot.MAINHAND)
+            if (data.isLimbMissing(LimbType.LEFT_ARM)) {
+                ItemStack offhand = player.getItemBySlot(EquipmentSlot.OFFHAND);
+                if (!offhand.isEmpty()) {
+                    player.setItemSlot(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
+                    player.drop(offhand, false);
+                }
+            }
+            if (data.isLimbMissing(LimbType.RIGHT_ARM)) {
+                ItemStack mainhand = player.getItemBySlot(EquipmentSlot.MAINHAND);
+                if (!mainhand.isEmpty()) {
+                    player.setItemSlot(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
+                    player.drop(mainhand, false);
                 }
             }
 
-            // ── Safety net: clear any item the player somehow still ────
-            //    holds in the active slot on the hotbar ──────────────
-            for (int i = 0; i < 9; i++) {
-                ItemStack hotbarItem = player.getInventory().getItem(i);
-                if (!hotbarItem.isEmpty()) {
-                    // Only drop the selected hotbar slot
-                    if (i == player.getInventory().selected) {
-                        player.getInventory().setItem(i, ItemStack.EMPTY);
-                        player.drop(hotbarItem, false);
-                    }
-                }
+            // ── Safety net: clear the selected hotbar slot as a fallback ───
+            int selected = player.getInventory().selected;
+            ItemStack hotbarItem = player.getInventory().getItem(selected);
+            if (!hotbarItem.isEmpty()) {
+                player.getInventory().setItem(selected, ItemStack.EMPTY);
+                player.drop(hotbarItem, false);
             }
         });
 

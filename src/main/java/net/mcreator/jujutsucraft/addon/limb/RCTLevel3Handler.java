@@ -38,13 +38,14 @@ public class RCTLevel3Handler {
     private static final int NEAR_DEATH_COOLDOWN = 18000;
     private static final float HEAL_THRESHOLD = 4.0f;
     private static final int RCT_L3_UNLOCK_COUNT = 20;
+    private static final int CLOSE_CALL_COOLDOWN = 200;
 
     private static final String KEY_NEAR_DEATH = "jjkbrp_near_death";
     private static final String KEY_ND_TICKS = "jjkbrp_near_death_ticks";
     private static final String KEY_ND_COOLDOWN = "jjkbrp_near_death_cd";
     private static final String KEY_CLOSE_CALL = "jjkbrp_rct_close_call";
     private static final String KEY_FINAL_DEATH = "jjkbrp_final_death";
-    /** True last tick: RCT active and HP below 30% max (critical). */
+    /** True last tick: RCT active and HP below 10% max (critical). */
     private static final String KEY_PREV_CRIT_RCT = "jjkbrp_prev_crit_rct";
 
     @SubscribeEvent(priority = EventPriority.HIGH)
@@ -106,11 +107,15 @@ public class RCTLevel3Handler {
             float maxHp = player.getMaxHealth();
             float hp = player.getHealth();
             boolean rct = player.hasEffect(JujutsucraftModMobEffects.REVERSE_CURSED_TECHNIQUE.get());
-            boolean nowCritRct = rct && hp > 0.0f && hp < maxHp * 0.3f;
+            boolean nowCritRct = rct && hp > 0.0f && hp < maxHp * 0.1f;
             boolean prevCritRct = data.getBoolean(KEY_PREV_CRIT_RCT);
 
-            if (prevCritRct && rct && hp >= HEAL_THRESHOLD
-                && player.tickCount - data.getInt("jjkbrp_last_close_call_tick") > 40) {
+            // Only count close-call for players who have RCT level 2 + special grade, but not yet RCT level 3
+            if (!hasAdvancement(player, "jjkblueredpurple:rct_level_3")
+                && hasAdvancement(player, "jujutsucraft:reverse_cursed_technique_2")
+                && hasAdvancement(player, "jujutsucraft:sorcerer_grade_special")
+                && prevCritRct && rct && hp >= HEAL_THRESHOLD
+                && player.tickCount - data.getInt("jjkbrp_last_close_call_tick") > CLOSE_CALL_COOLDOWN) {
                 int closeCallCount = data.getInt(KEY_CLOSE_CALL) + 1;
                 data.putInt(KEY_CLOSE_CALL, closeCallCount);
                 data.putInt("jjkbrp_last_close_call_tick", player.tickCount);

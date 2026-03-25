@@ -140,12 +140,15 @@ public class LimbGameplayHandler {
                 }
             }
 
-            // ── Safety net: clear the selected hotbar slot as a fallback ───
-            int selected = player.getInventory().selected;
-            ItemStack hotbarItem = player.getInventory().getItem(selected);
-            if (!hotbarItem.isEmpty()) {
-                player.getInventory().setItem(selected, ItemStack.EMPTY);
-                player.drop(hotbarItem, false);
+            // Drop hotbar item only when BOTH arms are missing — one arm
+            // means the player can still swap items normally with the other hand
+            if (data.isLimbMissing(LimbType.LEFT_ARM) && data.isLimbMissing(LimbType.RIGHT_ARM)) {
+                int selected = player.getInventory().selected;
+                ItemStack hotbarItem = player.getInventory().getItem(selected);
+                if (!hotbarItem.isEmpty()) {
+                    player.getInventory().setItem(selected, ItemStack.EMPTY);
+                    player.drop(hotbarItem, false);
+                }
             }
         });
 

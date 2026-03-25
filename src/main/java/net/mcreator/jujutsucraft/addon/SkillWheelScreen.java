@@ -146,7 +146,7 @@ public class SkillWheelScreen extends net.minecraft.client.gui.screens.Screen {
             // (e.g. rapid TAB press) does not re-trigger the condition.
             if (this.hoveredIndex != -1 && !this.closing) {
                 Minecraft.getInstance().getSoundManager().play(
-                    SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 0.008f, 1.0f + this.hoveredIndex * 0.015f));
+                    SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 0.4f, 1.0f + this.hoveredIndex * 0.015f));
             }
             this.lastHoveredTickIndex = this.hoveredIndex;
         }
@@ -530,7 +530,6 @@ public class SkillWheelScreen extends net.minecraft.client.gui.screens.Screen {
             mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.ENCHANTMENT_TABLE_USE, 0.15f, 1.30f));
         }
         mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.AMETHYST_BLOCK_CHIME, 0.18f, 1.50f));
-        mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 0.12f, 1.70f));
     }
 
     // ── Easing ─────────────────────────────────────────────────────────────────

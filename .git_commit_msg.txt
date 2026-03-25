@@ -1,6 +1,0 @@
-fix: drop only the hand matching each severed arm
-
-Left arm severed → drop offhand slot only
-Right arm severed → drop mainhand slot only
-Both arms severed → drop both slots
-Safety net still clears the selected hotbar slot as fallback

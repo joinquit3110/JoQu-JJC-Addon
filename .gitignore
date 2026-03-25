@@ -1,0 +1,59 @@
+# ============================================================
+# Root-level build artifacts — never commit
+# ============================================================
+build.gradle
+settings.gradle
+gradle.properties
+gradlew
+gradlew.bat
+.gitattributes
+
+.gradle/
+build/
+bin/
+out/
+*.class
+*.jar
+mdk.zip
+
+# Gradle wrapper JAR (re-downloadable)
+gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+
+# ============================================================
+# Jujutsu Craft dependency JARs — do NOT upload to GitHub
+# ============================================================
+libs/*.jar
+
+# ============================================================
+# Forge MDK boilerplate files — not part of this addon
+# ============================================================
+CREDITS.txt
+LICENSE.txt
+changelog.txt
+forge*changelog.txt
+README.txt
+convert_mcp_to_mojang.py
+
+# ============================================================
+# src/main/java — only include the addon sources
+# ============================================================
+src/main/java/net/mcreator/jujutsucraft/*
+!src/main/java/net/mcreator/jujutsucraft/addon/
+!src/main/java/net/mcreator/jujutsucraft/LICENSE
+
+# ============================================================
+# src/main/resources — only include this addon's config + data
+# (META-INF and pack.mcmeta are needed to load the addon)
+# ============================================================
+src/main/resources/*
+!src/main/resources/META-INF/
+!src/main/resources/pack.mcmeta
+!src/main/resources/mixins.jjkblueredpurple.json
+!src/main/resources/data/jjkblueredpurple/

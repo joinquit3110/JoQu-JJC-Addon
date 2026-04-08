@@ -1,7 +1,7 @@
 package net.mcreator.jujutsucraft.addon;
 
 import java.util.Objects;
-import net.mcreator.jujutsucraft.addon.ModNetworking;
+import net.mcreator.jujutsucraft.addon.ClientPacketHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -11,44 +11,39 @@ import net.minecraftforge.client.gui.overlay.ForgeGui;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
+@Mod.EventBusSubscriber(modid="jjkblueredpurple", value={Dist.CLIENT}, bus=Mod.EventBusSubscriber.Bus.MOD)
 /**
- * HUD overlay that displays the player's current Black Flash activation chance
- * as a percentage next to the crosshair.
- *
- * <h2>Visibility</h2>
- * Only shown when {@link ModNetworking.ClientBlackFlashCache#bfPercent} is
- * above 0.01%. The colour and behaviour scale with the percentage:
- * <ul>
- *   <li>&lt;0.3%: dim gray — low chance</li>
- *   <li>0.3–0.6%: yellow-green — building up</li>
- *   <li>0.6–1.0%: cyan — decent chance</li>
- *   <li>1–5%: orange — strong chance</li>
- *   <li>5–10%: red — high chance</li>
- *   <li>≥10%: pulsing red/gold — maximum ("MAX")</li>
- * </ul>
- *
- * The text shakes when the percentage changes rapidly (e.g. entering combat)
- * and a small spark glyph (✦) appears when near maximum.
- *
- * @see ModNetworking.ClientBlackFlashCache
+ * Client HUD overlay that renders the current Black Flash chance near the crosshair, including shake and pulse feedback when the synced chance changes.
  */
-
-@Mod.EventBusSubscriber(modid = "jjkblueredpurple", value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 public class BlackFlashHudOverlay {
+    // Cached Black Flash percentage from the previous render frame so sudden value changes can trigger screen shake.
     private static float lastPercent = 0.0f;
+    // Current shake strength applied to the percentage text when the synced chance changes noticeably.
     private static float shakeIntensity = 0.0f;
+    // Wall-clock timestamp of the last major chance update, used to fade the shake effect back out.
     private static long lastChangeTime = 0L;
 
     @SubscribeEvent
+    /**
+     * Registers overlays with the appropriate Forge or client system.
+     * @param event context data supplied by the current callback or network pipeline.
+     */
     public static void registerOverlays(RegisterGuiOverlaysEvent event) {
         event.registerAboveAll("black_flash_chance", BlackFlashHudOverlay::renderOverlay);
     }
 
+    /**
+     * Renders overlay for the current frame.
+     * @param gui render context used to draw the current frame.
+     * @param graphics render context used to draw the current frame.
+     * @param partialTick tick-based timing value used by this operation.
+     * @param screenWidth screen width used by this method.
+     * @param screenHeight screen height used by this method.
+     */
     private static void renderOverlay(ForgeGui gui, GuiGraphics graphics, float partialTick, int screenWidth, int screenHeight) {
         int shadowColor;
         int color;
-        boolean isMax;
-        float bfPercent = ModNetworking.ClientBlackFlashCache.bfPercent;
+        float bfPercent = ClientPacketHandler.ClientBlackFlashCache.bfPercent;
         if (bfPercent < 0.01f) {
             return;
         }
@@ -72,13 +67,14 @@ public class BlackFlashHudOverlay {
         int textWidth = font.width(text);
         int drawX = cx + 14;
         Objects.requireNonNull(font);
-        int drawY = cy - 9 / 2;
+        int drawY = cy - 4;
         if (shakeIntensity > 0.1f) {
             drawX += (int)((Math.random() - 0.5) * (double)shakeIntensity * 2.0);
             drawY += (int)((Math.random() - 0.5) * (double)shakeIntensity * 2.0);
         }
         float pulse = (float)(Math.sin((double)now * 0.006) * 0.5 + 0.5);
-        boolean bl = isMax = bfPercent >= 10.0f;
+        boolean isMax = bfPercent >= 10.0f;
+        boolean bl = isMax;
         if (isMax) {
             float maxPulse = (float)(Math.sin((double)now * 0.012) * 0.5 + 0.5);
             int r = (int)(200.0f + 55.0f * maxPulse);
@@ -120,3 +116,4 @@ public class BlackFlashHudOverlay {
         }
     }
 }
+

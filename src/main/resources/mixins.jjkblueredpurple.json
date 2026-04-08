@@ -7,9 +7,26 @@
   "mixins": [
     "RedEntityMixin",
     "BlueEntityMixin",
+    "OCostProcedureMixin",
     "StartCursedTechniqueProcedureMixin",
     "RangeAttackProcedureMixin",
-    "AttackWeakProcedureMixin"
+    "AttackWeakProcedureMixin",
+    "DomainMasteryMixin",
+    "DomainExpansionBattleMixin",
+    "DomainBarrierMixin",
+    "DomainBarrierRestoreGuardMixin",
+    "DomainCreateBarrierMixin",
+    "DomainClashPenaltyMixin",
+    "DomainCastCostMixin",
+    "DomainClashXpMixin",
+    "RangeAttackBlackFlashChanceMixin",
+    "DomainActiveTickRadiusMixin",
+    "DomainCleanupEntityRangeMixin",
+    "DomainCleanupEntitySpawnMixin",
+    "DomainEffectStartDurationMixin",
+    "DomainExpireBarrierFixMixin",
+    "DomainOpenClashCancelMixin",
+    "DomainStartupRadiusMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -19,130 +19,128 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 /**
- * Applies gameplay debuffs to entities that have lost limbs and prevents
- * them from performing limb-dependent actions (jumping, sprinting, holding items).
+ * Applies gameplay penalties caused by missing limbs.
  *
- * <h2>Movement penalties</h2>
- * <ul>
- *   <li>1 leg lost: reduced jump height (multiplier 0.4)</li>
- *   <li>2 legs lost: near-total movement lock (multiplier 0.05, sprint disabled)</li>
- * </ul>
- *
- * <h2>Item-drop mechanic</h2>
- * While any arm (left, right, or both) is missing or regenerating,
- * the player cannot hold items. The held item is dropped immediately
- * and every second the player continues holding something.
+ * <p>This handler owns persistent attribute modifiers, forced item drops, sprint suppression, and
+ * reduced jump strength so that severed limbs have tangible combat and movement consequences.</p>
  */
-@Mod.EventBusSubscriber(modid = "jjkblueredpurple")
+@Mod.EventBusSubscriber(modid="jjkblueredpurple")
 public class LimbGameplayHandler {
-
+    /** UUID used for the left-arm-related mining/utility modifier slot. */
     private static final UUID LEFT_ARM_MINING_UUID = UUID.fromString("a1b2c3d4-1111-4000-8000-000000000001");
+    /** UUID used for the right-arm attack damage penalty modifier. */
     private static final UUID RIGHT_ARM_ATTACK_UUID = UUID.fromString("a1b2c3d4-2222-4000-8000-000000000002");
+    /** UUID used for the leg movement speed penalty modifier. */
     private static final UUID LEG_SPEED_UUID = UUID.fromString("a1b2c3d4-3333-4000-8000-000000000003");
+    /**
+     * Tracks the previous vertical motion of each player so jump starts can be detected reliably.
+     */
+    private static final Map<UUID, Double> PREV_DELTA_Y = new ConcurrentHashMap<UUID, Double>();
 
-    // Tracks the previous tick's Y velocity for each player — used to detect jump starts
-    // without relying on isOnGround() (not available in this Forge version).
-    private static final Map<UUID, Double> PREV_DELTA_Y = new ConcurrentHashMap<>();
+    // ===== ATTRIBUTE MODIFIERS =====
 
     /**
-     * Applies movement speed penalty based on how many legs are missing.
-     * 1 leg: moderate slow, 2 legs: near-total immobilisation.
+     * Applies all limb-related attribute penalties to an entity.
+     *
+     * @param entity entity receiving penalties
+     * @param data current limb capability data
      */
     public static void applyLimbDebuffs(LivingEntity entity, LimbData data) {
-        removeAllModifiers(entity);
-
+        LimbGameplayHandler.removeAllModifiers(entity);
         int missingArms = data.countSeveredArms();
         int missingLegs = data.countSeveredLegs();
-
-        // ── Arm: attack damage penalty ──────────────────────────────────
         if (missingArms > 0) {
+            // One arm removes 25% strike damage; both arms remove 50%.
             float damagePenalty = missingArms >= 2 ? 0.5f : 0.25f;
             AttributeInstance atkDmg = entity.getAttribute(Attributes.ATTACK_DAMAGE);
             if (atkDmg != null) {
                 atkDmg.removeModifier(RIGHT_ARM_ATTACK_UUID);
-                atkDmg.addTransientModifier(new AttributeModifier(
-                    RIGHT_ARM_ATTACK_UUID, "jjkbrp_limb_arm_strike_damage",
-                    (double)(-damagePenalty), AttributeModifier.Operation.MULTIPLY_TOTAL));
+                atkDmg.addTransientModifier(new AttributeModifier(RIGHT_ARM_ATTACK_UUID, "jjkbrp_limb_arm_strike_damage", (double)(-damagePenalty), AttributeModifier.Operation.MULTIPLY_TOTAL));
             }
-            if (entity instanceof ServerPlayer sp) {
+            if (entity instanceof ServerPlayer) {
+                ServerPlayer sp = (ServerPlayer)entity;
+                // This persistent key is used by other systems to read the current strike penalty.
                 sp.getPersistentData().putFloat("jjkbrp_strike_damage_penalty", damagePenalty);
             }
         }
-
-        // ── Leg: movement speed penalty ─────────────────────────────────
         if (missingLegs > 0) {
+            // One missing leg heavily slows movement; two missing legs nearly immobilize the player.
             double speedPenalty = missingLegs >= 2 ? -0.95 : -0.6;
             AttributeInstance attr = entity.getAttribute(Attributes.MOVEMENT_SPEED);
             if (attr != null) {
                 attr.removeModifier(LEG_SPEED_UUID);
-                attr.addTransientModifier(new AttributeModifier(
-                    LEG_SPEED_UUID, "jjkbrp_limb_leg_slow",
-                    speedPenalty, AttributeModifier.Operation.MULTIPLY_TOTAL));
+                attr.addTransientModifier(new AttributeModifier(LEG_SPEED_UUID, "jjkbrp_limb_leg_slow", speedPenalty, AttributeModifier.Operation.MULTIPLY_TOTAL));
             }
-        }
-    }
-
-    public static void removeAllModifiers(LivingEntity entity) {
-        AttributeInstance moveSpd = entity.getAttribute(Attributes.MOVEMENT_SPEED);
-        AttributeInstance atkDmg = entity.getAttribute(Attributes.ATTACK_DAMAGE);
-        if (atkDmg != null) atkDmg.removeModifier(RIGHT_ARM_ATTACK_UUID);
-        if (moveSpd != null) moveSpd.removeModifier(LEG_SPEED_UUID);
-    }
-
-    public static void refreshDebuffs(LivingEntity entity, LimbData data) {
-        if (data.hasSeveredLimbs()) {
-            applyLimbDebuffs(entity, data);
-        } else {
-            removeAllModifiers(entity);
         }
     }
 
     /**
-     * Dampens or cancels the player's jump based on how many legs are missing.
+     * Removes every limb-related attribute modifier from the entity.
      *
-     * <ul>
-     *   <li>2 legs lost: jump is fully negated (Y velocity zeroed).</li>
-     *   <li>1 leg lost: jump height reduced to 40%.</li>
-     * </ul>
+     * @param entity entity to clean up
+     */
+    public static void removeAllModifiers(LivingEntity entity) {
+        AttributeInstance moveSpd = entity.getAttribute(Attributes.MOVEMENT_SPEED);
+        AttributeInstance atkDmg = entity.getAttribute(Attributes.ATTACK_DAMAGE);
+        if (atkDmg != null) {
+            atkDmg.removeModifier(RIGHT_ARM_ATTACK_UUID);
+        }
+        if (moveSpd != null) {
+            moveSpd.removeModifier(LEG_SPEED_UUID);
+        }
+    }
+
+    /**
+     * Reapplies or removes penalties based on the entity's current limb state.
      *
-     * Since {@link LivingJumpEvent} is not available in this Forge version,
-     * we detect jumps by watching for the transition from grounded to airborne
-     * with positive Y velocity on the server side.
+     * @param entity entity whose penalties should be refreshed
+     * @param data current limb capability data
+     */
+    public static void refreshDebuffs(LivingEntity entity, LimbData data) {
+        if (data.hasSeveredLimbs()) {
+            LimbGameplayHandler.applyLimbDebuffs(entity, data);
+        } else {
+            LimbGameplayHandler.removeAllModifiers(entity);
+        }
+    }
+
+    // ===== PER-TICK GAMEPLAY ENFORCEMENT =====
+
+    /**
+     * Enforces held-item drops, sprint restrictions, and jump suppression for missing limbs.
+     *
+     * @param event living tick event
      */
     @SubscribeEvent
     public static void onPlayerTick(LivingEvent.LivingTickEvent event) {
         LivingEntity entity = event.getEntity();
-        if (!(entity instanceof Player player)) return;
-        if (player.level().isClientSide) return;
-
-        LimbCapabilityProvider.get(player).ifPresent(data -> {
+        if (!(entity instanceof Player)) {
+            return;
+        }
+        Player player = (Player)entity;
+        if (player.level().isClientSide) {
+            return;
+        }
+        LimbCapabilityProvider.get((LivingEntity)player).ifPresent(data -> {
+            ItemStack mainhand;
+            ItemStack offhand;
             int missingLegs = data.countSeveredLegs();
-
             if (missingLegs >= 2) {
+                // Players with no legs cannot sustain sprinting.
                 player.setSprinting(false);
             }
-
-            // ── Drop items held in each severed arm's corresponding hand ───
-            // LEFT_ARM  → offhand slot  (EquipmentSlot.OFFHAND)
-            // RIGHT_ARM → mainhand slot (EquipmentSlot.MAINHAND)
-            if (data.isLimbMissing(LimbType.LEFT_ARM)) {
-                ItemStack offhand = player.getItemBySlot(EquipmentSlot.OFFHAND);
-                if (!offhand.isEmpty()) {
-                    player.setItemSlot(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
-                    player.drop(offhand, false);
-                }
+            if (data.isLimbMissing(LimbType.LEFT_ARM) && !(offhand = player.getItemBySlot(EquipmentSlot.OFFHAND)).isEmpty()) {
+                // Losing the left arm immediately drops the offhand item.
+                player.setItemSlot(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
+                player.drop(offhand, false);
             }
-            if (data.isLimbMissing(LimbType.RIGHT_ARM)) {
-                ItemStack mainhand = player.getItemBySlot(EquipmentSlot.MAINHAND);
-                if (!mainhand.isEmpty()) {
-                    player.setItemSlot(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
-                    player.drop(mainhand, false);
-                }
+            if (data.isLimbMissing(LimbType.RIGHT_ARM) && !(mainhand = player.getItemBySlot(EquipmentSlot.MAINHAND)).isEmpty()) {
+                // Losing the right arm immediately drops the main-hand item.
+                player.setItemSlot(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
+                player.drop(mainhand, false);
             }
-
-            // Drop hotbar item only when BOTH arms are missing — one arm
-            // means the player can still swap items normally with the other hand
             if (data.isLimbMissing(LimbType.LEFT_ARM) && data.isLimbMissing(LimbType.RIGHT_ARM)) {
+                // With both arms gone, even the selected hotbar slot cannot be retained.
                 int selected = player.getInventory().selected;
                 ItemStack hotbarItem = player.getInventory().getItem(selected);
                 if (!hotbarItem.isEmpty()) {
@@ -151,20 +149,21 @@ public class LimbGameplayHandler {
                 }
             }
         });
-
-        // ── Jump dampening: detect jump starts by velocity change ───────────
-        LimbCapabilityProvider.get(player).ifPresent(data -> {
+        LimbCapabilityProvider.get((LivingEntity)player).ifPresent(data -> {
             int missingLegs = data.countSeveredLegs();
-            if (missingLegs == 0) return;
-
+            if (missingLegs == 0) {
+                return;
+            }
             UUID uuid = player.getUUID();
             double prevY = PREV_DELTA_Y.getOrDefault(uuid, 0.0);
             double currY = player.getDeltaMovement().y;
-            // A jump starts when Y velocity transitions from ≤ 0 to > 0
-            if (prevY <= 0 && currY > 0) {
+            // A transition from non-positive Y velocity to positive Y velocity marks the start of a jump.
+            if (prevY <= 0.0 && currY > 0.0) {
                 if (missingLegs >= 2) {
+                    // No legs means jumps are fully suppressed.
                     player.setDeltaMovement(player.getDeltaMovement().multiply(1.0, 0.0, 1.0));
                 } else if (missingLegs == 1) {
+                    // One missing leg preserves only 40% of normal upward impulse.
                     player.setDeltaMovement(player.getDeltaMovement().multiply(1.0, 0.4, 1.0));
                 }
             }

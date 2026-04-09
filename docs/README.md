@@ -1,4 +1,4 @@
-# JJK Blue Red Purple Addon Documentation
+# JoQu's JJC Addon
 
 ## Overview
 

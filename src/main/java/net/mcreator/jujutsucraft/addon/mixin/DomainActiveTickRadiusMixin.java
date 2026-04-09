@@ -42,14 +42,21 @@ public class DomainActiveTickRadiusMixin {
         if (stale != null) {
             DomainRadiusUtils.clearScalingContext();
         }
-        if (Math.abs((radiusMul = player.getPersistentData().getDouble("jjkbrp_radius_multiplier")) - 1.0) < 1.0E-4) {
+        radiusMul = player.getPersistentData().getDouble("jjkbrp_radius_multiplier");
+        if (Math.abs(radiusMul) < 1.0E-4) {
+            radiusMul = 1.0;
+        }
+        if (!player.getPersistentData().contains("jjkbrp_base_domain_radius")) {
             return;
         }
         try {
             JujutsucraftModVariables.MapVariables mapVars = JujutsucraftModVariables.MapVariables.get((LevelAccessor)world);
-            double original = player.getPersistentData().contains("jjkbrp_base_domain_radius") ? player.getPersistentData().getDouble("jjkbrp_base_domain_radius") : mapVars.DomainExpansionRadius;
-            // Replace the shared radius only for the duration of this tick so all downstream base logic sees the correct scaled value.
-            mapVars.DomainExpansionRadius = Math.max(1.0, original * radiusMul);
+            double original = mapVars.DomainExpansionRadius;
+            double scaled = Math.max(1.0, player.getPersistentData().getDouble("jjkbrp_base_domain_radius") * radiusMul);
+            if (Math.abs(original - scaled) < 1.0E-4) {
+                return;
+            }
+            mapVars.DomainExpansionRadius = scaled;
             DomainRadiusUtils.onScalingApplied(world, original);
         }
         catch (Exception exception) {

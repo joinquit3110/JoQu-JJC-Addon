@@ -35,7 +35,9 @@ public class DomainClashXpMixin {
     // Mixin-local runtime state used for loser xp.
     private static final int JJKBRP$LOSER_XP = 10;
     // Mixin-local runtime state used for tie window ticks.
-    private static final long JJKBRP$TIE_WINDOW_TICKS = 5L;
+    private static final long JJKBRP$TIE_WINDOW_TICKS = 80L;
+    private static final long JJKBRP$MIN_CLASH_DURATION_TICKS = 60L;
+    private static final long JJKBRP$RESULT_COOLDOWN_TICKS = 200L;
     // Mixin-local runtime state used for recent clash contact ticks.
     private static final long JJKBRP$RECENT_CLASH_CONTACT_TICKS = 40L;
 
@@ -70,7 +72,7 @@ public class DomainClashXpMixin {
         boolean lossState = DomainClashXpMixin.jjkbrp$isLossState(nbt);
         AABB searchBox = DomainClashXpMixin.jjkbrp$buildClashSearchBox(world, sourceEntity);
         if (!lossState) {
-            DomainClashXpMixin.jjkbrp$clearOutcomeTracking(nbt);
+            DomainClashXpMixin.jjkbrp$clearOutcomeTracking(nbt, currentTick);
             if (!DomainClashXpMixin.jjkbrp$isActiveClashParticipant(sourceEntity) || !DomainClashXpMixin.jjkbrp$isDomainCasterState(sourceEntity)) {
                 return;
             }
@@ -93,14 +95,13 @@ public class DomainClashXpMixin {
         if (!nbt.contains("jjkbrp_clash_pending_tick")) {
             nbt.putLong("jjkbrp_clash_pending_tick", currentTick);
         }
-        if ((tieEntity = DomainClashXpMixin.jjkbrp$findPendingTieEntity(world, sourceEntity, searchBox, currentTick)) != null) {
-                    // If neither side establishes a decisive lead, the clash falls back to the shared tie-resolution path.
-            DomainClashXpMixin.jjkbrp$resolveTie(sourceEntity, tieEntity, currentTick);
-            return;
-        }
         long pendingTick = nbt.getLong("jjkbrp_clash_pending_tick");
         long pendingAge = currentTick - pendingTick;
-        if (pendingAge >= 0L && pendingAge <= 5L) {
+        if (pendingAge >= 0L && pendingAge <= JJKBRP$TIE_WINDOW_TICKS) {
+            return;
+        }
+        if ((tieEntity = DomainClashXpMixin.jjkbrp$findPendingTieEntity(world, sourceEntity, searchBox, currentTick)) != null) {
+            DomainClashXpMixin.jjkbrp$resolveTie(sourceEntity, tieEntity, currentTick);
             return;
         }
         LivingEntity winnerEntity = DomainClashXpMixin.jjkbrp$findWinnerEntity(world, sourceEntity, searchBox, currentTick);
@@ -384,6 +385,7 @@ public class DomainClashXpMixin {
             return false;
         }
         CompoundTag sourceNbt = source.getPersistentData();
+        CompoundTag targetNbt = target.getPersistentData();
         double sx = sourceNbt.contains("x_pos_doma") ? sourceNbt.getDouble("x_pos_doma") : source.getX();
         double sy = sourceNbt.contains("y_pos_doma") ? sourceNbt.getDouble("y_pos_doma") : source.getY();
         double sz = sourceNbt.contains("z_pos_doma") ? sourceNbt.getDouble("z_pos_doma") : source.getZ();
@@ -393,8 +395,19 @@ public class DomainClashXpMixin {
         double dx = sx - tx;
         double dy = sy - ty;
         double dz = sz - tz;
-        double distanceSq = dx * dx + dy * dy + dz * dz;
-        double threshold = Math.max(2.0, DomainClashXpMixin.jjkbrp$baseClashRange(world, source, sourceNbt) * 0.5);
+        double distToBodySq = dx * dx + dy * dy + dz * dz;
+        double tcx = targetNbt.contains("x_pos_doma") ? targetNbt.getDouble("x_pos_doma") : target.getX();
+        double tcy = targetNbt.contains("y_pos_doma") ? targetNbt.getDouble("y_pos_doma") : target.getY();
+        double tcz = targetNbt.contains("z_pos_doma") ? targetNbt.getDouble("z_pos_doma") : target.getZ();
+        double cdx = sx - tcx;
+        double cdy = sy - tcy;
+        double cdz = sz - tcz;
+        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
+        double distanceSq = Math.min(distToBodySq, distToCenterSq);
+        double sourceRange = DomainClashXpMixin.jjkbrp$baseClashRange(world, source, sourceNbt);
+        double targetRange = DomainClashXpMixin.jjkbrp$baseClashRange(world, target, targetNbt);
+        double combinedRange = Math.max(sourceRange, targetRange);
+        double threshold = Math.max(4.0, combinedRange * 0.65);
         return distanceSq < threshold * threshold;
     }
 
@@ -630,10 +643,20 @@ public class DomainClashXpMixin {
      * @param nbt persistent data container used by this helper.
      */
     private static void jjkbrp$clearOutcomeTracking(CompoundTag nbt) {
+        DomainClashXpMixin.jjkbrp$clearOutcomeTracking(nbt, -1L);
+    }
+
+    private static void jjkbrp$clearOutcomeTracking(CompoundTag nbt, long currentTick) {
         if (nbt == null) {
             return;
         }
         if (nbt.contains("jjkbrp_clash_result_tick")) {
+            if (currentTick >= 0L) {
+                long resultTick = nbt.getLong("jjkbrp_clash_result_tick");
+                if (currentTick - resultTick < JJKBRP$RESULT_COOLDOWN_TICKS) {
+                    return;
+                }
+            }
             nbt.remove("jjkbrp_clash_result_tick");
         }
         if (nbt.contains("jjkbrp_clash_pending_tick")) {
@@ -669,6 +692,23 @@ public class DomainClashXpMixin {
             winData.putBoolean("jjkbrp_incomplete_form_active", true);
             winData.putBoolean("jjkbrp_incomplete_session_active", true);
             winData.putBoolean("DomainAttack", false);
+            if (!DomainAddonUtils.isIncompleteDomainState(loserEntity) && !DomainAddonUtils.isOpenDomainState(loserEntity)) {
+                CompoundTag loserNbt = loserEntity.getPersistentData();
+                String loserOutside = loserNbt.getString("domain_outside");
+                String loserInside = loserNbt.getString("domain_inside");
+                String loserFloor = loserNbt.getString("domain_floor");
+                if (!loserOutside.isEmpty()) {
+                    winData.putString("domain_outside", loserOutside);
+                    winData.putString("domain_inside", loserInside);
+                    winData.putString("domain_floor", loserFloor);
+                    winData.putBoolean("jjkbrp_adopted_barrier", true);
+                    winData.putDouble("jjkbrp_adopted_cx", loserNbt.getDouble("x_pos_doma"));
+                    winData.putDouble("jjkbrp_adopted_cy", loserNbt.getDouble("y_pos_doma"));
+                    winData.putDouble("jjkbrp_adopted_cz", loserNbt.getDouble("z_pos_doma"));
+                    winData.putDouble("jjkbrp_adopted_radius", DomainAddonUtils.getActualDomainRadius(
+                            winnerEntity.level(), loserNbt));
+                }
+            }
         }
         if (winnerEntity instanceof Player) {
             Player winnerPlayer = (Player)winnerEntity;
@@ -725,15 +765,14 @@ public class DomainClashXpMixin {
         // Push a formatted result message to the player so the XP award and clash outcome are visible immediately.
     private static void sendOutcomeMessage(Player player, LivingEntity opponent, String title, ChatFormatting color, int xpAmount, boolean xpGranted) {
         String icon = DomainClashXpMixin.jjkbrp$clashIcon(title);
-        Object xpLabel = xpGranted ? "+" + xpAmount + " XP" : "MAX Lv";
+        String xpLabel = xpGranted ? "+" + xpAmount + " XP" : "MAX";
         ChatFormatting xpColor = xpGranted ? ChatFormatting.GREEN : ChatFormatting.DARK_GRAY;
         String opponentName = opponent == null ? "Unknown" : opponent.getName().getString();
-        MutableComponent message = Component.literal((String)(icon + " ")).withStyle(new ChatFormatting[]{color, ChatFormatting.BOLD}).append((Component)Component.literal((String)"[Domain Clash] ").withStyle(ChatFormatting.DARK_AQUA)).append((Component)Component.literal((String)title).withStyle(new ChatFormatting[]{color, ChatFormatting.BOLD})).append((Component)Component.literal((String)" vs ").withStyle(ChatFormatting.GRAY)).append((Component)Component.literal((String)opponentName).withStyle(new ChatFormatting[]{ChatFormatting.WHITE, ChatFormatting.BOLD}));
-        if (title != null && title.contains("TIE")) {
-            message = message.append((Component)Component.literal((String)" \u2022 Both domains collapsed").withStyle(ChatFormatting.GOLD));
-        }
-        message = message.append((Component)Component.literal((String)" \u2022 ").withStyle(ChatFormatting.DARK_GRAY)).append((Component)Component.literal((String)xpLabel).withStyle(new ChatFormatting[]{xpColor, ChatFormatting.BOLD}));
-        player.displayClientMessage((Component)message, false);
+        MutableComponent actionBar = Component.literal((String)(icon + " ")).withStyle(new ChatFormatting[]{color, ChatFormatting.BOLD})
+                .append((Component)Component.literal((String)title).withStyle(new ChatFormatting[]{color, ChatFormatting.BOLD}))
+                .append((Component)Component.literal((String)(" vs " + opponentName + " ")).withStyle(ChatFormatting.WHITE))
+                .append((Component)Component.literal((String)xpLabel).withStyle(new ChatFormatting[]{xpColor, ChatFormatting.BOLD}));
+        player.displayClientMessage((Component)actionBar, true);
     }
 
     /**

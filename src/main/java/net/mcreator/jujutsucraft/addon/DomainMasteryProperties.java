@@ -8,21 +8,23 @@ import java.util.function.Supplier;
  */
 public enum DomainMasteryProperties {
     /** Domain property that drains cursed energy from affected victims over time. */
-    VICTIM_CE_DRAIN("jujutsucraft.domain.prop.ce_drain", "jujutsucraft.domain.prop.ce_drain.desc", 10, 1, () -> 2.0, " CE/0.5s"),
+    VICTIM_CE_DRAIN("jujutsucraft.domain.prop.ce_drain", "jujutsucraft.domain.prop.ce_drain.desc", 10, 1, () -> 1.2, " CE/0.5s"),
     /** Domain property that increases the owner's Black Flash proc chance. */
     BF_CHANCE_BOOST("jujutsucraft.domain.prop.bf_chance", "jujutsucraft.domain.prop.bf_chance.desc", 10, 1, () -> 0.5, "% BF"),
     /** Domain property that increases reverse cursed technique healing while the domain is active. */
-    RCT_HEAL_BOOST("jujutsucraft.domain.prop.rct_heal", "jujutsucraft.domain.prop.rct_heal.desc", 10, 1, () -> 0.4, " HP/s"),
+    RCT_HEAL_BOOST("jujutsucraft.domain.prop.rct_heal", "jujutsucraft.domain.prop.rct_heal.desc", 10, 1, () -> 0.25, " HP/s"),
     /** Domain property that applies or strengthens blindness inside the domain. */
-    BLIND_EFFECT("jujutsucraft.domain.prop.blind", "jujutsucraft.domain.prop.blind.desc", 10, 1, () -> 1.0, " lvl"),
+    BLIND_EFFECT("jujutsucraft.domain.prop.blind", "jujutsucraft.domain.prop.blind.desc", 5, 1, () -> 1.0, " lvl"),
     /** Domain property that applies or strengthens slowing effects inside the domain. */
-    SLOW_EFFECT("jujutsucraft.domain.prop.slow", "jujutsucraft.domain.prop.slow.desc", 10, 1, () -> 1.0, " lvl"),
+    SLOW_EFFECT("jujutsucraft.domain.prop.slow", "jujutsucraft.domain.prop.slow.desc", 5, 1, () -> 1.0, " lvl"),
     /** Domain property that extends how long the domain can remain active. */
-    DURATION_EXTEND("jujutsucraft.domain.prop.duration", "jujutsucraft.domain.prop.duration.desc", 10, 1, () -> 10.0, "s"),
+    DURATION_EXTEND("jujutsucraft.domain.prop.duration", "jujutsucraft.domain.prop.duration.desc", 10, 1, () -> 5.0, "s"),
     /** Domain property that increases the effective range of the domain. */
-    RADIUS_BOOST("jujutsucraft.domain.prop.radius", "jujutsucraft.domain.prop.radius.desc", 10, 1, () -> 25.0, "%"),
+    RADIUS_BOOST("jujutsucraft.domain.prop.radius", "jujutsucraft.domain.prop.radius.desc", 10, 1, () -> 12.0, "%"),
     /** Domain property that improves clash performance against competing domains. */
-    CLASH_POWER("jujutsucraft.domain.prop.clash_power", "jujutsucraft.domain.prop.clash_power.desc", 10, 1, () -> 1.0, "");
+    CLASH_POWER("jujutsucraft.domain.prop.clash_power", "jujutsucraft.domain.prop.clash_power.desc", 10, 1, () -> 0.6, ""),
+    /** Domain property that strengthens barrier resistance against erosion and pressure. */
+    BARRIER_REFINEMENT("jujutsucraft.domain.prop.barrier_ref", "jujutsucraft.domain.prop.barrier_ref.desc", 10, 1, () -> 4.0, "%");
 
     // Translation key for the property name shown in UI and command output.
     private final String nameKey;
@@ -110,8 +112,9 @@ public enum DomainMasteryProperties {
      */
     public String formatLevelValue(int level) {
         return switch (this) {
-            case DURATION_EXTEND -> String.format(Locale.ROOT, "%+ds", level * 10);
-            case CLASH_POWER -> String.format(Locale.ROOT, "%+.1f", (double)level * 1.0);
+            case DURATION_EXTEND -> String.format(Locale.ROOT, "%+ds", level * 5);
+            case CLASH_POWER -> String.format(Locale.ROOT, "%+.1f", (double)level * 0.6);
+            case BARRIER_REFINEMENT -> String.format(Locale.ROOT, "%+.0f%%", (double)level * 4.0);
             default -> String.format(Locale.ROOT, "%+.1f%s", this.getValuePerLevel() * (double)level, this.getUnit());
         };
     }
@@ -124,9 +127,10 @@ public enum DomainMasteryProperties {
     public String formatNegativeValue(int negativePoints) {
         int points = Math.max(0, negativePoints);
         return switch (this) {
-            case DURATION_EXTEND -> String.format(Locale.ROOT, "-%ds", points * 10);
-            case CLASH_POWER -> String.format(Locale.ROOT, "-%.1f", (double)points * 0.5);
-            case RADIUS_BOOST -> String.format(Locale.ROOT, "-%.1f%%", (double)points * 10.0);
+            case DURATION_EXTEND -> String.format(Locale.ROOT, "-%ds", points * 5);
+            case CLASH_POWER -> String.format(Locale.ROOT, "-%.1f", (double)points * 0.3);
+            case RADIUS_BOOST -> String.format(Locale.ROOT, "-%.1f%%", (double)points * 8.0);
+            case BARRIER_REFINEMENT -> String.format(Locale.ROOT, "-%.0f%%", (double)points * 4.0);
             default -> String.format(Locale.ROOT, "-%.1f%s", this.getValuePerLevel() * (double)points, this.getUnit());
         };
     }
@@ -144,7 +148,7 @@ public enum DomainMasteryProperties {
      * @return true when supports negative modify succeeds; otherwise false.
      */
     public boolean supportsNegativeModify() {
-        return this == DURATION_EXTEND || this == RADIUS_BOOST || this == CLASH_POWER;
+        return this == DURATION_EXTEND || this == RADIUS_BOOST || this == CLASH_POWER || this == BARRIER_REFINEMENT;
     }
 
     /**

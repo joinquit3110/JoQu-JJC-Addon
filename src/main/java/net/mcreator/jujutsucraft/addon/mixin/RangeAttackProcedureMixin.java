@@ -2,17 +2,25 @@ package net.mcreator.jujutsucraft.addon.mixin;
 
 import com.mojang.logging.LogUtils;
 import java.util.UUID;
+import net.minecraft.advancements.Advancement;
+import net.minecraft.advancements.AdvancementProgress;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
+import net.mcreator.jujutsucraft.entity.RedEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.RangeAttackProcedure;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import org.slf4j.Logger;
@@ -38,6 +46,10 @@ public class RangeAttackProcedureMixin {
     private static final String KEY_CNT6_SUPPRESSED = "jjkbrp_cnt6_suppressed";
     // Persistent-data flag marking that the near-death cooldown reduction was already handled for the current Black Flash event.
     private static final String KEY_BF_ND_HANDLED = "jjkbrp_bf_nd_handled";
+    // Persistent-data key storing the pre-scaled damage value so rank scaling can be safely reverted after each attack call.
+    private static final String KEY_RANK_DAMAGE_BACKUP = "jjkbrp_rank_damage_backup";
+    // Persistent-data flag marking that rank-based damage scaling was applied for the current attack execution.
+    private static final String KEY_RANK_DAMAGE_APPLIED = "jjkbrp_rank_damage_applied";
     // Black Flash proc cooldown applied after a successful ranged proc, measured in ticks.
     private static final int BF_PROC_COOLDOWN_TICKS = 60;
     // Amount of near-death cooldown removed when a valid Black Flash proc is detected.
@@ -90,6 +102,8 @@ public class RangeAttackProcedureMixin {
             ci.cancel();
             return;
         }
+        // Apply rank-based scaling for addon RED/BLUE/PURPLE attacks while keeping each call idempotent across recursive execute paths.
+        RangeAttackProcedureMixin.jjkblueredpurple$applyRankDamageScale(world, entity, data);
         // Temporarily swap the shared domain radius so all downstream range checks operate on the mastery-scaled radius instead of the global default.
         RangeAttackProcedureMixin.jjkblueredpurple$scaleDomainAttackRadius(world, entity);
         JJKBRP$protectedOwner.remove();
@@ -97,8 +111,7 @@ public class RangeAttackProcedureMixin {
             ownerPlayer.setInvulnerable(true);
             JJKBRP$protectedOwner.set(ownerPlayer);
         }
-        // Open domains receive their extra sure-hit damage, range, and cursed-energy drain tuning here before the original procedure consumes those values.
-        if (data.getBoolean("DomainAttack") && sourceOpen) {
+        if (data.getBoolean("DomainAttack") && sourceOpen && !data.getBoolean("jjkbrp_surehit_corrected")) {
             double surehitMul = domainStateData.getDouble("jjkbrp_open_surehit_multiplier");
             double ceMul = domainStateData.getDouble("jjkbrp_open_ce_drain_multiplier");
             if (surehitMul <= 0.0) {
@@ -108,15 +121,8 @@ public class RangeAttackProcedureMixin {
                 ceMul = 1.0;
             }
             int domainId = (int)Math.round(domainStateData.getDouble("jjkbrp_domain_id_runtime"));
-            double rangeMul = Math.max(0.7, Math.min(1.35, surehitMul));
-            if (domainId == 1 || domainId == 15) {
-                rangeMul = Math.min(rangeMul, 1.0);
-            }
             if (data.contains("Damage")) {
                 data.putDouble("Damage", data.getDouble("Damage") * surehitMul);
-            }
-            if (data.contains("Range")) {
-                data.putDouble("Range", data.getDouble("Range") * rangeMul);
             }
             if (entity instanceof Player) {
                 Player p = (Player)entity;
@@ -126,6 +132,37 @@ public class RangeAttackProcedureMixin {
                     vars.syncPlayerVariables((Entity)p);
                 });
             }
+            if (domainStateSource != null) {
+                CompoundTag ownerNbt = domainStateSource.getPersistentData();
+                double cx = ownerNbt.contains("jjkbrp_open_domain_cx") ? ownerNbt.getDouble("jjkbrp_open_domain_cx")
+                          : ownerNbt.contains("x_pos_doma") ? ownerNbt.getDouble("x_pos_doma") : x;
+                double cy = ownerNbt.contains("jjkbrp_open_domain_cy") ? ownerNbt.getDouble("jjkbrp_open_domain_cy")
+                          : ownerNbt.contains("y_pos_doma") ? ownerNbt.getDouble("y_pos_doma") : y;
+                double cz = ownerNbt.contains("jjkbrp_open_domain_cz") ? ownerNbt.getDouble("jjkbrp_open_domain_cz")
+                          : ownerNbt.contains("z_pos_doma") ? ownerNbt.getDouble("z_pos_doma") : z;
+                double addonOpenRange = DomainAddonUtils.getOpenDomainRange(world, (Entity)domainStateSource);
+                double addonSureHitRange = addonOpenRange * 0.5;
+                double dx = x - cx;
+                double dy = y - cy;
+                double dz = z - cz;
+                double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                double maxOriginDist = addonSureHitRange * 0.6;
+                double corrX = x, corrY = y, corrZ = z;
+                if (dist > maxOriginDist && dist > 0.001) {
+                    double scale = maxOriginDist / dist;
+                    corrX = cx + dx * scale;
+                    corrY = cy + dy * scale;
+                    corrZ = cz + dz * scale;
+                }
+                data.putDouble("Range", addonSureHitRange);
+                data.putBoolean("jjkbrp_surehit_corrected", true);
+                ci.cancel();
+                RangeAttackProcedure.execute(world, corrX, corrY, corrZ, entity);
+                data.remove("jjkbrp_surehit_corrected");
+                return;
+            }
+        } else if (data.getBoolean("DomainAttack") && sourceOpen && data.getBoolean("jjkbrp_surehit_corrected")) {
+            data.remove("jjkbrp_surehit_corrected");
         }
         int bfCd = data.getInt(KEY_BF_CD);
         // The addon suppresses or boosts `cnt6` only for the current execution window, then restores the original value on return.
@@ -182,6 +219,13 @@ public class RangeAttackProcedureMixin {
             data.remove(KEY_CNT6_BACKUP);
             data.putBoolean(KEY_CNT6_SUPPRESSED, false);
         }
+        if (data.getBoolean(KEY_RANK_DAMAGE_APPLIED)) {
+            if (data.contains(KEY_RANK_DAMAGE_BACKUP)) {
+                data.putDouble("Damage", data.getDouble(KEY_RANK_DAMAGE_BACKUP));
+            }
+            data.remove(KEY_RANK_DAMAGE_BACKUP);
+            data.putBoolean(KEY_RANK_DAMAGE_APPLIED, false);
+        }
         if (entity instanceof LivingEntity) {
             boolean bfJustProcced;
             LivingEntity le = (LivingEntity)entity;
@@ -231,9 +275,6 @@ public class RangeAttackProcedureMixin {
         }
         CompoundTag radiusNbt = radiusSource.getPersistentData();
         if (!radiusNbt.contains("jjkbrp_base_domain_radius")) {
-            return;
-        }
-        if (Math.abs(radiusNbt.getDouble("jjkbrp_radius_multiplier") - 1.0) < 1.0E-4) {
             return;
         }
         try {
@@ -332,6 +373,162 @@ public class RangeAttackProcedureMixin {
             return owner;
         }
         return entity instanceof LivingEntity ? (living = (LivingEntity)entity) : null;
+    }
+
+    /**
+     * Applies rank-based damage scaling for addon RED/BLUE/PURPLE paths that route through RangeAttackProcedure.
+     * @param world world access used by the current mixin callback.
+     * @param entity entity involved in the current mixin operation.
+     * @param data persistent data container used by this helper.
+     */
+    @Unique
+    private static void jjkblueredpurple$applyRankDamageScale(LevelAccessor world, Entity entity, CompoundTag data) {
+        if (data == null || entity == null || data.getBoolean(KEY_RANK_DAMAGE_APPLIED) || !data.contains("Damage")) {
+            return;
+        }
+        double rankScale = 1.0;
+        if (entity instanceof RedEntity || entity instanceof BlueEntity) {
+            rankScale = RangeAttackProcedureMixin.jjkblueredpurple$getOwnerRankDamageScale(world, data.getString("OWNER_UUID"));
+        } else if (entity instanceof PurpleEntity && data.getBoolean("addon_purple_fusion")) {
+            rankScale = RangeAttackProcedureMixin.jjkblueredpurple$getOwnerRankDamageScale(world, data.getString("OWNER_UUID"));
+        }
+        if (rankScale <= 1.0) {
+            return;
+        }
+        data.putDouble(KEY_RANK_DAMAGE_BACKUP, data.getDouble("Damage"));
+        data.putDouble("Damage", data.getDouble("Damage") * rankScale);
+        data.putBoolean(KEY_RANK_DAMAGE_APPLIED, true);
+    }
+
+    /**
+     * Resolves rank damage scaling by mirroring the base mod's damage-fix behavior on the owner.
+     * @param world world access used by the current mixin callback.
+     * @param ownerUUID identifier used to resolve runtime state for this operation.
+     * @return rank multiplier resolved for the current owner.
+     */
+    @Unique
+    private static double jjkblueredpurple$getOwnerRankDamageScale(LevelAccessor world, String ownerUUID) {
+        Player owner = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, ownerUUID);
+        if (!(owner instanceof ServerPlayer)) {
+            return 1.0;
+        }
+        ServerPlayer player = (ServerPlayer)owner;
+        double capabilityScale = RangeAttackProcedureMixin.jjkblueredpurple$getPlayerLevelDamageScale(player);
+        double advancementScale = RangeAttackProcedureMixin.jjkblueredpurple$getAdvancementRankDamageScale(player);
+        double effectScale = RangeAttackProcedureMixin.jjkblueredpurple$getDamageFixEquivalentScale(player);
+        return Math.max(Math.max(capabilityScale, advancementScale), effectScale);
+    }
+
+    /**
+     * Converts a player level into the same baseline damage gain shape used by base Strength-driven combat.
+     * @param playerLevel level value used by this helper.
+     * @return converted baseline damage scale.
+     */
+    @Unique
+    private static double jjkblueredpurple$getScaleFromPlayerLevel(double playerLevel) {
+        if (playerLevel <= 0.0) {
+            return 1.0;
+        }
+        double level = Math.max(playerLevel - 1.0, 0.0);
+        double levelPower = Math.round(level);
+        if (levelPower < 3.0) {
+            levelPower = Math.min(levelPower, 1.0);
+        }
+        // Base formula: Damage *= 1 + ((1 + StrengthAmp) * 0.333), where StrengthAmp is derived from level.
+        return Math.max(1.0, 1.0 + (1.0 + levelPower) * 0.333);
+    }
+
+    /**
+     * Pulls owner `PlayerLevel` from capability data and converts it to base-like damage scaling.
+     * @param player entity involved in the current mixin operation.
+     * @return capability-derived damage scale.
+     */
+    @Unique
+    private static double jjkblueredpurple$getPlayerLevelDamageScale(ServerPlayer player) {
+        JujutsucraftModVariables.PlayerVariables vars = (JujutsucraftModVariables.PlayerVariables)player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(null);
+        if (vars == null) {
+            return 1.0;
+        }
+        return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(vars.PlayerLevel);
+    }
+
+    /**
+     * Uses completed grade advancements as a fallback baseline when capability data is stale.
+     * @param player entity involved in the current mixin operation.
+     * @return advancement-derived baseline scale.
+     */
+    @Unique
+    private static double jjkblueredpurple$getAdvancementRankDamageScale(ServerPlayer player) {
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_special")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(20.0);
+        }
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_1")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(13.0);
+        }
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_1_semi")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(11.0);
+        }
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_2")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(9.0);
+        }
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_2_semi")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(7.0);
+        }
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_3")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(4.0);
+        }
+        if (RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jujutsucraft:sorcerer_grade_4")) {
+            return RangeAttackProcedureMixin.jjkblueredpurple$getScaleFromPlayerLevel(2.0);
+        }
+        return 1.0;
+    }
+
+    /**
+     * Reproduces the core DamageFix multipliers from the owner's current effects and attack attribute.
+     * @param player entity involved in the current mixin operation.
+     * @return live damage-fix equivalent scale.
+     */
+    @Unique
+    private static double jjkblueredpurple$getDamageFixEquivalentScale(ServerPlayer player) {
+        double strengthLevel = 0.0;
+        if (player.getAttributes().hasAttribute(Attributes.ATTACK_DAMAGE)) {
+            strengthLevel += player.getAttributeValue(Attributes.ATTACK_DAMAGE) * 0.333;
+        }
+        MobEffectInstance strength = player.getEffect(MobEffects.DAMAGE_BOOST);
+        if (strength != null) {
+            strengthLevel += 1.0 + strength.getAmplifier();
+        }
+        MobEffectInstance weakness = player.getEffect(MobEffects.WEAKNESS);
+        if (weakness != null) {
+            strengthLevel -= 1.0 + weakness.getAmplifier();
+        }
+        double scale = 1.0 + strengthLevel * 0.333;
+        MobEffectInstance zone = player.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
+        if (zone != null) {
+            scale *= 1.2 + 0.1 * zone.getAmplifier();
+        }
+        return Math.max(scale, 1.0);
+    }
+
+    /**
+     * Checks whether the owner has completed a specific advancement.
+     * @param player entity involved in the current mixin operation.
+     * @param advancementId identifier used to resolve runtime state for this operation.
+     * @return true when the advancement is completed; otherwise false.
+     */
+    @Unique
+    private static boolean jjkblueredpurple$hasAdvancement(ServerPlayer player, String advancementId) {
+        try {
+            Advancement adv = player.server.getAdvancements().getAdvancement(new ResourceLocation(advancementId));
+            if (adv == null) {
+                return false;
+            }
+            AdvancementProgress progress = player.getAdvancements().getOrStartProgress(adv);
+            return progress.isDone();
+        }
+        catch (Exception ignored) {
+            return false;
+        }
     }
 
     /**

@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.AIDomainExpansionEntityProcedure;
@@ -25,6 +26,10 @@ public class DomainCleanupEntityRangeMixin {
     // Marks this helper member as mixin-unique so it cannot collide with names inside the target class.
     @Unique
     private static final ThreadLocal<Double> JJKBRP$originalRadius = new ThreadLocal();
+    @Unique
+    private static final String JJKBRP$OWNER_UUID_KEY = "jjkbrp_owner_uuid";
+    @Unique
+    private static final String JJKBRP$LAST_MATCH_TICK_KEY = "jjkbrp_last_live_match_tick";
 
     /**
      * Injects at the head of the cleanup tick to swap in the cleanup entity's stored range and optionally cancel the tick while the domain is still active.
@@ -105,14 +110,42 @@ public class DomainCleanupEntityRangeMixin {
             return false;
         }
         ServerLevel serverLevel = (ServerLevel)world;
-        Vec3 cleanupCenter = new Vec3(cleanupEntity.getPersistentData().getDouble("x_pos"), cleanupEntity.getPersistentData().getDouble("y_pos"), cleanupEntity.getPersistentData().getDouble("z_pos"));
-        LivingEntity caster = DomainAddonUtils.findMatchingLiveDomainCaster(serverLevel, cleanupCenter, 4.0);
+        CompoundTag cleanupNbt = cleanupEntity.getPersistentData();
+        Vec3 cleanupCenter = cleanupNbt.contains("x_pos") ? new Vec3(cleanupNbt.getDouble("x_pos"), cleanupNbt.getDouble("y_pos"), cleanupNbt.getDouble("z_pos")) : cleanupEntity.position();
+        double cleanupRange = Math.max(1.0, cleanupNbt.getDouble("range"));
+
+        // Stage 1: preferred owner UUID gives the most stable match when geometry jitters during spin ticks.
+        LivingEntity caster = DomainCleanupEntityRangeMixin.jjkbrp$resolveCleanupOwnerByUuid(serverLevel, cleanupNbt, cleanupCenter, cleanupRange);
         if (caster == null) {
+            // Stage 2: strict center match to avoid incorrectly stealing ownership from nearby domains.
+            caster = DomainAddonUtils.findMatchingLiveDomainCaster(serverLevel, cleanupCenter, 4.0);
+        }
+        if (caster == null) {
+            // Stage 3: relaxed fallback for scaled domains where center can drift slightly during transitions.
+            double relaxedMatchDistanceSq = Math.max(36.0, Math.min(900.0, cleanupRange * cleanupRange * 0.36));
+            caster = DomainAddonUtils.findMatchingLiveDomainCaster(serverLevel, cleanupCenter, relaxedMatchDistanceSq);
+            if (caster == null && cleanupEntity.position().distanceToSqr(cleanupCenter) > 0.25) {
+                caster = DomainAddonUtils.findMatchingLiveDomainCaster(serverLevel, cleanupEntity.position(), relaxedMatchDistanceSq);
+            }
+        }
+        if (caster == null) {
+            long lastMatchTick = cleanupNbt.getLong(JJKBRP$LAST_MATCH_TICK_KEY);
+            long gameTime = serverLevel.getGameTime();
+            if (!cleanupNbt.getBoolean("Break") && lastMatchTick > 0L && gameTime - lastMatchTick <= 20L) {
+                // Bridge brief ownership dropouts so cleanup cannot chip or nuke barriers during active spin transitions.
+                cleanupNbt.putBoolean("Break", false);
+                cleanupNbt.putDouble("cnt_break", 0.0);
+                cleanupNbt.putDouble("cnt_life2", 0.0);
+                cleanupEntity.setDeltaMovement(Vec3.ZERO);
+                ci.cancel();
+                return true;
+            }
             return false;
         }
         Vec3 playerCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
         double actualRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)serverLevel, caster.getPersistentData());
-        CompoundTag cleanupNbt = cleanupEntity.getPersistentData();
+        cleanupNbt.putString(JJKBRP$OWNER_UUID_KEY, caster.getUUID().toString());
+        cleanupNbt.putLong(JJKBRP$LAST_MATCH_TICK_KEY, serverLevel.getGameTime());
         cleanupNbt.putDouble("x_pos", playerCenter.x);
         cleanupNbt.putDouble("y_pos", playerCenter.y);
         cleanupNbt.putDouble("z_pos", playerCenter.z);
@@ -125,5 +158,34 @@ public class DomainCleanupEntityRangeMixin {
         // Cancelling here prevents the cleanup procedure from restoring blocks while the corresponding domain is still alive.
         ci.cancel();
         return true;
+    }
+
+    @Unique
+    private static LivingEntity jjkbrp$resolveCleanupOwnerByUuid(ServerLevel world, CompoundTag cleanupNbt, Vec3 cleanupCenter, double cleanupRange) {
+        if (!cleanupNbt.contains(JJKBRP$OWNER_UUID_KEY)) {
+            return null;
+        }
+        String ownerUuidRaw = cleanupNbt.getString(JJKBRP$OWNER_UUID_KEY);
+        if (ownerUuidRaw == null || ownerUuidRaw.isEmpty()) {
+            return null;
+        }
+        UUID ownerUuid;
+        try {
+            ownerUuid = UUID.fromString(ownerUuidRaw);
+        }
+        catch (IllegalArgumentException ex) {
+            return null;
+        }
+        Entity entity = world.getEntity(ownerUuid);
+        if (!(entity instanceof LivingEntity)) {
+            return null;
+        }
+        LivingEntity owner = (LivingEntity)entity;
+        if (!DomainAddonUtils.isDomainBuildOrActive(owner)) {
+            return null;
+        }
+        Vec3 ownerCenter = DomainAddonUtils.getDomainCenter((Entity)owner);
+        double maxOwnerDistanceSq = Math.max(16.0, Math.min(1600.0, cleanupRange * cleanupRange * 0.49));
+        return ownerCenter.distanceToSqr(cleanupCenter) <= maxOwnerDistanceSq ? owner : null;
     }
 }

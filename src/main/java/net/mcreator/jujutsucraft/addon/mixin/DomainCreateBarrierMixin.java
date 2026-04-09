@@ -78,11 +78,13 @@ public abstract class DomainCreateBarrierMixin {
                     data.syncToClient(sp);
                 }
             }
-            if ((domainId = (nbt = player.getPersistentData()).getDouble("jjkbrp_domain_id_runtime")) <= 0.0) {
-                domainId = nbt.getDouble("select");
-            }
-            if (domainId <= 0.0) {
-                domainId = nbt.getDouble("skill_domain");
+            nbt = player.getPersistentData();
+            double selectId = nbt.getDouble("select");
+            double skillDomainId = nbt.getDouble("skill_domain");
+            double runtimeId = nbt.getDouble("jjkbrp_domain_id_runtime");
+            domainId = selectId > 0.0 ? selectId : (skillDomainId > 0.0 ? skillDomainId : runtimeId);
+            if (runtimeId > 0.0 && selectId > 0.0 && Math.round(runtimeId) != Math.round(selectId)) {
+                nbt.remove("jjkbrp_domain_id_runtime");
             }
             double policyDomainId = domainId > 0.0 ? domainId : 1.0;
             // Resolve the policy record once and store every runtime multiplier in NBT so later mixins can reuse the exact same tuned values.
@@ -299,22 +301,20 @@ public abstract class DomainCreateBarrierMixin {
         if (inst.getAmplifier() == targetAmplifier) {
             return;
         }
-        try {
-            Field ampField = MobEffectInstance.class.getDeclaredField("duration");
-            ampField.setAccessible(true);
-            ampField.setInt(inst, targetAmplifier);
-        }
-        catch (NoSuchFieldException e1) {
+        Field resolved = null;
+        for (String candidate : new String[]{"amplifier", "f_19513_", "f_216888_"}) {
             try {
-                Field ampField = MobEffectInstance.class.getDeclaredField("amplifier");
-                ampField.setAccessible(true);
-                ampField.setInt(inst, targetAmplifier);
-            }
-            catch (Exception exception) {}
+                resolved = MobEffectInstance.class.getDeclaredField(candidate);
+                break;
+            } catch (NoSuchFieldException ignored) {}
         }
-        catch (Exception exception) {
-            // empty catch block
+        if (resolved == null) {
+            return;
         }
+        try {
+            resolved.setAccessible(true);
+            resolved.setInt(inst, targetAmplifier);
+        } catch (Exception ignored) {}
     }
 
     /**

@@ -51,7 +51,7 @@ extends Screen {
     // Scaled panel width calculated for the current client resolution.
     private int drawW = 640;
     // Scaled panel height calculated for the current client resolution.
-    private int drawH = 588;
+    private int drawH = 682;
     // Scaled header height used during rendering.
     private int drawHeaderH = 154;
     // Scaled footer height used during rendering.
@@ -151,9 +151,9 @@ extends Screen {
     // Whether the close button is currently hovered.
     private boolean hoveredClose = false;
     // Per-property hover flags for the plus buttons.
-    private boolean[] hoveredPlus = new boolean[8];
+    private boolean[] hoveredPlus = new boolean[DomainMasteryProperties.values().length];
     // Per-property hover flags for the minus buttons.
-    private boolean[] hoveredMinus = new boolean[8];
+    private boolean[] hoveredMinus = new boolean[DomainMasteryProperties.values().length];
     // Previously hovered control id so hover sounds only fire on transitions.
     private int lastHoveredControl = -1;
     // Whether domain mastery changes are currently blocked by combat, active domains, or clashes.
@@ -182,9 +182,9 @@ extends Screen {
         super.init();
         int availW = (int)((float)this.width * 0.9f);
         int availH = (int)((float)this.height * 0.9f);
-        this.fontScale = Math.min(1.0f, Math.min((float)availW / 640.0f, (float)availH / 588.0f));
+        this.fontScale = Math.min(1.0f, Math.min((float)availW / 640.0f, (float)availH / 682.0f));
         this.drawW = (int)(640.0f * this.fontScale);
-        this.drawH = (int)(588.0f * this.fontScale);
+        this.drawH = (int)(682.0f * this.fontScale);
         this.drawHeaderH = (int)(154.0f * this.fontScale);
         this.drawFooterH = (int)(56.0f * this.fontScale);
         this.drawPropRow = (int)(82.0f * this.fontScale);
@@ -285,7 +285,7 @@ extends Screen {
             return true;
         }
         // Each property card exposes both normal upgrades and the negative modify flow, so the click handler checks every property control pair each frame.
-        for (i = 0; i < 8; ++i) {
+        for (i = 0; i < DomainMasteryProperties.values().length; ++i) {
             if (this.isInRect(mx, my, this.getPlusBtnBounds(i))) {
                 if (this.masteryMutationLocked) {
                     this.playUiLockSound();
@@ -385,7 +385,7 @@ extends Screen {
         // Locked hover tracking allows the screen to show an explanation tooltip even when the underlying action cannot be executed.
         this.hoveredMutationControl = this.masteryMutationLocked && (this.hoveredFormIdx >= 0 || this.hoveredReset);
         this.hoveredPropIdx = -1;
-        for (i = 0; i < 8; ++i) {
+        for (i = 0; i < DomainMasteryProperties.values().length; ++i) {
             this.hoveredPlus[i] = this.isInRect(mx, my, this.getPlusBtnBounds(i));
             this.hoveredMinus[i] = this.isInRect(mx, my, this.getMinusBtnBounds(i));
             if (!this.hoveredPlus[i] && !this.hoveredMinus[i]) continue;
@@ -442,8 +442,8 @@ extends Screen {
         int propStartX = this.getPropertyStartX();
         int propStartY = this.getPropertyStartY();
         int propGridW = this.drawPropColW * 2 + this.drawPropGapX;
-        int propGridH = this.drawPropRow * 4 + this.drawPropGapY * 3;
-        for (int i = 1; i <= 3; ++i) {
+        int propGridH = this.drawPropRow * 5 + this.drawPropGapY * 4;
+        for (int i = 1; i <= 4; ++i) {
             int lineY = propStartY + i * this.drawPropRow + (i - 1) * this.drawPropGapY + this.drawPropGapY / 2;
             graphics.fill(propStartX, lineY, propStartX + propGridW, lineY + 1, gridSep);
         }
@@ -658,19 +658,19 @@ extends Screen {
             g.fill(bx, btnY, bx + 1, btnY + btnH, borderCol);
             g.fill(bx + btnW - 1, btnY, bx + btnW, btnY + btnH, borderCol);
             String label = formNames[i];
+            int iconSize = Math.max(11, Math.min(14, Math.round((float)btnH * 0.5f)));
             int iconGap = Math.max(4, (int)(this.fontScale * 6.0f));
-            int labelMaxW = Math.max(24, btnW - 16 - iconGap - Math.max(8, (int)(this.fontScale * 10.0f)));
+            int labelMaxW = Math.max(24, btnW - iconSize - iconGap - Math.max(8, (int)(this.fontScale * 10.0f)));
             float labelScale = this.resolveFittedTextScale(font, label, labelMaxW, 1.0f, 0.62f);
-            int contentW = 16 + iconGap + this.getScaledTextWidth(font, label, labelScale);
+            int labelH = this.getScaledTextHeight(font, labelScale);
+            int contentH = Math.max(iconSize, labelH);
+            int contentW = iconSize + iconGap + this.getScaledTextWidth(font, label, labelScale);
             int iconX = bx + Math.max(4, (btnW - contentW) / 2);
-            int formIconLift = switch (i) {
-                case 1, 2 -> Math.max(1, Math.round(this.fontScale * 2.0f));
-                default -> 0;
-            };
-            int iconY = btnY + Math.max(2, (btnH - 16) / 2) - formIconLift;
-            this.drawLayeredItem(g, this.getFormItem(i), iconX, iconY, 160.0);
-            int labelX = iconX + 20;
-            int labelY = btnY + Math.max(2, (btnH - this.getScaledTextHeight(font, labelScale)) / 2);
+            int contentY = btnY + Math.max(1, (btnH - contentH) / 2);
+            int iconY = contentY + (contentH - iconSize) / 2;
+            this.drawLayeredItemScaled(g, this.getFormItem(i), iconX, iconY, iconSize, 160.0);
+            int labelX = iconX + iconSize + iconGap;
+            int labelY = contentY + (contentH - labelH) / 2;
             this.drawScaledForegroundText(g, font, label, labelX, labelY, textCol, labelScale);
             if (!isDisabled) continue;
             int lockCol = a << 24 | (this.masteryMutationLocked ? 16096779 : 0xEF4444);
@@ -1048,6 +1048,7 @@ extends Screen {
             case 5 -> 16486972;
             case 6 -> 1357990;
             case 7 -> 16478597;
+            case 8 -> 5614335;
             default -> 3718648;
         };
     }
@@ -1172,6 +1173,24 @@ extends Screen {
     }
 
     /**
+     * Draws layered item scaled as part of the addon presentation layer.
+     * @param graphics render context used to draw the current frame.
+     * @param item item used by this method.
+     * @param x screen or world coordinate used by this calculation.
+     * @param y screen or world coordinate used by this calculation.
+     * @param size size used by this method.
+     * @param z screen or world coordinate used by this calculation.
+     */
+    private void drawLayeredItemScaled(GuiGraphics graphics, ItemStack item, int x, int y, int size, double z) {
+        float scale = Math.max(0.1f, (float)size / 16.0f);
+        graphics.pose().pushPose();
+        graphics.pose().translate((double)x, (double)y, z);
+        graphics.pose().scale(scale, scale, 1.0f);
+        graphics.renderItem(item, 0, 0);
+        graphics.pose().popPose();
+    }
+
+    /**
      * Draws property control button as part of the addon presentation layer.
      * @param graphics render context used to draw the current frame.
      * @param x screen or world coordinate used by this calculation.
@@ -1231,6 +1250,7 @@ extends Screen {
             case 5 -> "Duration";
             case 6 -> "Radius";
             case 7 -> "Clash Power";
+            case 8 -> "Barrier Ref";
             default -> "???";
         };
     }
@@ -1250,6 +1270,7 @@ extends Screen {
             case 5 -> "Longer domain";
             case 6 -> "Wider domain";
             case 7 -> "Stronger clash";
+            case 8 -> "Barrier resist";
             default -> "";
         };
     }
@@ -1269,6 +1290,7 @@ extends Screen {
             case 5 -> new ItemStack((ItemLike)Items.CLOCK);
             case 6 -> new ItemStack((ItemLike)Items.COMPASS);
             case 7 -> new ItemStack((ItemLike)Items.NETHERITE_SWORD);
+            case 8 -> new ItemStack((ItemLike)Items.SHIELD);
             default -> new ItemStack((ItemLike)Items.AMETHYST_SHARD);
         };
     }

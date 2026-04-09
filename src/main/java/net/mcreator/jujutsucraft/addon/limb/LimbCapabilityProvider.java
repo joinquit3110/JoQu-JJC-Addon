@@ -159,7 +159,10 @@ implements ICapabilitySerializable<CompoundTag> {
             return;
         }
         ServerPlayer sp = (ServerPlayer)player;
-        sp.getCapability(LIMB_DATA).ifPresent(data -> LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data));
+        sp.getCapability(LIMB_DATA).ifPresent(data -> {
+            LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data);
+            LimbSyncPacket.sendToTrackingPlayers((LivingEntity)sp, data);
+        });
     }
 
     /**

@@ -93,7 +93,7 @@ public class DomainOpenClashCancelMixin {
         if (thisIsOpen) {
             LivingEntity closestClosed = candidates.stream().filter(le -> {
                 int candidateForm = DomainOpenClashCancelMixin.jjkbrp$resolveDomainForm(le, false);
-                if (candidateForm != 1) {
+                if (candidateForm == 2) {
                     return false;
                 }
                 return DomainOpenClashCancelMixin.jjkbrp$isWithinBaseClashWindow(world, caster, nbt, le, le.getPersistentData());
@@ -123,9 +123,6 @@ public class DomainOpenClashCancelMixin {
         }
         if (thisIsIncomplete) {
             LivingEntity closestComplete = candidates.stream().filter(le -> {
-                if (DomainOpenClashCancelMixin.jjkbrp$resolveDomainForm(le, false) == 0) {
-                    return false;
-                }
                 return DomainOpenClashCancelMixin.jjkbrp$isWithinBaseClashWindow(world, caster, nbt, le, le.getPersistentData());
             }).min(Comparator.comparingDouble(le -> le.distanceToSqr((Entity)caster))).orElse(null);
             if (closestComplete != null) {
@@ -159,9 +156,16 @@ public class DomainOpenClashCancelMixin {
         if (!sameTarget || !closedNbt.contains("jjkbrp_barrier_erosion_total")) {
             closedNbt.putDouble("jjkbrp_barrier_erosion_total", 0.0);
         }
-        if (!closedNbt.contains("jjkbrp_barrier_refinement")) {
-            closedNbt.putDouble("jjkbrp_barrier_refinement", 0.5);
+        double barrierRef = 0.3;
+        if (closedCaster instanceof Player) {
+            Player closedPlayer = (Player) closedCaster;
+            double[] refHolder = {0.3};
+            closedPlayer.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> {
+                refHolder[0] = data.getBarrierRefinementValue();
+            });
+            barrierRef = refHolder[0];
         }
+        closedNbt.putDouble("jjkbrp_barrier_refinement", barrierRef);
     }
 
     /**
@@ -330,15 +334,23 @@ public class DomainOpenClashCancelMixin {
         }
         Vec3 sourceCenter = DomainAddonUtils.getDomainCenter((Entity)source);
         Vec3 targetBody = new Vec3(target.getX(), target.getY() + (double)target.getBbHeight() * 0.5, target.getZ());
+        Vec3 targetCenter = DomainAddonUtils.getDomainCenter((Entity)target);
         double dx = sourceCenter.x - targetBody.x;
         double dy = sourceCenter.y - targetBody.y;
         double dz = sourceCenter.z - targetBody.z;
-        double distanceSq = dx * dx + dy * dy + dz * dz;
+        double distToBodySq = dx * dx + dy * dy + dz * dz;
+        double cdx = sourceCenter.x - targetCenter.x;
+        double cdy = sourceCenter.y - targetCenter.y;
+        double cdz = sourceCenter.z - targetCenter.z;
+        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
+        double distanceSq = Math.min(distToBodySq, distToCenterSq);
         double sourceRange = DomainOpenClashCancelMixin.jjkbrp$baseClashRange(world, source, sourceNbt);
-        if (sourceRange <= 0.0) {
+        double targetRange = DomainOpenClashCancelMixin.jjkbrp$baseClashRange(world, target, targetNbt);
+        double combinedRange = Math.max(sourceRange, targetRange);
+        if (combinedRange <= 0.0) {
             return false;
         }
-        double threshold = Math.max(2.0, sourceRange * 0.5);
+        double threshold = Math.max(4.0, combinedRange * 0.65);
         return distanceSq < threshold * threshold;
     }
 

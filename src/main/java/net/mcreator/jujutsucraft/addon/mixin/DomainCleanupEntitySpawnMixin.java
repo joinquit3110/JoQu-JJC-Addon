@@ -49,6 +49,8 @@ public class DomainCleanupEntitySpawnMixin {
         cleanupNbt.putDouble("y_pos", center.y);
         cleanupNbt.putDouble("z_pos", center.z);
         cleanupNbt.putDouble("range", actualRadius);
+        cleanupNbt.putString("jjkbrp_owner_uuid", owner.getUUID().toString());
+        cleanupNbt.putLong("jjkbrp_last_live_match_tick", serverLevel.getGameTime());
         cleanupNbt.putBoolean("Break", false);
         cleanupNbt.putDouble("cnt_break", 0.0);
         cleanupNbt.putDouble("cnt_life2", 0.0);

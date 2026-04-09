@@ -49,6 +49,7 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attribute;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.level.BlockGetter;
@@ -146,6 +147,8 @@ public class BlueRedPurpleNukeMod {
     private static final int BLUE_FULL_BLOCK_RANGE = 4;
     // Environmental destruction power marker passed into the block-breaking helper.
     private static final float BLUE_FULL_BLOCK_POWER = 4.0f;
+    // Slight edge so addon normal Red stays a bit stronger than crouch Red at the same rank.
+    private static final double NORMAL_RED_DAMAGE_ADVANTAGE = 1.08;
 
     /**
      * Initializes the addon mod, registers custom entities, subscribes Forge event listeners, and prepares the networking channel.
@@ -634,6 +637,7 @@ public class BlueRedPurpleNukeMod {
         world.playSound(null, BlockPos.containing((Position)pos), SoundEvents.DRAGON_FIREBALL_EXPLODE, SoundSource.NEUTRAL, 2.6f, 0.68f);
         world.playSound(null, BlockPos.containing((Position)pos), SoundEvents.BLAZE_SHOOT, SoundSource.NEUTRAL, 2.0f, 0.62f);
         world.playSound(null, BlockPos.containing((Position)pos), SoundEvents.LIGHTNING_BOLT_THUNDER, SoundSource.NEUTRAL, 2.2f, 1.2f);
+        double normalDamageScale = BlueRedPurpleNukeMod.getNormalRedDamageScale(owner);
         String orbId = redEntity.getUUID().toString();
         List<LivingEntity> attachedMobs = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(pos, pos).inflate(30.0), e -> e.isAlive() && orbId.equals(e.getPersistentData().getString("addon_red_attached_orb")));
         for (LivingEntity mob : attachedMobs) {
@@ -644,6 +648,7 @@ public class BlueRedPurpleNukeMod {
                 case 2 -> 34.0f;
                 default -> 56.0f;
             };
+            damage = (float)((double)damage * normalDamageScale);
             mob.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), damage);
             mob.setDeltaMovement(mob.position().subtract(pos).normalize().scale(1.2 + (double)chargeTier * 0.7));
         }
@@ -851,6 +856,8 @@ public class BlueRedPurpleNukeMod {
             case 2 -> 28.0f;
             default -> 42.0f;
         };
+        double normalDamageScale = BlueRedPurpleNukeMod.getNormalRedDamageScale(owner);
+        baseDamage = (float)((double)baseDamage * normalDamageScale);
         List<LivingEntity> targets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(pos, pos).inflate(radius), e -> e.isAlive() && e != redEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
         for (LivingEntity target : targets) {
             Vec3 delta = target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0).subtract(pos);
@@ -900,6 +907,8 @@ public class BlueRedPurpleNukeMod {
                 if (!(purpleE instanceof PurpleEntity) || purpleE.getPersistentData().getDouble("NameRanged_ranged") != 0.0) continue;
                 SetRangedAmmoProcedure.execute((Entity)ownerPlayer, (Entity)purpleE);
                 purpleE.getPersistentData().putBoolean("explode", true);
+                purpleE.getPersistentData().putBoolean("addon_purple_fusion", true);
+                purpleE.getPersistentData().putString("OWNER_UUID", ownerPlayer.getStringUUID());
                 double maxCnt6 = Math.max(redCnt6, blueCnt6) * 2.0;
                 purpleE.getPersistentData().putDouble("cnt6", maxCnt6);
                 if (purpleE instanceof LivingEntity) {
@@ -1536,6 +1545,106 @@ public class BlueRedPurpleNukeMod {
             return true;
         }
         return block == Blocks.END_PORTAL_FRAME;
+    }
+
+    /**
+     * Returns owner rank damage scale for the current addon state.
+     * @param owner entity instance being processed by this helper.
+     * @return the resolved owner rank damage scale.
+     */
+    private static double getOwnerRankDamageScale(LivingEntity owner) {
+        if (!(owner instanceof ServerPlayer)) {
+            return 1.0;
+        }
+        ServerPlayer player = (ServerPlayer)owner;
+        JujutsucraftModVariables.PlayerVariables vars = (JujutsucraftModVariables.PlayerVariables)player.getCapability((Capability)JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse((Object)new JujutsucraftModVariables.PlayerVariables());
+        double capabilityScale = BlueRedPurpleNukeMod.getScaleFromPlayerLevel(vars.PlayerLevel);
+        double advancementScale = BlueRedPurpleNukeMod.getAdvancementRankDamageScale(player);
+        double effectScale = BlueRedPurpleNukeMod.getDamageFixEquivalentScale(player);
+        return Math.max(Math.max(capabilityScale, advancementScale), effectScale);
+    }
+
+    /**
+     * Converts player level to the same baseline curve used by base Strength-driven damage.
+     * @param playerLevel level value used by this operation.
+     * @return converted baseline damage scale.
+     */
+    private static double getScaleFromPlayerLevel(double playerLevel) {
+        if (playerLevel <= 0.0) {
+            return 1.0;
+        }
+        double level = Math.max(playerLevel - 1.0, 0.0);
+        double levelPower = Math.round(level);
+        if (levelPower < 3.0) {
+            levelPower = Math.min(levelPower, 1.0);
+        }
+        // Base formula shape: Damage *= 1 + ((1 + StrengthAmp) * 0.333).
+        return Math.max(1.0, 1.0 + (1.0 + levelPower) * 0.333);
+    }
+
+    /**
+     * Uses grade advancements as fallback rank scaling when capability data has not synced yet.
+     * @param player entity instance being processed by this helper.
+     * @return advancement-derived rank scale.
+     */
+    private static double getAdvancementRankDamageScale(ServerPlayer player) {
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_special")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(20.0);
+        }
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_1")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(13.0);
+        }
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_1_semi")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(11.0);
+        }
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_2")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(9.0);
+        }
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_2_semi")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(7.0);
+        }
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_3")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(4.0);
+        }
+        if (CooldownTrackerEvents.hasAdvancement(player, "jujutsucraft:sorcerer_grade_4")) {
+            return BlueRedPurpleNukeMod.getScaleFromPlayerLevel(2.0);
+        }
+        return 1.0;
+    }
+
+    /**
+     * Recreates the base DamageFix contributions from Strength/Weakness/Zone and attack attribute.
+     * @param player entity instance being processed by this helper.
+     * @return live DamageFix-equivalent scale.
+     */
+    private static double getDamageFixEquivalentScale(ServerPlayer player) {
+        double strengthLevel = 0.0;
+        if (player.getAttributes().hasAttribute(Attributes.ATTACK_DAMAGE)) {
+            strengthLevel += player.getAttributeValue(Attributes.ATTACK_DAMAGE) * 0.333;
+        }
+        MobEffectInstance strength = player.getEffect(MobEffects.DAMAGE_BOOST);
+        if (strength != null) {
+            strengthLevel += 1.0 + strength.getAmplifier();
+        }
+        MobEffectInstance weakness = player.getEffect(MobEffects.WEAKNESS);
+        if (weakness != null) {
+            strengthLevel -= 1.0 + weakness.getAmplifier();
+        }
+        double scale = 1.0 + strengthLevel * 0.333;
+        MobEffectInstance zone = player.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
+        if (zone != null) {
+            scale *= 1.2 + 0.1 * zone.getAmplifier();
+        }
+        return Math.max(scale, 1.0);
+    }
+
+    /**
+     * Returns normal red damage scale for the current addon state.
+     * @param owner entity instance being processed by this helper.
+     * @return the resolved normal red damage scale.
+     */
+    private static double getNormalRedDamageScale(LivingEntity owner) {
+        return BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner) * NORMAL_RED_DAMAGE_ADVANTAGE;
     }
 
     // ===== NUMERIC HELPERS =====

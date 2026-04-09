@@ -72,10 +72,12 @@ public abstract class DomainMasteryMixin {
         LivingEntity livingEntity;
         // Re-stamp runtime form flags first because several older base procedure paths can partially clear the incomplete-domain markers.
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(entity);
-        // Incomplete domains are barred from full sure-hit processing, so the base active-domain procedure is skipped entirely.
+        // Incomplete domains must keep the active-domain pipeline alive, but force sure-hit off.
         if (entity instanceof LivingEntity && DomainAddonUtils.isIncompleteDomainState(livingEntity = (LivingEntity)entity)) {
             entity.getPersistentData().putBoolean("DomainAttack", false);
-            LOGGER.debug("[IncompleteDomain] Skipping DomainActiveProcedure for {} at ({}, {}, {}) because incomplete domains cannot apply sure-hit or domain effects", new Object[]{entity.getName().getString(), x, y, z});
+            DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
+            entity.getPersistentData().putBoolean("DomainAttack", false);
+            LOGGER.debug("[IncompleteDomain] Ran DomainActiveProcedure in wrap-only mode for {} at ({}, {}, {})", new Object[]{entity.getName().getString(), x, y, z});
             return;
         }
         DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
@@ -136,6 +138,9 @@ public abstract class DomainMasteryMixin {
             return;
         }
         CompoundTag data = entity.getPersistentData();
+        if (!data.contains("jjkbrp_domain_form_cast_locked")) {
+            return;
+        }
         String castLocked = data.getString("jjkbrp_domain_form_cast_locked");
         if ("incomplete".equalsIgnoreCase(castLocked) || Integer.toString(0).equals(castLocked) || data.getInt("jjkbrp_domain_form_cast_locked") == 0) {
             if (!data.getBoolean("jjkbrp_incomplete_form_active")) {
@@ -186,11 +191,11 @@ public abstract class DomainMasteryMixin {
             if (world instanceof ServerLevel) {
                 ServerLevel serverLevel = (ServerLevel)world;
                 double cnt3 = caster.getPersistentData().getDouble("cnt3");
-                if (cnt3 >= 20.0) {
+                if (cnt3 > 0.0) {
+                    double xpPerTick = cnt3 >= 20.0 ? 1.0 : 0.5;
                     sp.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> {
-                        // Award passive domain XP only while the caster remains in the fully opened portion of the active domain runtime.
-                        data.addDomainXP(1.0);
-                        if (serverLevel.getGameTime() % 40L == 0L) {
+                        data.addDomainXP(xpPerTick);
+                        if (serverLevel.getGameTime() % 20L == 0L) {
                             data.syncToClient(sp);
                         }
                     });
@@ -200,6 +205,9 @@ public abstract class DomainMasteryMixin {
         // Apply every mastery property after the base active tick so the addon effects layer cleanly on top of the original domain behavior.
         DomainMasteryMixin.applyPropertyEffects(world, caster);
         DomainMasteryMixin.jjkbrp$applyIncompleteZoneOnlyBuff(caster);
+        if (!DomainAddonUtils.isIncompleteDomainState(caster) && world instanceof ServerLevel) {
+            DomainMasteryMixin.jjkbrp$supplementMalevolentShrineVFX((ServerLevel)world, caster);
+        }
         if (caster instanceof Player) {
             Player domainPlayer = (Player)caster;
             if (world instanceof ServerLevel) {
@@ -232,8 +240,47 @@ public abstract class DomainMasteryMixin {
     /**
      * Keeps the cleanup entity centered on the live domain and resets its break counters so it does not tear down the barrier while the domain still exists.
      * @param world world access used by the current mixin callback.
-     * @param player entity involved in the current mixin operation.
+    * @param caster entity involved in the current mixin operation.
      */
+
+    private static void jjkbrp$supplementMalevolentShrineVFX(ServerLevel world, LivingEntity caster) {
+        CompoundTag nbt = caster.getPersistentData();
+        int domainId = (int)Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("skill_domain"));
+        }
+        if (domainId != 1) {
+            return;
+        }
+        double radiusMul = nbt.getDouble("jjkbrp_radius_multiplier");
+        if (radiusMul < 1.15) {
+            return;
+        }
+        long gameTime = world.getGameTime();
+        if (gameTime % 3L != 0L) {
+            return;
+        }
+        Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
+        double baseRadius = nbt.contains("jjkbrp_base_domain_radius") ? nbt.getDouble("jjkbrp_base_domain_radius") : 16.0;
+        double scaledRadius = baseRadius * radiusMul;
+        double range = scaledRadius * 2.0;
+        int extraCount = (int)Math.round(Math.max(8.0, (radiusMul - 1.0) * 60.0));
+        for (int i = 0; i < extraCount; ++i) {
+            double ox = (Math.random() - 0.5) * range * 0.5;
+            double oy = (Math.random() - 0.5) * range * 0.25;
+            double oz = (Math.random() - 0.5) * range * 0.5;
+            DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.ELECTRIC_SPARK, center.x + ox, center.y + 1.0 + oy, center.z + oz, 1, 0.6, 0.3, 0.6, 0.03);
+        }
+        int sparkCount = Math.max(4, extraCount / 3);
+        for (int i = 0; i < sparkCount; ++i) {
+            double angle = Math.random() * Math.PI * 2.0;
+            double r = Math.random() * range * 0.4;
+            double px = center.x + Math.cos(angle) * r;
+            double pz = center.z + Math.sin(angle) * r;
+            double py = center.y + 0.5 + Math.random() * 3.0;
+            DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.CRIT, px, py, pz, 2, 0.8, 0.4, 0.8, 0.05);
+        }
+    }
 
     // ===== CLEANUP ENTITY SUPPORT =====
     private static void jjkbrp$stabilizeDomainCleanupEntity(ServerLevel world, Player player) {
@@ -254,7 +301,6 @@ public abstract class DomainMasteryMixin {
         entityNbt.putDouble("y_pos", center.y);
         entityNbt.putDouble("z_pos", center.z);
         entityNbt.putDouble("range", actualRadius);
-        // Reset all cleanup counters each tick so the cleanup entity remains dormant until the domain truly expires.
         entityNbt.putBoolean("Break", false);
         entityNbt.putDouble("cnt_life2", 0.0);
         entityNbt.putDouble("cnt_break", 0.0);
@@ -1017,14 +1063,14 @@ public abstract class DomainMasteryMixin {
         double cz = center.z;
         double actualRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, nbt);
         double shellRadius = DomainAddonUtils.getOpenDomainShellRadius((LevelAccessor)world, (Entity)player);
-        double gameplayOpenRange = DomainAddonUtils.getOpenDomainRange((LevelAccessor)world, (Entity)player);
         double visualRange = DomainAddonUtils.getOpenDomainVisualRange((LevelAccessor)world, (Entity)player);
-        double cancelRange = Math.max(shellRadius, gameplayOpenRange);
+        // Keep self-cancel aligned with the actual open-domain shell so leaving the visible domain edge reliably cancels.
+        double cancelRange = Math.max(6.0, shellRadius);
         long nowTick = world.getGameTime();
         if (nbt.contains("jjkbrp_last_clash_contact_tick") && (sinceContact = nowTick - nbt.getLong("jjkbrp_last_clash_contact_tick")) >= 0L && sinceContact <= 40L) {
             return;
         }
-        double clashHoldRange = Math.max(shellRadius * 1.5, gameplayOpenRange * 0.75);
+        double clashHoldRange = Math.max(24.0, shellRadius * 1.5);
         if (DomainMasteryMixin.jjkbrp$hasNearbyDomainOpponent(world, player, center, clashHoldRange)) {
             nbt.putLong("jjkbrp_last_clash_contact_tick", nowTick);
             return;
@@ -1379,7 +1425,6 @@ public abstract class DomainMasteryMixin {
     // Marks this helper member as mixin-unique so it cannot collide with names inside the target class.
     @Unique
     private static boolean jjkbrp$isLiveDomainOpponent(ServerLevel world, LivingEntity entity) {
-        boolean hasDomainSkill;
         if (world == null || entity == null) {
             return false;
         }
@@ -1390,14 +1435,15 @@ public abstract class DomainMasteryMixin {
             return true;
         }
         CompoundTag nbt = entity.getPersistentData();
-        boolean bl = hasDomainSkill = nbt.getDouble("select") != 0.0 || nbt.getDouble("skill_domain") != 0.0 || nbt.getDouble("jjkbrp_domain_id_runtime") != 0.0;
-        if (!hasDomainSkill) {
-            return false;
+
+        // Only treat short startup grace as live-opponent fallback; broad stale NBT checks can block range-cancel forever.
+        if (nbt.getBoolean("jjkbrp_domain_just_opened")) {
+            return true;
         }
-        if (nbt.getBoolean("Failed") || nbt.getBoolean("DomainDefeated")) {
-            return false;
+        if (nbt.contains("jjkbrp_domain_grace_ticks") && nbt.getInt("jjkbrp_domain_grace_ticks") > 0) {
+            return nbt.getDouble("cnt3") > 0.0 || nbt.contains("x_pos_doma");
         }
-        return nbt.getDouble("cnt3") > 0.0 || nbt.contains("x_pos_doma");
+        return false;
     }
 
     /**

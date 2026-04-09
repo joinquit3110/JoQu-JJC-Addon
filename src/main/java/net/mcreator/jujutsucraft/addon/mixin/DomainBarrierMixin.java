@@ -2,6 +2,7 @@ package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.util.Objects;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionBattleProcedure;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -90,14 +91,17 @@ public abstract class DomainBarrierMixin {
         JJKBRP$expectedFloorPlaced.remove();
         if (entity instanceof LivingEntity) {
             String floorBlock;
-            CompoundTag nbt;
             LivingEntity caster = (LivingEntity)entity;
-            if (!world.isClientSide() && !DomainBarrierMixin.jjkbrp$isOpenDomainState(caster, nbt = caster.getPersistentData()) && nbt.contains("jjkbrp_caster_x_at_cast") && nbt.contains("jjkbrp_caster_y_at_cast") && nbt.contains("jjkbrp_caster_z_at_cast") && !(floorBlock = nbt.getString("domain_floor")).isEmpty() && !"minecraft:air".equals(floorBlock)) {
+            CompoundTag nbt = caster.getPersistentData();
+            if (!world.isClientSide() && !DomainBarrierMixin.jjkbrp$isOpenDomainState(caster, nbt) && nbt.contains("jjkbrp_caster_x_at_cast") && nbt.contains("jjkbrp_caster_y_at_cast") && nbt.contains("jjkbrp_caster_z_at_cast") && !(floorBlock = nbt.getString("domain_floor")).isEmpty() && !"minecraft:air".equals(floorBlock)) {
                 int floorY = (int)Math.floor(nbt.getDouble("jjkbrp_caster_y_at_cast")) - 1;
                 BlockPos expectedFloor = BlockPos.containing((double)nbt.getDouble("jjkbrp_caster_x_at_cast"), (double)floorY, (double)nbt.getDouble("jjkbrp_caster_z_at_cast"));
                 JJKBRP$expectedFloorPos.set(expectedFloor);
                 JJKBRP$expectedFloorBlock.set(floorBlock);
                 JJKBRP$expectedFloorPlaced.set(Boolean.FALSE);
+            }
+            if (!world.isClientSide() && DomainBarrierMixin.jjkbrp$isIncompleteDomainState(caster)) {
+                DomainBarrierMixin.jjkbrp$seedIncompleteWrapShell(world, caster, nbt);
             }
         }
     }
@@ -158,6 +162,22 @@ public abstract class DomainBarrierMixin {
         return state.is(BlockTags.create((ResourceLocation)JJKBRP$BARRIER_TAG_ID));
     }
 
+    @Unique
+    private static boolean jjkbrp$hasAdjacentWallSupport(LevelAccessor world, BlockPos pos) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int dz = -1; dz <= 1; ++dz) {
+                if (dx == 0 && dz == 0) continue;
+                if (Math.abs(dx) + Math.abs(dz) > 1) continue;
+                BlockPos adjacent = pos.offset(dx, 0, dz);
+                BlockState adjState = world.getBlockState(adjacent);
+                if (!adjState.isAir() && !DomainBarrierMixin.jjkbrp$isBarrierBlock(adjState) && (adjState.canOcclude() || adjState.blocksMotion())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /**
      * Performs is weak overwriteable floor block for this mixin.
      * @param world world access used by the current mixin callback.
@@ -215,26 +235,62 @@ public abstract class DomainBarrierMixin {
         if (caster == null) {
             return;
         }
+        CompoundTag casterNbt = caster.getPersistentData();
+        int maxFloorY = DomainBarrierMixin.jjkbrp$getFloorY(casterNbt, caster);
+        int maxClimbY = maxFloorY + JJKBRP$INCOMPLETE_CLIMB_MAX_HEIGHT;
         Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
-        double actualRadius = DomainAddonUtils.getActualDomainRadius(world, caster.getPersistentData());
+        double actualRadius = DomainAddonUtils.getActualDomainRadius(world, casterNbt);
         if (actualRadius <= 0.0) {
             return;
         }
         double shellBandMinSq = Math.max(0.0, (actualRadius - 2.0) * (actualRadius - 2.0));
         double shellBandMaxSq = (actualRadius + 1.5) * (actualRadius + 1.5);
-        for (int up = 1; up <= 6; ++up) {
-            double dz;
-            double dx;
-            double horizontalDistSq;
-            boolean hasVerticalSupport;
+        for (int up = 1; up <= JJKBRP$INCOMPLETE_CLIMB_MAX_HEIGHT; ++up) {
             BlockPos climbPos = pos.above(up);
+            if (climbPos.getY() > maxClimbY) break;
             BlockState climbState = world.getBlockState(climbPos);
-            if (!climbState.isAir() && !DomainBarrierMixin.jjkbrp$isBarrierBlock(climbState)) continue;
+            if (!climbState.isAir() && !DomainBarrierMixin.jjkbrp$isBarrierBlock(climbState)) {
+                DomainBarrierMixin.jjkbrp$extendCeilingHorizontally(world, climbPos.below(), blockName, center, actualRadius);
+                break;
+            }
             BlockPos supportPos = climbPos.below();
-            BlockState supportState = world.getBlockState(supportPos);
-            boolean bl = hasVerticalSupport = DomainBarrierMixin.jjkbrp$isBarrierBlock(supportState) || DomainBarrierMixin.jjkbrp$isIncompleteSupportBlock(world, supportPos);
-            if (!hasVerticalSupport || (horizontalDistSq = (dx = (double)climbPos.getX() - center.x) * dx + (dz = (double)climbPos.getZ() - center.z) * dz) < shellBandMinSq || horizontalDistSq > shellBandMaxSq) continue;
+            boolean hasVerticalSupport = DomainBarrierMixin.jjkbrp$isBarrierBlock(world.getBlockState(supportPos))
+                    || DomainBarrierMixin.jjkbrp$isIncompleteSupportBlock(world, supportPos)
+                    || DomainBarrierMixin.jjkbrp$hasAdjacentWallSupport(world, climbPos);
+            if (!hasVerticalSupport) continue;
+            double dx = (double)climbPos.getX() - center.x;
+            double dz = (double)climbPos.getZ() - center.z;
+            double horizontalDistSq = dx * dx + dz * dz;
+            if (horizontalDistSq < shellBandMinSq || horizontalDistSq > shellBandMaxSq) continue;
             DomainBarrierMixin.placeBlockSafe(world, climbPos, blockName);
+        }
+    }
+
+    @Unique
+    private static void jjkbrp$extendCeilingHorizontally(LevelAccessor world, BlockPos contactPos, String blockName,
+                                                          Vec3 center, double radius) {
+        double dirX = center.x - (double)contactPos.getX();
+        double dirZ = center.z - (double)contactPos.getZ();
+        double dirLen = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (dirLen < 0.001) return;
+        dirX /= dirLen;
+        dirZ /= dirLen;
+        int maxCeilingSpan = (int)(radius * 0.7);
+        int ceilingY = contactPos.getY();
+        for (int step = 1; step <= maxCeilingSpan; step++) {
+            int nx = contactPos.getX() + (int)Math.round(dirX * step);
+            int nz = contactPos.getZ() + (int)Math.round(dirZ * step);
+            BlockPos ceilingAbove = new BlockPos(nx, ceilingY + 1, nz);
+            BlockPos ceilingPlace = new BlockPos(nx, ceilingY, nz);
+            BlockState aboveState = world.getBlockState(ceilingAbove);
+            if (aboveState.isAir()) break;
+            BlockState placeState = world.getBlockState(ceilingPlace);
+            if (placeState.isAir() || DomainBarrierMixin.jjkbrp$isBarrierBlock(placeState)) {
+                DomainBarrierMixin.jjkbrp$placeTrackedBarrierBlock(world, ceilingPlace, blockName);
+            }
+            double dx = (double)ceilingPlace.getX() - center.x;
+            double dz = (double)ceilingPlace.getZ() - center.z;
+            if (dx * dx + dz * dz < radius * 0.3 * radius * 0.3) break;
         }
     }
 
@@ -250,37 +306,125 @@ public abstract class DomainBarrierMixin {
         if (blockName == null || blockName.isEmpty()) {
             return;
         }
-        BlockState currentState = world.getBlockState(pos);
-        boolean currentIsBarrier = DomainBarrierMixin.jjkbrp$isBarrierBlock(currentState);
-        if (currentIsBarrier) {
-            DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
-            return;
-        }
-        if (currentState.isAir()) {
-            boolean hasSupportBelow;
-            BlockPos belowPos = pos.below();
-            BlockState belowState = world.getBlockState(belowPos);
-            boolean bl = hasSupportBelow = DomainBarrierMixin.jjkbrp$isBarrierBlock(belowState) || DomainBarrierMixin.jjkbrp$isIncompleteSupportBlock(world, belowPos);
-            if (!hasSupportBelow) {
-                return;
+        Entity casterEntity = JJKBRP$currentCaster.get();
+        if (casterEntity instanceof LivingEntity) {
+            LivingEntity caster = (LivingEntity)casterEntity;
+            CompoundTag nbt = caster.getPersistentData();
+            int floorY = DomainBarrierMixin.jjkbrp$getFloorY(nbt, caster);
+            Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
+            double radius = Math.max(2.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
+            String wallBlock = nbt.getString("domain_outside");
+            if (wallBlock == null || wallBlock.isEmpty() || "minecraft:air".equals(wallBlock)) {
+                wallBlock = blockName;
             }
-            DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
+            DomainBarrierMixin.jjkbrp$applyIncompleteCrawlerAt(world, pos, blockName, wallBlock, center, radius, floorY);
             return;
         }
-        if (DomainBarrierMixin.jjkbrp$isWeakOverwriteableFloorBlock(world, pos, currentState)) {
-            DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
+        BlockState currentState = world.getBlockState(pos);
+        if (DomainBarrierMixin.jjkbrp$canReplaceForIncompleteFloor(world, pos, currentState)) {
+            DomainBarrierMixin.jjkbrp$placeTrackedBarrierBlock(world, pos, blockName);
+        }
+    }
+
+    @Unique
+    private static boolean jjkbrp$canReplaceForIncompleteFloor(LevelAccessor world, BlockPos pos, BlockState state) {
+        if (state.isAir()) {
+            return true;
+        }
+        if (DomainBarrierMixin.jjkbrp$isBarrierBlock(state)) {
+            return true;
+        }
+        if (!state.getFluidState().isEmpty()) {
+            return false;
+        }
+        return DomainBarrierMixin.jjkbrp$isWeakOverwriteableFloorBlock(world, pos, state);
+    }
+
+    @Unique
+    private static void jjkbrp$seedIncompleteWrapShell(LevelAccessor world, LivingEntity caster, CompoundTag nbt) {
+        String floorBlock = nbt.getString("domain_floor");
+        if (floorBlock == null || floorBlock.isEmpty() || "minecraft:air".equals(floorBlock)) {
             return;
         }
-        if (!world.getBlockState(pos.above()).isAir()) {
+        String wallBlock = nbt.getString("domain_outside");
+        if (wallBlock == null || wallBlock.isEmpty() || "minecraft:air".equals(wallBlock)) {
+            wallBlock = "jujutsucraft:in_barrier";
+        }
+        Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
+        double radius = Math.max(2.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
+        int floorY = DomainBarrierMixin.jjkbrp$getFloorY(nbt, caster);
+        int radialSteps = Math.max(2, (int)Math.ceil(radius));
+        int angularSteps = Math.max(24, (int)Math.ceil(radius * 10.0));
+        for (int rIndex = 0; rIndex <= radialSteps; ++rIndex) {
+            double r = radius * (double)rIndex / (double)radialSteps;
+            for (int angleIndex = 0; angleIndex < angularSteps; ++angleIndex) {
+                double angle = (Math.PI * 2.0 * (double)angleIndex) / (double)angularSteps;
+                int sx = (int)Math.round(center.x + Math.cos(angle) * r);
+                int sz = (int)Math.round(center.z + Math.sin(angle) * r);
+                BlockPos seedPos = new BlockPos(sx, floorY, sz);
+                DomainBarrierMixin.jjkbrp$applyIncompleteCrawlerAt(world, seedPos, floorBlock, wallBlock, center, radius, floorY);
+            }
+        }
+    }
+
+    @Unique
+    private static void jjkbrp$applyIncompleteCrawlerAt(LevelAccessor world, BlockPos floorPos, String floorBlock, String wallBlock,
+                                                         Vec3 center, double radius, int floorY) {
+        if (floorPos == null || floorBlock == null || floorBlock.isEmpty()) {
             return;
         }
-        if (!currentState.getFluidState().isEmpty()) {
+        double dx = (double)floorPos.getX() - center.x;
+        double dz = (double)floorPos.getZ() - center.z;
+        double horizontalDistSq = dx * dx + dz * dz;
+        double maxDistSq = (radius + 1.0) * (radius + 1.0);
+        if (horizontalDistSq > maxDistSq) {
             return;
         }
-        if (!currentState.canOcclude() && !currentState.blocksMotion()) {
+
+        BlockState currentState = world.getBlockState(floorPos);
+        if (DomainBarrierMixin.jjkbrp$canReplaceForIncompleteFloor(world, floorPos, currentState)) {
+            DomainBarrierMixin.jjkbrp$placeTrackedBarrierBlock(world, floorPos, floorBlock);
             return;
         }
-        DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
+
+        int maxClimbY = floorY + JJKBRP$INCOMPLETE_CLIMB_MAX_HEIGHT;
+        for (int up = 1; up <= JJKBRP$INCOMPLETE_CLIMB_MAX_HEIGHT; ++up) {
+            BlockPos climbPos = floorPos.above(up);
+            if (climbPos.getY() > maxClimbY) {
+                break;
+            }
+            BlockState climbState = world.getBlockState(climbPos);
+            if (!DomainBarrierMixin.jjkbrp$canReplaceForIncompleteFloor(world, climbPos, climbState)) {
+                continue;
+            }
+            BlockPos supportPos = climbPos.below();
+            boolean hasSupport = DomainBarrierMixin.jjkbrp$isBarrierBlock(world.getBlockState(supportPos))
+                    || DomainBarrierMixin.jjkbrp$isIncompleteSupportBlock(world, supportPos)
+                    || DomainBarrierMixin.jjkbrp$hasAdjacentWallSupport(world, climbPos);
+            if (!hasSupport) {
+                continue;
+            }
+            DomainBarrierMixin.jjkbrp$placeTrackedBarrierBlock(world, climbPos, wallBlock);
+            if (!world.getBlockState(climbPos.above()).isAir()) {
+                DomainBarrierMixin.jjkbrp$extendCeilingHorizontally(world, climbPos, wallBlock, center, radius);
+            }
+            return;
+        }
+
+        if (!world.getBlockState(floorPos.above()).isAir()) {
+            DomainBarrierMixin.jjkbrp$extendCeilingHorizontally(world, floorPos, wallBlock, center, radius);
+        }
+    }
+
+    @Unique
+    private static int jjkbrp$getFloorY(CompoundTag nbt, LivingEntity caster) {
+        if (nbt.contains("y_pos_doma")) {
+            return (int) Math.floor(nbt.getDouble("y_pos_doma")) - 1;
+        }
+        if (nbt.contains("jjkbrp_caster_y_at_cast")) {
+            return (int) Math.floor(nbt.getDouble("jjkbrp_caster_y_at_cast")) - 1;
+        }
+        return (int) Math.floor(caster.getY()) - 1;
     }
 
     /**
@@ -318,14 +462,19 @@ public abstract class DomainBarrierMixin {
         String outside = nbt.getString("domain_outside");
         boolean isOutsideWall = !outside.isEmpty() && blockName != null && blockName.equals(outside);
         String floor = nbt.getString("domain_floor");
+        String inside = nbt.getString("domain_inside");
+        boolean floorMatchesInside = !floor.isEmpty() && floor.equals(inside);
         boolean isFloorBlock = !floor.isEmpty() && blockName != null && blockName.equals(floor);
         boolean incompleteForm = DomainBarrierMixin.jjkbrp$isIncompleteDomainState(livingCaster);
         if (incompleteForm) {
+            int maxFloorY = DomainBarrierMixin.jjkbrp$getFloorY(nbt, livingCaster);
             if (isOutsideWall) {
+                if (pos.getY() > maxFloorY + 1) return;
                 DomainBarrierMixin.jjkbrp$placeIncompleteWrappedWall(world, pos, blockName, livingCaster);
                 return;
             }
             if (isFloorBlock) {
+                if (pos.getY() > maxFloorY) return;
                 BlockPos expectedFloorPos = JJKBRP$expectedFloorPos.get();
                 if (expectedFloorPos != null && expectedFloorPos.equals((Object)pos)) {
                     JJKBRP$expectedFloorPlaced.set(Boolean.TRUE);
@@ -339,13 +488,14 @@ public abstract class DomainBarrierMixin {
         if (isFloorBlock && expectedFloorPos != null && expectedFloorPos.equals((Object)pos)) {
             JJKBRP$expectedFloorPlaced.set(Boolean.TRUE);
         }
-        if (isFloorBlock && nbt.contains("jjkbrp_caster_y_at_cast")) {
+        if (isFloorBlock && !floorMatchesInside && nbt.contains("jjkbrp_caster_y_at_cast")) {
             double casterY = nbt.getDouble("jjkbrp_caster_y_at_cast");
             int correctFloorY = (int)Math.floor(casterY) - 1;
             if (pos.getY() > correctFloorY) {
                 return;
             }
         }
+        nbt.putBoolean("jjkbrp_barrier_blocks_placed", true);
         if (!isOutsideWall) {
             DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
             if (DomainBarrierMixin.jjkbrp$shouldCleanEdgeShellPlacement(pos, blockName, livingCaster)) {
@@ -395,6 +545,13 @@ public abstract class DomainBarrierMixin {
             return;
         }
         CompoundTag nbt = caster.getPersistentData();
+        double domainId = nbt.getDouble("select") > 0 ? nbt.getDouble("select") : nbt.getDouble("skill_domain");
+        if (Math.round(domainId) == 29) {
+            return;
+        }
+        if (caster.hasEffect(JujutsucraftModMobEffects.ZONE.get())) {
+            return;
+        }
         String floorBlock = nbt.getString("domain_floor");
         double actualRadius = DomainAddonUtils.getActualDomainRadius(world, nbt);
         if (actualRadius <= 0.0) {

@@ -85,6 +85,12 @@ public class ClientEvents {
         if (mc.player == null || mc.gameMode == null) {
             return;
         }
+        if (mc.screen != null) {
+            // While a GUI is open (notably chat), consume key state only for edge tracking and never open gameplay menus.
+            wasKeyDown = ClientEvents.isWheelKeyDown();
+            wasDMKeyDown = ClientEvents.isDomainMasteryKeyDown();
+            return;
+        }
         boolean isDown = ClientEvents.isWheelKeyDown();
         if (isDown && !wasKeyDown) {
             ClientEvents.openWheel(mc);
@@ -106,6 +112,9 @@ public class ClientEvents {
         if (player == null) {
             return;
         }
+        if (mc.screen != null) {
+            return;
+        }
         if (mc.screen instanceof SkillWheelScreen) {
             return;
         }
@@ -124,6 +133,9 @@ public class ClientEvents {
      * @param mc mc used by this method.
      */
     private static void openDomainMastery(Minecraft mc) {
+        if (mc.screen != null) {
+            return;
+        }
         if (mc.screen instanceof DomainMasteryScreen) {
             return;
         }
@@ -139,6 +151,9 @@ public class ClientEvents {
      */
     private static boolean isWheelKeyDown() {
         if (SKILL_WHEEL_KEY == null) {
+            return false;
+        }
+        if (!SKILL_WHEEL_KEY.getKeyConflictContext().isActive()) {
             return false;
         }
         Minecraft mc = Minecraft.getInstance();
@@ -169,6 +184,9 @@ public class ClientEvents {
      */
     private static boolean isDomainMasteryKeyDown() {
         if (DOMAIN_MASTERY_KEY == null) {
+            return false;
+        }
+        if (!DOMAIN_MASTERY_KEY.getKeyConflictContext().isActive()) {
             return false;
         }
         Minecraft mc = Minecraft.getInstance();

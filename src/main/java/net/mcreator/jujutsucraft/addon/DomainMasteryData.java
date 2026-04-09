@@ -49,6 +49,8 @@ public class DomainMasteryData {
     private int propRadius = 0;
     // Allocated level in domain clash power.
     private int propClashPower = 0;
+    // Allocated level in barrier refinement (erosion resistance).
+    private int propBarrierRef = 0;
     // Whether the player has the advancement needed to select open form.
     private boolean openBarrierAdvancementUnlocked = false;
     // Name of the single property currently carrying a negative modify penalty.
@@ -425,10 +427,11 @@ public class DomainMasteryData {
         }
         int negativePoints = this.getNegativePoints();
         return switch (prop) {
-            case DURATION_EXTEND -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.1);
-            case RADIUS_BOOST -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.1);
-            case CLASH_POWER -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.05);
-            default -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.1);
+            case DURATION_EXTEND -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.08);
+            case RADIUS_BOOST -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.06);
+            case CLASH_POWER -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.04);
+            case BARRIER_REFINEMENT -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.06);
+            default -> this.clampRuntimeMultiplier(1.0 - (double)negativePoints * 0.08);
         };
     }
 
@@ -471,10 +474,10 @@ public class DomainMasteryData {
      */
     public int getDurationBonusTicks() {
         int baseLevel = this.getPropertyLevel(DomainMasteryProperties.DURATION_EXTEND);
-        int positiveBonus = baseLevel * 200;
+        int positiveBonus = baseLevel * 100;
         int negativeReduction = 0;
         if (this.isNegativeProperty(DomainMasteryProperties.DURATION_EXTEND) && this.negativeLevel < 0) {
-            negativeReduction = Math.abs(this.negativeLevel) * 200;
+            negativeReduction = Math.abs(this.negativeLevel) * 100;
         }
         return positiveBonus - negativeReduction;
     }
@@ -495,10 +498,10 @@ public class DomainMasteryData {
      */
     public double getRadiusRuntimeMultiplier() {
         int baseLevel = this.getPropertyLevel(DomainMasteryProperties.RADIUS_BOOST);
-        double positiveBonus = (double)baseLevel * 0.25;
+        double positiveBonus = (double)baseLevel * 0.12;
         double negativeReduction = 0.0;
         if (this.isNegativeProperty(DomainMasteryProperties.RADIUS_BOOST) && this.negativeLevel < 0) {
-            negativeReduction = (double)Math.abs(this.negativeLevel) * 0.1;
+            negativeReduction = (double)Math.abs(this.negativeLevel) * 0.08;
         }
         return this.clampRuntimeMultiplier(1.0 + positiveBonus - negativeReduction);
     }
@@ -506,10 +509,10 @@ public class DomainMasteryData {
     // ===== RUNTIME SCALING HELPERS =====
     public double getClashRuntimeMultiplier() {
         int baseLevel = this.getPropertyLevel(DomainMasteryProperties.CLASH_POWER);
-        double positiveBonus = (double)baseLevel * 0.1;
+        double positiveBonus = (double)baseLevel * 0.06;
         double negativeReduction = 0.0;
         if (this.isNegativeProperty(DomainMasteryProperties.CLASH_POWER) && this.negativeLevel < 0) {
-            negativeReduction = (double)Math.abs(this.negativeLevel) * 0.05;
+            negativeReduction = (double)Math.abs(this.negativeLevel) * 0.03;
         }
         return this.clampRuntimeMultiplier(1.0 + positiveBonus - negativeReduction);
     }
@@ -554,7 +557,6 @@ public class DomainMasteryData {
     // ===== PROPERTY ACCESS HELPERS =====
     private int getPropLevel(DomainMasteryProperties prop) {
         return switch (prop) {
-            default -> throw new IncompatibleClassChangeError();
             case VICTIM_CE_DRAIN -> this.propCeDrain;
             case BF_CHANCE_BOOST -> this.propBfChance;
             case RCT_HEAL_BOOST -> this.propRctHeal;
@@ -563,6 +565,8 @@ public class DomainMasteryData {
             case DURATION_EXTEND -> this.propDuration;
             case RADIUS_BOOST -> this.propRadius;
             case CLASH_POWER -> this.propClashPower;
+            case BARRIER_REFINEMENT -> this.propBarrierRef;
+            default -> 0;
         };
     }
 
@@ -604,6 +608,11 @@ public class DomainMasteryData {
             }
             case CLASH_POWER: {
                 this.propClashPower = clamped;
+                break;
+            }
+            case BARRIER_REFINEMENT: {
+                this.propBarrierRef = clamped;
+                break;
             }
         }
     }
@@ -712,6 +721,7 @@ public class DomainMasteryData {
         refund += this.propDuration * DomainMasteryProperties.DURATION_EXTEND.getPointCost();
         refund += this.propRadius * DomainMasteryProperties.RADIUS_BOOST.getPointCost();
         refund += this.propClashPower * DomainMasteryProperties.CLASH_POWER.getPointCost();
+        refund += this.propBarrierRef * DomainMasteryProperties.BARRIER_REFINEMENT.getPointCost();
         // Negative modify grants bonus points up front, so a full refund must subtract that borrowed value before restoring the pool.
         refund -= this.getNegativePoints();
         this.propSlow = 0;
@@ -720,6 +730,7 @@ public class DomainMasteryData {
         this.propBfChance = 0;
         this.propCeDrain = 0;
         this.propClashPower = 0;
+        this.propBarrierRef = 0;
         this.propRadius = 0;
         this.propDuration = 0;
         this.clearNegativeState();
@@ -732,12 +743,27 @@ public class DomainMasteryData {
      */
     public double getClashPowerBonus() {
         int baseLevel = this.getPropertyLevel(DomainMasteryProperties.CLASH_POWER);
-        double positiveBonus = (double)baseLevel * 1.0;
+        double positiveBonus = (double)baseLevel * 0.6;
         double negativeReduction = 0.0;
         if (this.isNegativeProperty(DomainMasteryProperties.CLASH_POWER) && this.negativeLevel < 0) {
-            negativeReduction = (double)Math.abs(this.negativeLevel) * 0.5;
+            negativeReduction = (double)Math.abs(this.negativeLevel) * 0.3;
         }
-        return positiveBonus - negativeReduction;
+        double masteryScaling = 1.0 + this.domainMasteryLevel * 0.03;
+        return (positiveBonus - negativeReduction) * masteryScaling;
+    }
+
+    /**
+     * Returns the barrier refinement factor used to resist erosion.
+     * Base value 0.5, each level adds 0.05, maxing at 1.0 (level 10).
+     * Negative modify reduces it below 0.5 for glass-cannon builds.
+     */
+    public double getBarrierRefinementValue() {
+        int baseLevel = this.getPropertyLevel(DomainMasteryProperties.BARRIER_REFINEMENT);
+        double base = 0.3 + baseLevel * 0.04;
+        if (this.isNegativeProperty(DomainMasteryProperties.BARRIER_REFINEMENT) && this.negativeLevel < 0) {
+            base -= Math.abs(this.negativeLevel) * 0.04;
+        }
+        return Math.max(0.05, Math.min(0.75, base));
     }
 
     // ===== NBT SERIALIZATION =====
@@ -755,6 +781,7 @@ public class DomainMasteryData {
         nbt.putInt("jjkbrp_prop_duration", this.propDuration);
         nbt.putInt("jjkbrp_prop_radius", this.propRadius);
         nbt.putInt("jjkbrp_prop_clash_power", this.propClashPower);
+        nbt.putInt("jjkbrp_prop_barrier_ref", this.propBarrierRef);
         // Both prefixed and legacy keys are written so older saved data and newer addon revisions stay compatible.
         nbt.putString("jjkbrp_negative_property", this.negativeProperty);
         nbt.putInt("jjkbrp_negative_level", this.negativeLevel);
@@ -778,11 +805,12 @@ public class DomainMasteryData {
         this.propCeDrain = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_ce_drain")));
         this.propBfChance = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_bf_chance")));
         this.propRctHeal = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_rct_heal")));
-        this.propBlind = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_blind")));
-        this.propSlow = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_slow")));
+        this.propBlind = Math.max(0, Math.min(5, nbt.getInt("jjkbrp_prop_blind")));
+        this.propSlow = Math.max(0, Math.min(5, nbt.getInt("jjkbrp_prop_slow")));
         this.propDuration = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_duration")));
         this.propRadius = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_radius")));
         this.propClashPower = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_clash_power")));
+        this.propBarrierRef = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_barrier_ref")));
         this.negativeProperty = nbt.contains("negativeProperty") ? nbt.getString("negativeProperty") : nbt.getString("jjkbrp_negative_property");
         this.negativeLevel = nbt.contains("negativeLevel") ? nbt.getInt("negativeLevel") : nbt.getInt("jjkbrp_negative_level");
         this.domainXPToNextLevel = DomainMasteryData.getXPRequiredForLevel(this.domainMasteryLevel + 1);

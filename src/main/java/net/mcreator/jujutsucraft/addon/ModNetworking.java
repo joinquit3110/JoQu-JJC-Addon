@@ -69,6 +69,7 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenPacket.class, DomainMasteryOpenPacket::encode, DomainMasteryOpenPacket::decode, DomainMasteryOpenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle);
+        CHANNEL.registerMessage(packetId++, DomainClashSyncPacket.class, DomainClashSyncPacket::encode, DomainClashSyncPacket::decode, DomainClashSyncPacket::handle);
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====
@@ -1484,6 +1485,68 @@ public class ModNetworking {
         public static void handle(DomainMasterySyncPacket pkt, Supplier<NetworkEvent.Context> ctx) {
             ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.syncDomainMastery(pkt.xp, pkt.level, pkt.form, pkt.points, pkt.propLevels, pkt.negativeProperty, pkt.negativeLevel, pkt.hasOpenBarrierAdvancement)));
             ctx.get().setPacketHandled(true);
+        }
+    }
+
+    // ===== DOMAIN CLASH SYNC =====
+    public static void sendDomainClashSync(ServerPlayer player, float powerRatio, String opponentName,
+                                           int casterDomainId, int opponentDomainId,
+                                           int casterForm, int opponentForm,
+                                           String casterName, boolean active) {
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
+                (Object)new DomainClashSyncPacket(powerRatio, opponentName, casterDomainId, opponentDomainId, casterForm, opponentForm, casterName, active));
+    }
+
+    public static class DomainClashSyncPacket {
+        private final float powerRatio;
+        private final String opponentName;
+        private final int casterDomainId;
+        private final int opponentDomainId;
+        private final int casterForm;
+        private final int opponentForm;
+        private final String casterName;
+        private final boolean active;
+
+        public DomainClashSyncPacket(float powerRatio, String opponentName,
+                                     int casterDomainId, int opponentDomainId,
+                                     int casterForm, int opponentForm,
+                                     String casterName, boolean active) {
+            this.powerRatio = powerRatio;
+            this.opponentName = opponentName;
+            this.casterDomainId = casterDomainId;
+            this.opponentDomainId = opponentDomainId;
+            this.casterForm = casterForm;
+            this.opponentForm = opponentForm;
+            this.casterName = casterName;
+            this.active = active;
+        }
+
+        public static void encode(DomainClashSyncPacket pkt, FriendlyByteBuf buf) {
+            buf.writeFloat(pkt.powerRatio);
+            buf.writeUtf(pkt.opponentName, 64);
+            buf.writeInt(pkt.casterDomainId);
+            buf.writeInt(pkt.opponentDomainId);
+            buf.writeByte(pkt.casterForm);
+            buf.writeByte(pkt.opponentForm);
+            buf.writeUtf(pkt.casterName, 64);
+            buf.writeBoolean(pkt.active);
+        }
+
+        public static DomainClashSyncPacket decode(FriendlyByteBuf buf) {
+            return new DomainClashSyncPacket(buf.readFloat(), buf.readUtf(64),
+                    buf.readInt(), buf.readInt(),
+                    buf.readByte(), buf.readByte(),
+                    buf.readUtf(64), buf.readBoolean());
+        }
+
+        public static void handle(DomainClashSyncPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () ->
+                    ClientPacketHandler.updateDomainClash(pkt.powerRatio, pkt.opponentName,
+                            pkt.casterDomainId, pkt.opponentDomainId,
+                            pkt.casterForm, pkt.opponentForm,
+                            pkt.casterName, pkt.active)));
+            ctx.setPacketHandled(true);
         }
     }
 

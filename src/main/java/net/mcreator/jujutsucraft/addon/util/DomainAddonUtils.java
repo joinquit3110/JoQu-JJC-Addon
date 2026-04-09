@@ -634,7 +634,7 @@ public class DomainAddonUtils {
         double closestDistance = Double.MAX_VALUE;
         for (Player player : world.players()) {
             double distance;
-            if (!DomainAddonUtils.isDomainBuildOrActive(world, player) || (distance = DomainAddonUtils.getDomainCenter((Entity)player).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
+            if (!DomainAddonUtils.isDomainBuildOrActive(player) || (distance = DomainAddonUtils.getDomainCenter((Entity)player).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
             closest = player;
             closestDistance = distance;
         }
@@ -655,9 +655,19 @@ public class DomainAddonUtils {
         }
         LivingEntity closest = null;
         double closestDistance = Double.MAX_VALUE;
-        for (LivingEntity caster : world.getEntitiesOfClass(LivingEntity.class, new AABB(center.x - 64.0, center.y - 64.0, center.z - 64.0, center.x + 64.0, center.y + 64.0, center.z + 64.0), e -> true)) {
+
+        // Always scan players globally because scaled closed domains can let the caster roam far from center.
+        for (Player player : world.players()) {
             double distance;
-            if (!DomainAddonUtils.isDomainBuildOrActive(world, caster) || (distance = DomainAddonUtils.getDomainCenter((Entity)caster).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
+            if (!DomainAddonUtils.isDomainBuildOrActive(player) || (distance = DomainAddonUtils.getDomainCenter((Entity)player).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
+            closest = player;
+            closestDistance = distance;
+        }
+
+        double searchRadius = Math.max(96.0, Math.sqrt(Math.max(0.0, maxDistanceSqr)) + 128.0);
+        for (LivingEntity caster : world.getEntitiesOfClass(LivingEntity.class, new AABB(center.x - searchRadius, center.y - searchRadius, center.z - searchRadius, center.x + searchRadius, center.y + searchRadius, center.z + searchRadius), e -> !(e instanceof Player))) {
+            double distance;
+            if (!DomainAddonUtils.isDomainBuildOrActive(caster) || (distance = DomainAddonUtils.getDomainCenter((Entity)caster).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
             closest = caster;
             closestDistance = distance;
         }
@@ -830,5 +840,36 @@ public class DomainAddonUtils {
         catch (Exception ignored) {
             return null;
         }
+    }
+
+    public static String resolveDomainName(int domainId) {
+        return switch (domainId) {
+            case 1 -> "Malevolent Shrine";
+            case 2 -> "Unlimited Void";
+            case 4 -> "Coffin of the Iron Mountain";
+            case 5 -> "Authentic Mutual Love";
+            case 6 -> "Chimera Shadow Garden";
+            case 7 -> "Kashimo Domain";
+            case 8 -> "Horizon of the Captivating Skandha";
+            case 9 -> "Tsukumo Domain";
+            case 10 -> "Choso Domain";
+            case 11 -> "Mei Mei Domain";
+            case 13 -> "Nanami Domain";
+            case 14 -> "Ceremonial Sea of Light";
+            case 15 -> "Self-Embodiment of Perfection";
+            case 18 -> "Womb Profusion";
+            case 19 -> "Time Cell Moon Palace";
+            case 21 -> "Itadori Domain";
+            case 23 -> "Kurourushi Domain";
+            case 24 -> "Uraume Domain";
+            case 25 -> "Graveyard Domain";
+            case 26 -> "Ogi Domain";
+            case 27 -> "Deadly Sentencing";
+            case 29 -> "Idle Death Gamble";
+            case 35 -> "Junpei Domain";
+            case 36 -> "Nishimiya Domain";
+            case 40 -> "Takuma Ino Domain";
+            default -> "";
+        };
     }
 }

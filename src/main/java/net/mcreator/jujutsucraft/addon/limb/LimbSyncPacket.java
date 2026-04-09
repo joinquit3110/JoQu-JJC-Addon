@@ -11,7 +11,6 @@ import net.mcreator.jujutsucraft.addon.limb.LimbType;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.Level;
 import net.minecraftforge.api.distmarker.Dist;
@@ -115,13 +114,8 @@ public class LimbSyncPacket {
         if (!(level instanceof ServerLevel)) {
             return;
         }
-        ServerLevel serverLevel = (ServerLevel)level;
         LimbSyncPacket packet = new LimbSyncPacket(entity.getId(), data);
-        SimpleChannel channel = ModNetworking.CHANNEL;
-        for (ServerPlayer tracking : serverLevel.getPlayers(p -> p != entity && p.distanceToSqr((Entity)entity) < 16384.0)) {
-            // 16384 distance squared corresponds to a 128-block tracking radius.
-            channel.send(PacketDistributor.PLAYER.with(() -> tracking), (Object)packet);
-        }
+        ModNetworking.CHANNEL.send(PacketDistributor.TRACKING_ENTITY.with(() -> entity), (Object)packet);
     }
 
     /**

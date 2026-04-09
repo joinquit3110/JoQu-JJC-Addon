@@ -373,9 +373,7 @@ public class LimbLossHandler {
         }
         ServerPlayer sp = (ServerPlayer)player;
         LimbCapabilityProvider.get(target).ifPresent(data -> {
-            if (data.hasSeveredLimbs()) {
-                LimbSyncPacket.sendToPlayer(sp, target, data);
-            }
+            LimbSyncPacket.sendToPlayer(sp, target, data);
         });
     }
 
@@ -392,11 +390,32 @@ public class LimbLossHandler {
         }
         ServerPlayer sp = (ServerPlayer)player;
         LimbCapabilityProvider.get((LivingEntity)sp).ifPresent(data -> {
+            LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data);
             if (data.hasSeveredLimbs()) {
                 LimbSyncPacket.sendToTrackingPlayers((LivingEntity)sp, data);
             }
         });
         ModNetworking.sendNearDeathCdSync(sp);
+    }
+
+    /**
+     * Resends the player's limb state after changing dimension so the client cache stays current.
+     *
+     * @param event Forge dimension change event
+     */
+    @SubscribeEvent
+    public static void onPlayerChangeDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
+        Player player = event.getEntity();
+        if (!(player instanceof ServerPlayer)) {
+            return;
+        }
+        ServerPlayer sp = (ServerPlayer)player;
+        LimbCapabilityProvider.get((LivingEntity)sp).ifPresent(data -> {
+            LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data);
+            if (data.hasSeveredLimbs()) {
+                LimbSyncPacket.sendToTrackingPlayers((LivingEntity)sp, data);
+            }
+        });
     }
 
     /**

@@ -89,6 +89,21 @@ public final class ClientPacketHandler {
         mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> data.applySync(xp, level, form, points, propLevels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement));
     }
 
+    public static void updateDomainClash(float powerRatio, String opponentName,
+                                          int casterDomainId, int opponentDomainId,
+                                          int casterForm, int opponentForm,
+                                          String casterName, boolean active) {
+        ClientDomainClashCache.powerRatio = powerRatio;
+        ClientDomainClashCache.opponentName = opponentName;
+        ClientDomainClashCache.casterDomainId = casterDomainId;
+        ClientDomainClashCache.opponentDomainId = opponentDomainId;
+        ClientDomainClashCache.casterForm = casterForm;
+        ClientDomainClashCache.opponentForm = opponentForm;
+        ClientDomainClashCache.casterName = casterName;
+        ClientDomainClashCache.active = active;
+        ClientDomainClashCache.lastUpdateTime = System.currentTimeMillis();
+    }
+
     /**
      * Lightweight client cache for the most recent technique and combat cooldown sync values.
      */
@@ -192,6 +207,26 @@ public final class ClientPacketHandler {
          * Creates a new client near death cd cache instance and initializes its addon state.
          */
         private ClientNearDeathCdCache() {
+        }
+    }
+
+    public static final class ClientDomainClashCache {
+        public static float powerRatio = 0.5f;
+        public static String opponentName = "";
+        public static int casterDomainId = 0;
+        public static int opponentDomainId = 0;
+        public static int casterForm = 0;
+        public static int opponentForm = 0;
+        public static String casterName = "";
+        public static boolean active = false;
+        public static long lastUpdateTime = 0L;
+        private static final long EXPIRE_MS = 1500L;
+
+        private ClientDomainClashCache() {
+        }
+
+        public static boolean isActive() {
+            return active && (System.currentTimeMillis() - lastUpdateTime) < EXPIRE_MS;
         }
     }
 }

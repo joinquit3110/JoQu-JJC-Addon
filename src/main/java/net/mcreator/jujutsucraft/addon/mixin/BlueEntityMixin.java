@@ -44,6 +44,7 @@ public class BlueEntityMixin {
         // Domain control and lingering Blue states intentionally bypass the addon aim override so the orb keeps its special scripted behavior.
         boolean skipAddonAim = ownerDomainActive || lingering;
         boolean aimActive = entity.getPersistentData().getBoolean("addon_aim_active");
+        boolean addonControlledState = lingering || aimActive;
         if (!skipAddonAim && aimActive && (cnt1 = entity.getPersistentData().getDouble("cnt1")) > 35.0) {
             // Clamp `cnt1` so the addon aim path cannot push the Blue orb beyond the supported timing window.
             entity.getPersistentData().putDouble("cnt1", 35.0);
@@ -51,10 +52,15 @@ public class BlueEntityMixin {
         Vec3 vec3 = ownerVelBefore = owner != null ? owner.getDeltaMovement() : null;
         if (entity.tickCount % 20 == 0) {
             if (owner != null && ownerVelBefore != null) {
-                LOGGER.debug("[GojoDomainDiag] Blue owner snapshot entity={} owner={} domainActive={} open={} incomplete={} closed={} linger={} aim={} cnt1={} velBefore={}", new Object[]{entity.getClass().getSimpleName(), owner.getName().getString(), ownerDomainActive, ownerOpen, ownerIncomplete, ownerClosed, lingering, aimActive, entity.getPersistentData().getDouble("cnt1"), ownerVelBefore});
+                LOGGER.debug("[GojoDomainDiag] Blue owner snapshot entity={} owner={} domainActive={} open={} incomplete={} closed={} linger={} aim={} addonControlled={} cnt1={} velBefore={}", new Object[]{entity.getClass().getSimpleName(), owner.getName().getString(), ownerDomainActive, ownerOpen, ownerIncomplete, ownerClosed, lingering, aimActive, addonControlledState, entity.getPersistentData().getDouble("cnt1"), ownerVelBefore});
             } else {
-                LOGGER.debug("[GojoDomainDiag] Blue owner snapshot skipped entity={} ownerResolved={} linger={} aim={} cnt1={}", new Object[]{entity.getClass().getSimpleName(), owner != null, lingering, aimActive, entity.getPersistentData().getDouble("cnt1")});
+                LOGGER.debug("[GojoDomainDiag] Blue owner snapshot skipped entity={} ownerResolved={} linger={} aim={} addonControlled={} cnt1={}", new Object[]{entity.getClass().getSimpleName(), owner != null, lingering, aimActive, addonControlledState, entity.getPersistentData().getDouble("cnt1")});
             }
+        }
+        if (addonControlledState) {
+            // When the addon owns Blue aim or lingering, the base Blue AI is skipped entirely so pull and damage do not double-run on top of the addon state machine.
+            entity.setDeltaMovement(Vec3.ZERO);
+            return;
         }
         // Run the original Blue AI after the addon preconditions are prepared so the redirect remains narrowly scoped.
         AIBlueProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
@@ -66,10 +72,6 @@ public class BlueEntityMixin {
             // Restore owner velocity because the base Blue AI can unintentionally disturb the caster while it manipulates the orb.
             owner.setDeltaMovement(ownerVelBefore);
             owner.hurtMarked = true;
-        }
-        if (!skipAddonAim && aimActive) {
-            // When addon aim remains active, freeze the orb after the base AI call so the addon can keep authoritative aim control.
-            entity.setDeltaMovement(Vec3.ZERO);
         }
     }
 }

@@ -1,11 +1,14 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import com.mojang.logging.LogUtils;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
+import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModEntities;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
@@ -29,6 +32,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -41,6 +45,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={DomainExpansionEffectExpiresProcedure.class}, remap=false)
 public class DomainExpireBarrierFixMixin {
+    private static final Logger LOGGER = LogUtils.getLogger();
     /**
      * Runs before the base expiry procedure to preserve the runtime state needed by addon cleanup while temporarily disabling failure flags that would skip restoration.
      * @param world world access used by the current mixin callback.
@@ -95,6 +100,9 @@ public class DomainExpireBarrierFixMixin {
         }
         LivingEntity caster = (LivingEntity)entity;
         CompoundTag nbt = caster.getPersistentData();
+        boolean forceClosedCleanup = nbt.getBoolean("jjkbrp_force_closed_cleanup");
+        boolean failedBeforeHook = nbt.getBoolean("jjkbrp_was_failed");
+        boolean defeatedBeforeHook = nbt.getBoolean("jjkbrp_was_domain_defeated");
         // Some skills refresh DOMAIN_EXPANSION by replacing the effect instance, which can still invoke expire callbacks.
         // For intentional range-cancel removals, keep cleanup enabled even if the effect still appears active during this callback.
         boolean forcedCleanup = nbt.getBoolean("jjkbrp_open_cancelled") || nbt.getBoolean("jjkbrp_incomplete_cancelled");
@@ -104,6 +112,20 @@ public class DomainExpireBarrierFixMixin {
         }
 
         DomainExpireBarrierFixMixin.jjkbrp$clearTransientExpireState(nbt, false);
+        if (forceClosedCleanup) {
+            boolean rearmedDomainDefeated = defeatedBeforeHook || !failedBeforeHook;
+            nbt.putBoolean("Failed", failedBeforeHook);
+            nbt.putBoolean("DomainDefeated", rearmedDomainDefeated);
+            LOGGER.debug("[DomainExpireCleanup] forced closed cleanup caster={} failedBeforeHook={} defeatedBeforeHook={} rearmedFailed={} rearmedDomainDefeated={} centerPresent={} cnt1={} cnt3={}",
+                    caster.getName().getString(),
+                    failedBeforeHook,
+                    defeatedBeforeHook,
+                    nbt.getBoolean("Failed"),
+                    nbt.getBoolean("DomainDefeated"),
+                    nbt.contains("x_pos_doma"),
+                    nbt.getDouble("cnt1"),
+                    nbt.getDouble("cnt3"));
+        }
         boolean hadOpenForm = nbt.getBoolean("jjkbrp_open_form_active");
         double finalRestoreRadius = DomainExpireBarrierFixMixin.jjkbrp$resolveEffectiveRadius((LevelAccessor)sl, nbt);
         if (nbt.contains("x_pos_doma")) {
@@ -182,11 +204,7 @@ public class DomainExpireBarrierFixMixin {
         nbt.remove("jjkbrp_open_surehit_multiplier");
         nbt.remove("jjkbrp_open_ce_drain_multiplier");
         nbt.remove("jjkbrp_open_duration_multiplier");
-        nbt.remove("jjkbrp_incomplete_penalty_per_tick");
-        nbt.remove("jjkbrp_incomplete_surface_multiplier");
-        nbt.remove("jjkbrp_incomplete_form_active");
-        nbt.remove("jjkbrp_incomplete_session_active");
-        nbt.remove("jjkbrp_incomplete_cancelled");
+        DomainAddonUtils.clearIncompleteDomainData(nbt);
         nbt.remove("jjkbrp_open_denied_no_adv");
         nbt.remove("jjkbrp_open_denied_incompatible");
         nbt.remove("jjkbrp_domain_form_cast_locked");
@@ -197,6 +215,11 @@ public class DomainExpireBarrierFixMixin {
         nbt.remove("jjkbrp_domain_cast_cost_delta");
         nbt.remove("jjkbrp_domain_mastery_level");
         nbt.remove("jjkbrp_domain_form");
+        // Phase 2: Unregister from the centralized clash registry so sessions
+        // resolve and NBT bridge keys stop being repopulated.
+        if (DomainClashConstants.USE_REGISTRY) {
+            DomainClashRegistry.unregisterDomain(caster.getUUID());
+        }
         // Delay the final clash cleanup slightly so outcome messages and other post-expiry systems can still read the result state.
         DomainExpireBarrierFixMixin.jjkbrp$scheduleDelayedClashCleanup(sl, caster.getUUID());
         nbt.remove("jjkbrp_caster_x_at_cast");
@@ -212,6 +235,11 @@ public class DomainExpireBarrierFixMixin {
         nbt.remove("jjkbrp_incomplete_wrap_target_uuid");
         nbt.remove("jjkbrp_wrapped_by_incomplete");
         nbt.remove("jjkbrp_incomplete_wrapper_uuid");
+        if (forceClosedCleanup) {
+            DomainExpireBarrierFixMixin.jjkbrp$scheduleForceClosedCleanupFlagClear(sl, caster.getUUID(), 80);
+        } else {
+            nbt.remove("jjkbrp_force_closed_cleanup");
+        }
         if (caster instanceof Player) {
             Player player = (Player)caster;
             player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> {
@@ -237,15 +265,17 @@ public class DomainExpireBarrierFixMixin {
             double acz = nbt.getDouble("jjkbrp_adopted_cz");
             double aRadius = nbt.getDouble("jjkbrp_adopted_radius");
             if (aRadius > 0) {
-                DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, acx, acy, acz, aRadius, 4);
-                DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, acx, acy, acz, aRadius, 20);
-                DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, acx, acy, acz, aRadius, 60);
+                String adoptedOwnerUuid = nbt.getString("jjkbrp_adopted_owner_uuid");
+                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, 4);
+                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, 20);
+                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, 60);
             }
             nbt.remove("jjkbrp_adopted_barrier");
             nbt.remove("jjkbrp_adopted_cx");
             nbt.remove("jjkbrp_adopted_cy");
             nbt.remove("jjkbrp_adopted_cz");
             nbt.remove("jjkbrp_adopted_radius");
+            nbt.remove("jjkbrp_adopted_owner_uuid");
         }
     }
 
@@ -295,6 +325,16 @@ public class DomainExpireBarrierFixMixin {
         }));
     }
 
+    private static void jjkbrp$scheduleForceClosedCleanupFlagClear(ServerLevel world, UUID entityId, int delayTicks) {
+        world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> {
+            Entity resolved = world.getEntity(entityId);
+            if (!(resolved instanceof LivingEntity)) {
+                return;
+            }
+            resolved.getPersistentData().remove("jjkbrp_force_closed_cleanup");
+        }));
+    }
+
     /**
      * Resolves the final cleanup radius using stored runtime values before falling back to the shared map radius.
      * @param world world access used by the current mixin callback.
@@ -329,6 +369,10 @@ public class DomainExpireBarrierFixMixin {
      */
     private static void jjkbrp$scheduleFinalRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, int delayTicks) {
         world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> DomainExpireBarrierFixMixin.jjkbrp$runFinalRestoreSweep(world, x, y, z, effectiveRadius)));
+    }
+
+    private static void jjkbrp$scheduleAdoptedBarrierRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, String ownerUuid, int delayTicks) {
+        world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> DomainExpireBarrierFixMixin.jjkbrp$runAdoptedBarrierRestoreSweep(world, x, y, z, effectiveRadius, ownerUuid)));
     }
 
     /**
@@ -368,6 +412,50 @@ public class DomainExpireBarrierFixMixin {
         }
     }
 
+    private static void jjkbrp$runAdoptedBarrierRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, String ownerUuid) {
+        int centerX = (int)Math.round(x);
+        int centerY = (int)Math.round(y);
+        int centerZ = (int)Math.round(z);
+        int sweepRadius = (int)Math.ceil(effectiveRadius + 2.0);
+        int verticalExtra = 8;
+        double restoreRadius = effectiveRadius + 1.5;
+        double restoreRadiusSq = restoreRadius * restoreRadius;
+        for (int blockX = centerX - sweepRadius; blockX <= centerX + sweepRadius; ++blockX) {
+            double dx = blockX - centerX;
+            double dxSq = dx * dx;
+            if (dxSq > restoreRadiusSq) continue;
+            for (int blockY = centerY - sweepRadius; blockY <= centerY + sweepRadius + verticalExtra; ++blockY) {
+                double dy = blockY - centerY;
+                double dySq = dy * dy;
+                for (int blockZ = centerZ - sweepRadius; blockZ <= centerZ + sweepRadius; ++blockZ) {
+                    BlockPos currentPos;
+                    double dz = blockZ - centerZ;
+                    double horizontalDistSq = dxSq + dz * dz;
+                    double distanceSq = dxSq + dySq + dz * dz;
+                    boolean inRadius = distanceSq <= restoreRadiusSq || (horizontalDistSq <= restoreRadiusSq && blockY >= centerY && blockY <= centerY + verticalExtra);
+                    if (!inRadius || !world.getBlockState(currentPos = BlockPos.containing((double)blockX, (double)blockY, (double)blockZ)).is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier")))) continue;
+                    if (!DomainExpireBarrierFixMixin.jjkbrp$isAdoptedBarrierBlock(world, currentPos, ownerUuid) && DomainExpireBarrierFixMixin.jjkbrp$isProtectedByOtherLiveDomain(world, x, y, z, blockX, blockY, blockZ)) continue;
+                    JujutsuBarrierUpdateTickProcedure.execute((LevelAccessor)world, (double)blockX, (double)blockY, (double)blockZ);
+                }
+            }
+        }
+    }
+
+    private static boolean jjkbrp$isAdoptedBarrierBlock(ServerLevel world, BlockPos pos, String ownerUuid) {
+        if (ownerUuid == null || ownerUuid.isEmpty()) {
+            return false;
+        }
+        if (world.getBlockEntity(pos) == null) {
+            return false;
+        }
+        CompoundTag blockNbt = world.getBlockEntity(pos).getPersistentData();
+        String blockOwner = blockNbt.getString("OWNER_UUID");
+        if (blockOwner == null || blockOwner.isEmpty()) {
+            blockOwner = blockNbt.getString("jjkbrp_owner_uuid");
+        }
+        return ownerUuid.equals(blockOwner);
+    }
+
     /**
      * Performs is protected by other live domain for this mixin.
      * @param world world access used by the current mixin callback.
@@ -384,13 +472,33 @@ public class DomainExpireBarrierFixMixin {
         Vec3 ownerCenter = new Vec3(ownerX, ownerY, ownerZ);
         double scanRange = 128.0;
         for (LivingEntity caster : world.getEntitiesOfClass(LivingEntity.class, new AABB(ownerX - scanRange, ownerY - scanRange, ownerZ - scanRange, ownerX + scanRange, ownerY + scanRange, ownerZ + scanRange), e -> true)) {
-            Vec3 otherCenter;
-            if (!DomainAddonUtils.isDomainBuildOrActive(world, caster) || (otherCenter = DomainAddonUtils.getDomainCenter((Entity)caster)).distanceToSqr(ownerCenter) <= 1.0) continue;
-            double otherRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, caster.getPersistentData()) + 1.75;
-            if (!(otherCenter.distanceToSqr(blockPos) <= otherRadius * otherRadius)) continue;
+            if (!DomainAddonUtils.isDomainBuildOrActive(world, caster) || DomainAddonUtils.isOpenDomainState(caster)) continue;
+            CompoundTag casterNbt = caster.getPersistentData();
+            Vec3 otherCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
+            if (otherCenter.distanceToSqr(ownerCenter) > 1.0) {
+                double otherRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, casterNbt) + 1.75;
+                if (otherCenter.distanceToSqr(blockPos) <= otherRadius * otherRadius) {
+                    return true;
+                }
+            }
+            if (!DomainExpireBarrierFixMixin.jjkbrp$isWithinAdoptedBarrierRadius(casterNbt, blockPos)) continue;
             return true;
         }
         return false;
+    }
+
+    @Unique
+    private static boolean jjkbrp$isWithinAdoptedBarrierRadius(CompoundTag casterNbt, Vec3 blockPos) {
+        if (casterNbt == null || blockPos == null || !casterNbt.getBoolean("jjkbrp_adopted_barrier")) {
+            return false;
+        }
+        double adoptedRadius = casterNbt.getDouble("jjkbrp_adopted_radius");
+        if (adoptedRadius <= 0.0) {
+            return false;
+        }
+        Vec3 adoptedCenter = new Vec3(casterNbt.getDouble("jjkbrp_adopted_cx"), casterNbt.getDouble("jjkbrp_adopted_cy"), casterNbt.getDouble("jjkbrp_adopted_cz"));
+        double allowedRadius = adoptedRadius + 1.75;
+        return adoptedCenter.distanceToSqr(blockPos) <= allowedRadius * allowedRadius;
     }
 
     /**

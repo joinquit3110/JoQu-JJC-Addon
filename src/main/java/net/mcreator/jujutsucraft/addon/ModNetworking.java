@@ -69,7 +69,7 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenPacket.class, DomainMasteryOpenPacket::encode, DomainMasteryOpenPacket::decode, DomainMasteryOpenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, DomainClashSyncPacket.class, DomainClashSyncPacket::encode, DomainClashSyncPacket::decode, DomainClashSyncPacket::handle);
+        CHANNEL.registerMessage(packetId++, DomainClashMultiSyncPacket.class, DomainClashMultiSyncPacket::encode, DomainClashMultiSyncPacket::decode, DomainClashMultiSyncPacket::handle);
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====
@@ -1489,64 +1489,101 @@ public class ModNetworking {
     }
 
     // ===== DOMAIN CLASH SYNC =====
-    public static void sendDomainClashSync(ServerPlayer player, float powerRatio, String opponentName,
-                                           int casterDomainId, int opponentDomainId,
-                                           int casterForm, int opponentForm,
-                                           String casterName, boolean active) {
+    public static void sendDomainClashSync(ServerPlayer player, float casterPower,
+                                           int casterDomainId, int casterForm,
+                                           String casterName, boolean active,
+                                           long syncedGameTime,
+                                           List<DomainClashOpponentPayload> opponents) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                (Object)new DomainClashSyncPacket(powerRatio, opponentName, casterDomainId, opponentDomainId, casterForm, opponentForm, casterName, active));
+                (Object)new DomainClashMultiSyncPacket(casterPower, casterDomainId, casterForm,
+                        casterName, active, syncedGameTime, opponents));
     }
 
-    public static class DomainClashSyncPacket {
-        private final float powerRatio;
-        private final String opponentName;
+    public static class DomainClashMultiSyncPacket {
+        private static final int MAX_OPPONENTS = 8;
+        private final float casterPower;
         private final int casterDomainId;
-        private final int opponentDomainId;
         private final int casterForm;
-        private final int opponentForm;
         private final String casterName;
         private final boolean active;
+        private final long syncedGameTime;
+        private final List<DomainClashOpponentPayload> opponents;
 
-        public DomainClashSyncPacket(float powerRatio, String opponentName,
-                                     int casterDomainId, int opponentDomainId,
-                                     int casterForm, int opponentForm,
-                                     String casterName, boolean active) {
-            this.powerRatio = powerRatio;
-            this.opponentName = opponentName;
+        public DomainClashMultiSyncPacket(float casterPower, int casterDomainId, int casterForm,
+                                          String casterName, boolean active,
+                                          long syncedGameTime,
+                                          List<DomainClashOpponentPayload> opponents) {
+            this.casterPower = Math.max(0.0f, casterPower);
             this.casterDomainId = casterDomainId;
-            this.opponentDomainId = opponentDomainId;
             this.casterForm = casterForm;
-            this.opponentForm = opponentForm;
-            this.casterName = casterName;
+            this.casterName = casterName == null ? "" : casterName;
             this.active = active;
+            this.syncedGameTime = syncedGameTime;
+            List<DomainClashOpponentPayload> copy = new ArrayList<>();
+            if (opponents != null) {
+                for (DomainClashOpponentPayload opponent : opponents) {
+                    if (opponent == null) {
+                        continue;
+                    }
+                    copy.add(opponent);
+                    if (copy.size() >= MAX_OPPONENTS) {
+                        break;
+                    }
+                }
+            }
+            this.opponents = copy;
         }
 
-        public static void encode(DomainClashSyncPacket pkt, FriendlyByteBuf buf) {
-            buf.writeFloat(pkt.powerRatio);
-            buf.writeUtf(pkt.opponentName, 64);
-            buf.writeInt(pkt.casterDomainId);
-            buf.writeInt(pkt.opponentDomainId);
+        public static void encode(DomainClashMultiSyncPacket pkt, FriendlyByteBuf buf) {
+            buf.writeFloat(pkt.casterPower);
             buf.writeByte(pkt.casterForm);
-            buf.writeByte(pkt.opponentForm);
+            buf.writeInt(pkt.casterDomainId);
             buf.writeUtf(pkt.casterName, 64);
             buf.writeBoolean(pkt.active);
+            buf.writeLong(pkt.syncedGameTime);
+            buf.writeByte(pkt.opponents.size());
+            for (DomainClashOpponentPayload opponent : pkt.opponents) {
+                buf.writeFloat(opponent.power());
+                buf.writeByte(opponent.form());
+                buf.writeInt(opponent.domainId());
+                buf.writeUtf(opponent.name(), 64);
+            }
         }
 
-        public static DomainClashSyncPacket decode(FriendlyByteBuf buf) {
-            return new DomainClashSyncPacket(buf.readFloat(), buf.readUtf(64),
-                    buf.readInt(), buf.readInt(),
-                    buf.readByte(), buf.readByte(),
-                    buf.readUtf(64), buf.readBoolean());
+        public static DomainClashMultiSyncPacket decode(FriendlyByteBuf buf) {
+            float casterPower = buf.readFloat();
+            int casterForm = buf.readByte();
+            int casterDomainId = buf.readInt();
+            String casterName = buf.readUtf(64);
+            boolean active = buf.readBoolean();
+            long syncedGameTime = buf.readLong();
+            int opponentCount = Math.min(MAX_OPPONENTS, Math.max(0, buf.readByte()));
+            List<DomainClashOpponentPayload> opponents = new ArrayList<>(opponentCount);
+            for (int i = 0; i < opponentCount; ++i) {
+                opponents.add(new DomainClashOpponentPayload(
+                        buf.readFloat(),
+                        buf.readByte(),
+                        buf.readInt(),
+                        buf.readUtf(64)));
+            }
+            return new DomainClashMultiSyncPacket(casterPower, casterDomainId, casterForm,
+                    casterName, active, syncedGameTime, opponents);
         }
 
-        public static void handle(DomainClashSyncPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+        public static void handle(DomainClashMultiSyncPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
             NetworkEvent.Context ctx = ctxSupplier.get();
             ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () ->
-                    ClientPacketHandler.updateDomainClash(pkt.powerRatio, pkt.opponentName,
-                            pkt.casterDomainId, pkt.opponentDomainId,
-                            pkt.casterForm, pkt.opponentForm,
-                            pkt.casterName, pkt.active)));
+                    ClientPacketHandler.updateDomainClash(pkt.casterPower, pkt.casterDomainId,
+                            pkt.casterForm, pkt.casterName, pkt.active,
+                            pkt.syncedGameTime, pkt.opponents)));
             ctx.setPacketHandled(true);
+        }
+    }
+
+    public record DomainClashOpponentPayload(float power, int form, int domainId, String name) {
+        public DomainClashOpponentPayload {
+            power = Math.max(0.0f, power);
+            name = name == null ? "" : name;
         }
     }
 

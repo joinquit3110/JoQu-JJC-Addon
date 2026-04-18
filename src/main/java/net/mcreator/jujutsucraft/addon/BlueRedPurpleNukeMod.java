@@ -1,15 +1,20 @@
 package net.mcreator.jujutsucraft.addon;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.logging.LogUtils;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.CooldownTrackerEvents;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCommands;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
+import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
 import net.mcreator.jujutsucraft.entity.RedEntity;
@@ -17,11 +22,11 @@ import net.mcreator.jujutsucraft.init.JujutsucraftModAttributes;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.init.JujutsucraftModParticleTypes;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
-import net.mcreator.jujutsucraft.procedures.AIRedProcedure;
 import net.mcreator.jujutsucraft.procedures.BlockDestroyAllDirectionProcedure;
 import net.mcreator.jujutsucraft.procedures.KnockbackProcedure;
 import net.mcreator.jujutsucraft.procedures.RangeAttackProcedure;
 import net.mcreator.jujutsucraft.procedures.SetRangedAmmoProcedure;
+import net.mcreator.jujutsucraft.procedures.AIRedProcedure;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
@@ -76,6 +81,7 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.joml.Vector3f;
+import org.slf4j.Logger;
 
 @Mod(value="jjkblueredpurple")
 /**
@@ -83,6 +89,7 @@ import org.joml.Vector3f;
  */
 // ===== MOD BOOTSTRAP =====
 public class BlueRedPurpleNukeMod {
+    private static final Logger LOGGER = LogUtils.getLogger();
     // Maximum Blue linger lifetime in ticks before the stationary orb expires naturally.
     private static final int LINGER_DURATION = 200;
     // Radius used to detect valid Red and Blue overlap for Hollow Purple fusion.
@@ -139,16 +146,108 @@ public class BlueRedPurpleNukeMod {
     private static final double CRUSHER_CE_DRAIN_GROWTH = 0.02;
     // Number of sustained ticks required before Crusher hard-locks a target.
     private static final int CRUSHER_HARDLOCK_THRESHOLD = 15;
+    // Hard-locked targets only take Crusher damage on this interval so sustained control does not apply full damage every tick.
+    private static final int CRUSHER_LOCK_DAMAGE_INTERVAL = 5;
+    // Pre-lock wall scrapes use a slightly slower interval because they are the lighter sustained damage state.
+    private static final int CRUSHER_COLLISION_DAMAGE_INTERVAL = 6;
+    // Total cursed-energy contribution soft-caps here before overflow is heavily damped.
+    private static final double CRUSHER_CE_DAMAGE_SOFT_CAP = 40.0;
+    // Overflow contribution retained after the Crusher CE soft cap is reached.
+    private static final double CRUSHER_CE_DAMAGE_OVERFLOW_WEIGHT = 0.2;
+    // Bonus-rank share retained by Blue's multi-hit damage scaling.
+    private static final double BLUE_MULTI_HIT_RANK_BONUS_WEIGHT = 0.16;
+    // Hard ceiling for Blue's per-hit Infinity damage scaling.
+    private static final double BLUE_MULTI_HIT_MAX_SCALE = 1.6;
+    // Bonus-rank share retained by Red's burst damage scaling.
+    private static final double RED_BURST_RANK_BONUS_WEIGHT = 0.28;
+    // Hard ceiling for Red's burst damage scaling before the normal-flight advantage is applied.
+    private static final double RED_BURST_MAX_SCALE = 1.85;
+    // Crouch full-charge Red finisher keeps only a very narrow slice of owner-rank bonus so it stays slightly above crouch low-charge without spiking far past it.
+    private static final double RED_SHIFT_FINISHER_RANK_BONUS_WEIGHT = 0.06;
+    // Hard ceiling for the crouch full-charge Red finisher rank scaling.
+    private static final double RED_SHIFT_FINISHER_MAX_SCALE = 1.18;
+    // Bonus-rank share retained by Infinity Crusher damage scaling.
+    private static final double CRUSHER_RANK_BONUS_WEIGHT = 0.22;
+    // Hard ceiling for Infinity Crusher damage scaling.
+    private static final double CRUSHER_MAX_SCALE = 1.7;
+    // Bonus-rank share retained by Purple fusion damage scaling before repeated-pass budgeting is applied.
+    private static final double PURPLE_FUSION_RANK_BONUS_WEIGHT = 0.24;
+    // Hard ceiling for Purple fusion damage scaling before repeated-pass budgeting is applied.
+    private static final double PURPLE_FUSION_MAX_SCALE = 1.75;
+    // Repeated Blue passes keep a small floor of the caster's bonus while the rest decays per execute call.
+    private static final double BLUE_PASS_MIN_RETENTION = 0.18;
+    // Repeated Blue passes lose rank bonus at this rate per execute call.
+    private static final double BLUE_PASS_FALLOFF = 0.45;
+    // Repeated Red passes lose rank bonus faster because several base and addon variants front-load their damage.
+    private static final double RED_PASS_MIN_RETENTION = 0.16;
+    // Repeated Red passes lose rank bonus at this rate per execute call.
+    private static final double RED_PASS_FALLOFF = 0.75;
+    // Purple fusion keeps only a narrow slice of repeated rank bonus because the base beam already ticks very hard on its own.
+    private static final double PURPLE_PASS_MIN_RETENTION = 0.12;
+    // Repeated Purple fusion passes lose rank bonus at this rate per execute call.
+    private static final double PURPLE_PASS_FALLOFF = 1.0;
+    // Repeated Infinity Crusher hits keep only a narrow slice of repeated rank bonus because the move is sustained control, not repeated burst casting.
+    private static final double CRUSHER_PASS_MIN_RETENTION = 0.15;
+    // Repeated Infinity Crusher hits lose rank bonus at this rate per damage event.
+    private static final double CRUSHER_PASS_FALLOFF = 0.85;
+    // Hollow Purple fusion still gains a fusion bump, but no longer doubles full charge into an extreme cnt6 value that then scales every repeated base tick.
+    private static final double PURPLE_FUSION_CNT6_CAP = 6.0;
     // Pull radius used by the crouch full-charge Blue variant.
     private static final double BLUE_FULL_PULL_RADIUS = 6.0;
     // Pull strength used by the crouch full-charge Blue variant.
     private static final double BLUE_FULL_PULL_STRENGTH = 1.2;
+    // Direct Blue AI damage is throttled to this tick interval so repeated base executes cannot apply every tick.
+    public static final int BLUE_DAMAGE_COOLDOWN_TICKS = 5;
+    // Direct Red AI damage is throttled to this tick interval so any remaining base execute paths cannot stack repeated hits on the same victim.
+    public static final int RED_DAMAGE_COOLDOWN_TICKS = 5;
+    // Crouch low-charge Red keeps addon-controlled orb movement, but caps travel so the safer single-hit path stays a close-to-mid-range burst.
+    private static final double CROUCH_RED_LOW_CHARGE_MAX_RANGE = 28.0;
+    // Crouch low-charge Red flies slightly slower than the standing version so its safer route still feels deliberate rather than like a long-range launcher.
+    private static final double CROUCH_RED_LOW_CHARGE_SPEED_SCALE = 0.9;
     // Block destruction radius, in blocks, for the crouch full-charge Blue variant.
     private static final int BLUE_FULL_BLOCK_RANGE = 4;
+    // Full-charge Blue only attempts terrain destruction on this interval.
+    private static final int BLUE_BLOCK_BREAK_INTERVAL = 8;
+    // Hard cap for how many blocks a single full-charge Blue break pulse may destroy.
+    private static final int BLUE_MAX_BLOCKS_PER_BREAK = 24;
+    // OG Blue VFX stream is restored on a light interval so addon aim visuals stay close to vanilla behavior without flooding packets.
+    private static final int BLUE_OG_EFFECT_PARTICLE_INTERVAL = 2;
     // Environmental destruction power marker passed into the block-breaking helper.
     private static final float BLUE_FULL_BLOCK_POWER = 4.0f;
+    // NBT key storing the Blue full-charge orb UUID currently locking a target in the addon hold state.
+    private static final String BLUE_FULL_LOCK_UUID = "addon_blue_lock_uuid";
+    // NBT flag marking whether the target is currently inside Blue's locked hold phase.
+    private static final String BLUE_FULL_LOCKED = "addon_blue_locked";
+    // NBT flag marking that this addon explicitly enabled NoGravity for a Blue full-charge lock and must therefore restore gravity during cleanup.
+    private static final String BLUE_FULL_LOCK_GRAVITY_MANAGED = "addon_blue_lock_gravity_managed";
+    // NBT key storing the last server tick where the Blue full-charge lock was actively refreshed.
+    private static final String BLUE_FULL_LOCK_LAST_SEEN_TICK = "addon_blue_lock_last_seen_tick";
+    // Distance where a target first enters Blue's full-charge lock state.
+    private static final double BLUE_FULL_LOCK_ENTER_RADIUS = 1.6;
+    // Distance where a locked target is considered to have truly escaped and should be released without threshold jitter.
+    private static final double BLUE_FULL_LOCK_RELEASE_RADIUS = 2.6;
+    // Maximum speed applied while Blue steers a locked target toward the hold anchor.
+    private static final double BLUE_FULL_LOCK_MAX_SPEED = 0.32;
+    // Maximum velocity magnitude applied during Blue's non-locked pull phase.
+    private static final double BLUE_FULL_PULL_MAX_SPEED = 0.9;
+    // Minimum horizontal spacing preserved between the owner and a Blue-held target.
+    private static final double BLUE_FULL_OWNER_CLEARANCE = 2.2;
+    // Failsafe timeout before an unrefreshed Blue lock is treated as orphaned and forcibly cleaned up.
+    private static final int BLUE_FULL_LOCK_ORPHAN_TIMEOUT_TICKS = 8;
+    // Light repeated-pass damping retained for direct owner-rank scaling on sustained Infinity-technique hits.
+    private static final double DIRECT_RANK_PASS_FALLOFF = 0.25;
+    // Minimum repeated-pass bonus share retained so follow-up hits keep most of the owner's real rank scaling.
+    private static final double DIRECT_RANK_PASS_MIN_RETENTION = 0.8;
     // Slight edge so addon normal Red stays a bit stronger than crouch Red at the same rank.
     private static final double NORMAL_RED_DAMAGE_ADVANTAGE = 1.08;
+    // Flight distance is normalized against this cap before Red's normal-mode bonus is fully applied.
+    private static final double NORMAL_RED_DISTANCE_BONUS_MAX_DISTANCE = 60.0;
+    // Maximum extra damage multiplier granted to normal Red after flying the full bonus distance.
+    private static final double NORMAL_RED_DISTANCE_DAMAGE_BONUS = 1.5;
+    // Maximum bonus added to normal Red explosion radii from long flight.
+    private static final double NORMAL_RED_DISTANCE_RADIUS_BONUS = 0.3;
+    // Maximum bonus added to normal Red explosion knockback from long flight.
+    private static final double NORMAL_RED_DISTANCE_KNOCKBACK_BONUS = 0.4;
 
     /**
      * Initializes the addon mod, registers custom entities, subscribes Forge event listeners, and prepares the networking channel.
@@ -179,6 +278,44 @@ public class BlueRedPurpleNukeMod {
         }
     }
 
+    // ===== DOMAIN CLASH REGISTRY TICK =====
+
+    @SubscribeEvent
+    /**
+     * Drives the centralized domain clash registry once per server tick.
+     * This flushes pending registrations, creates pairwise clash sessions,
+     * and writes legacy NBT bridge keys.
+     */
+    public void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
+        if (!DomainClashConstants.USE_REGISTRY) {
+            return;
+        }
+        // Use the overworld as the reference ServerLevel for entity lookups.
+        // The registry is global server state but needs one ServerLevel for
+        // entity resolution.  Overworld is always loaded.
+        net.minecraft.server.MinecraftServer server = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+        if (server == null) {
+            return;
+        }
+        ServerLevel overworld = server.overworld();
+        if (overworld == null) {
+            return;
+        }
+        DomainClashRegistry.tick(overworld.getGameTime(), overworld);
+    }
+
+    @SubscribeEvent
+    /**
+     * Clears the domain clash registry when the server stops to prevent
+     * stale state from leaking into subsequent sessions.
+     */
+    public void onServerStopping(net.minecraftforge.event.server.ServerStoppingEvent event) {
+        DomainClashRegistry.clear();
+    }
+
     @SubscribeEvent
     // ===== ENTITY TICK HANDLERS =====
     public void onLivingTick(LivingEvent.LivingTickEvent event) {
@@ -188,6 +325,7 @@ public class BlueRedPurpleNukeMod {
         if (entity.level().isClientSide()) {
             return;
         }
+        BlueRedPurpleNukeMod.handleBlueFullChargeLockTick(entity);
         // Blue entities are fully server-driven here so aim, linger, and fusion state stay authoritative.
         if (entity instanceof BlueEntity) {
             this.handleBlueTick(entity);
@@ -316,7 +454,74 @@ public class BlueRedPurpleNukeMod {
         }
         ServerLevel serverLevel = (ServerLevel)level;
         LivingEntity owner = BlueRedPurpleNukeMod.resolveOwner(serverLevel, ownerUUID);
-        return owner instanceof Player;
+        if (!(owner instanceof Player player)) {
+            return false;
+        }
+        boolean useOgCrouchLowCharge = BlueRedPurpleNukeMod.shouldUseOgCrouchLowChargeRoute(redEntity, player);
+        return !useOgCrouchLowCharge;
+    }
+
+    private static double getRedRouteCnt6(LivingEntity redEntity, LivingEntity owner) {
+        CompoundTag data = redEntity.getPersistentData();
+        double ownerCnt6 = owner != null ? owner.getPersistentData().getDouble("cnt6") : 0.0;
+        double routedCnt6 = Math.max(Math.max(data.getDouble("cnt6"), ownerCnt6), Math.max(data.getDouble("addon_red_charge_cached"), data.getDouble("addon_red_charge_used")));
+        boolean launchStarted = BlueRedPurpleNukeMod.hasRedLaunchStarted(redEntity);
+        if (launchStarted && !data.getBoolean("addon_red_route_charge_locked")) {
+            data.putDouble("addon_red_route_charge", routedCnt6);
+            data.putBoolean("addon_red_route_charge_locked", true);
+        }
+        if (data.getBoolean("addon_red_route_charge_locked")) {
+            routedCnt6 = Math.max(0.0, data.getDouble("addon_red_route_charge"));
+        }
+        return routedCnt6;
+    }
+
+    private static boolean hasRedLaunchStarted(LivingEntity redEntity) {
+        boolean launchStarted = redEntity.getPersistentData().getBoolean("flag_start");
+        if (redEntity instanceof RedEntity re) {
+            try {
+                launchStarted = launchStarted || ((Boolean)re.getEntityData().get(RedEntity.DATA_flag_start)).booleanValue();
+            }
+            catch (Exception exception) {
+                // empty catch block
+            }
+        }
+        return launchStarted;
+    }
+
+    private static boolean shouldUseOgCrouchLowChargeRoute(LivingEntity redEntity, Player owner) {
+        CompoundTag data = redEntity.getPersistentData();
+        if (data.getBoolean("addon_red_route_mode_locked")) {
+            boolean useOg = data.getBoolean("addon_red_use_og");
+            if (useOg) {
+                BlueRedPurpleNukeMod.clearAddonRedControllerState(redEntity);
+            }
+            return useOg;
+        }
+        double routedCnt6 = BlueRedPurpleNukeMod.getRedRouteCnt6(redEntity, owner);
+        boolean launchStarted = BlueRedPurpleNukeMod.hasRedLaunchStarted(redEntity);
+        if (owner.isCrouching() && routedCnt6 < 5.0) {
+            data.putBoolean("addon_red_crouch_cast_seen", true);
+        }
+        boolean liveDecision = (owner.isCrouching() || data.getBoolean("addon_red_crouch_cast_seen")) && routedCnt6 < 5.0;
+        data.putBoolean("addon_red_use_og", liveDecision);
+        if (launchStarted) {
+            data.putBoolean("addon_red_route_mode_locked", true);
+            if (liveDecision) {
+                BlueRedPurpleNukeMod.clearAddonRedControllerState(redEntity);
+            }
+        }
+        return data.getBoolean("addon_red_use_og");
+    }
+
+    private static void clearAddonRedControllerState(LivingEntity redEntity) {
+        CompoundTag data = redEntity.getPersistentData();
+        data.putBoolean("addon_red_init_done", false);
+        data.putBoolean("addon_red_normal_active", false);
+        data.putBoolean("addon_red_shift_cast", false);
+        data.putBoolean("addon_red_shift_exploded", false);
+        data.putBoolean("addon_red_crouch_low_charge", false);
+        data.putBoolean("addon_red_charge_anchor_valid", false);
     }
 
     /**
@@ -345,9 +550,15 @@ public class BlueRedPurpleNukeMod {
         if (!(owner instanceof Player)) {
             return;
         }
+        Player ownerPlayer = (Player)owner;
+        if (BlueRedPurpleNukeMod.shouldUseOgCrouchLowChargeRoute(redEntity, ownerPlayer)) {
+            AIRedProcedure.execute((LevelAccessor)serverLevel, (Entity)redEntity);
+            return;
+        }
         double liveCnt6 = redEntity.getPersistentData().getDouble("cnt6");
         double ownerCnt6 = owner.getPersistentData().getDouble("cnt6");
         double cachedCnt6 = Math.max(Math.max(liveCnt6, ownerCnt6), redEntity.getPersistentData().getDouble("addon_red_charge_cached"));
+        double routedCnt6 = BlueRedPurpleNukeMod.getRedRouteCnt6(redEntity, owner);
         redEntity.getPersistentData().putDouble("addon_red_charge_cached", cachedCnt6);
         boolean addonInitDone = redEntity.getPersistentData().getBoolean("addon_red_init_done");
         if (!addonInitDone) {
@@ -368,30 +579,24 @@ public class BlueRedPurpleNukeMod {
             if (!shouldLaunch) {
                 return;
             }
+            double effectiveCnt6 = Math.max(Math.max(cachedCnt6, ownerCnt6), routedCnt6);
+            boolean isCrouching = ownerPlayer.isCrouching();
+            // Route crouch low-charge Red back into the original AIRed path using the cast-locked route decision, so releasing crouch after launch cannot bounce the orb back into addon control.
+            if (BlueRedPurpleNukeMod.shouldUseOgCrouchLowChargeRoute(redEntity, ownerPlayer)) {
+                AIRedProcedure.execute((LevelAccessor)serverLevel, (Entity)redEntity);
+                return;
+            }
             redEntity.getPersistentData().putBoolean("addon_red_init_done", true);
-            double effectiveCnt6 = Math.max(cachedCnt6, ownerCnt6);
             redEntity.getPersistentData().putDouble("addon_red_charge_used", effectiveCnt6);
-            boolean isCrouching = owner.isCrouching();
-            // Crouching reroutes Red into the original low-charge behavior, but a full crouch charge upgrades into the teleport-behind explosion variant.
-            if (isCrouching && effectiveCnt6 < 5.0) {
-                redEntity.getPersistentData().putBoolean("addon_red_use_og", true);
-            } else if (isCrouching && effectiveCnt6 >= 5.0) {
+            if (isCrouching && effectiveCnt6 >= 5.0) {
                 redEntity.getPersistentData().putBoolean("addon_red_shift_cast", true);
                 BlueRedPurpleNukeMod.handleRedTeleportBehind(redEntity);
             } else {
                 BlueRedPurpleNukeMod.initializeNormalRedOrb(redEntity, owner, effectiveCnt6);
             }
         }
-        boolean useOg = redEntity.getPersistentData().getBoolean("addon_red_use_og");
         boolean shiftCast = redEntity.getPersistentData().getBoolean("addon_red_shift_cast");
         boolean normalActive = redEntity.getPersistentData().getBoolean("addon_red_normal_active");
-        if (useOg) {
-            AIRedProcedure.execute((LevelAccessor)serverLevel, (Entity)redEntity);
-            if (BlueRedPurpleNukeMod.getEffectiveRedCnt6(redEntity) >= 5.0) {
-                BlueRedPurpleNukeMod.checkAndActivatePurpleNuke(redEntity, owner, serverLevel);
-            }
-            return;
-        }
         if (shiftCast) {
             if (BlueRedPurpleNukeMod.getEffectiveRedCnt6(redEntity) >= 5.0 && BlueRedPurpleNukeMod.checkAndActivatePurpleNuke(redEntity, owner, serverLevel)) {
                 return;
@@ -433,6 +638,7 @@ public class BlueRedPurpleNukeMod {
         redEntity.getPersistentData().putBoolean("addon_red_normal_active", true);
         redEntity.getPersistentData().putBoolean("flag_start", true);
         redEntity.getPersistentData().putDouble("cnt6", cnt6);
+        redEntity.getPersistentData().putDouble("addon_cnt6", cnt6);
         redEntity.getPersistentData().putDouble("addon_red_dir_x", direction.x);
         redEntity.getPersistentData().putDouble("addon_red_dir_y", direction.y);
         redEntity.getPersistentData().putDouble("addon_red_dir_z", direction.z);
@@ -447,6 +653,9 @@ public class BlueRedPurpleNukeMod {
         redEntity.getPersistentData().putDouble("x_pos", startPos.x);
         redEntity.getPersistentData().putDouble("y_pos", startPos.y);
         redEntity.getPersistentData().putDouble("z_pos", startPos.z);
+        redEntity.getPersistentData().putDouble("addon_red_spawn_x", startPos.x);
+        redEntity.getPersistentData().putDouble("addon_red_spawn_y", startPos.y);
+        redEntity.getPersistentData().putDouble("addon_red_spawn_z", startPos.z);
         redEntity.teleportTo(startPos.x, startPos.y, startPos.z);
         redEntity.setDeltaMovement(Vec3.ZERO);
         redEntity.setNoGravity(true);
@@ -463,6 +672,26 @@ public class BlueRedPurpleNukeMod {
                 sl.playSound(null, BlockPos.containing((Position)startPos), electric, SoundSource.NEUTRAL, 1.5f, 1.0f);
             }
         }
+    }
+
+    /**
+     * Initializes the crouch low-charge Red path on top of the addon normal-orb controller so the cast keeps movement and visuals without falling back to the vanilla multi-hit AI loop.
+     * @param redEntity entity instance being processed by this helper.
+     * @param owner entity instance being processed by this helper.
+     * @param effectiveCnt6 effective cnt 6 used by this method.
+     */
+    private static void initializeCrouchLowChargeRedOrb(LivingEntity redEntity, LivingEntity owner, double effectiveCnt6) {
+        BlueRedPurpleNukeMod.initializeNormalRedOrb(redEntity, owner, effectiveCnt6);
+        CompoundTag data = redEntity.getPersistentData();
+        double chargeRatio = Math.max(0.0, Math.min(Math.max(effectiveCnt6, 0.0), 5.0) / 5.0);
+        double crouchMaxRange = Math.min(data.getDouble("addon_red_max_range"), CROUCH_RED_LOW_CHARGE_MAX_RANGE * (0.75 + chargeRatio * 0.25));
+        double crouchSpeed = Math.max(0.45, data.getDouble("addon_red_speed") * CROUCH_RED_LOW_CHARGE_SPEED_SCALE);
+        data.putBoolean("addon_red_crouch_low_charge", true);
+        data.putDouble("addon_red_max_range", crouchMaxRange);
+        data.putDouble("addon_red_speed", crouchSpeed);
+        data.putDouble("x_power", data.getDouble("addon_red_dir_x") * crouchSpeed);
+        data.putDouble("y_power", data.getDouble("addon_red_dir_y") * crouchSpeed);
+        data.putDouble("z_power", data.getDouble("addon_red_dir_z") * crouchSpeed);
     }
 
     /**
@@ -610,6 +839,12 @@ public class BlueRedPurpleNukeMod {
         Vec3 pos = BlueRedPurpleNukeMod.getTrackedRedPosition(redEntity);
         double cnt6 = BlueRedPurpleNukeMod.getEffectiveRedCnt6(redEntity);
         int chargeTier = BlueRedPurpleNukeMod.getRedChargeTier(cnt6);
+        double distanceTraveled = BlueRedPurpleNukeMod.getNormalRedDistanceTraveled(redEntity, pos);
+        double distanceFactor = BlueRedPurpleNukeMod.getNormalRedDistanceFactor(distanceTraveled);
+        double distanceMultiplier = BlueRedPurpleNukeMod.getNormalRedDistanceMultiplier(distanceFactor);
+        double radiusMultiplier = BlueRedPurpleNukeMod.getNormalRedRadiusMultiplier(distanceFactor);
+        double knockbackMultiplier = BlueRedPurpleNukeMod.getNormalRedKnockbackMultiplier(distanceFactor);
+        double crouchRedMinimumDamage = BlueRedPurpleNukeMod.getShiftRedExplosionBaseDamage(cnt6);
         serverLevel.sendParticles((ParticleOptions)ParticleTypes.EXPLOSION_EMITTER, pos.x, pos.y, pos.z, 14 + chargeTier * 8, 2.6 + (double)chargeTier * 1.2, 2.6 + (double)chargeTier * 1.2, 2.6 + (double)chargeTier * 1.2, 0.0);
         serverLevel.sendParticles((ParticleOptions)ParticleTypes.FLASH, pos.x, pos.y, pos.z, 3, 0.12, 0.12, 0.12, 0.0);
         serverLevel.sendParticles((ParticleOptions)ParticleTypes.SONIC_BOOM, pos.x, pos.y + 0.1, pos.z, 2, 0.2, 0.15, 0.2, 0.0);
@@ -643,31 +878,36 @@ public class BlueRedPurpleNukeMod {
         for (LivingEntity mob : attachedMobs) {
             mob.getPersistentData().remove("addon_red_attached_orb");
             mob.setNoGravity(false);
-            float damage = switch (chargeTier) {
-                case 1 -> 18.0f;
-                case 2 -> 34.0f;
-                default -> 56.0f;
-            };
-            damage = (float)((double)damage * normalDamageScale);
-            mob.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), damage);
-            mob.setDeltaMovement(mob.position().subtract(pos).normalize().scale(1.2 + (double)chargeTier * 0.7));
+            Vec3 releaseDir = mob.position().subtract(pos);
+            if (releaseDir.lengthSqr() < 1.0E-6) {
+                releaseDir = new Vec3(0.0, 0.2, 0.0);
+            }
+            mob.setDeltaMovement(releaseDir.normalize().scale((1.2 + (double)chargeTier * 0.7) * knockbackMultiplier));
+            mob.hurtMarked = true;
         }
-        BlueRedPurpleNukeMod.applyRedExplosionShockwave(serverLevel, redEntity, owner, pos, chargeTier);
-        float blockPower = switch (chargeTier) {
-            case 1 -> 4.0f;
-            case 2 -> 5.6f;
-            default -> 7.2f;
-        };
-        boolean ownerHadInfinity = owner instanceof Player && owner.getPersistentData().getBoolean("infinity");
-        boolean wasInvulnerable = owner.isInvulnerable();
-        if (ownerHadInfinity && !wasInvulnerable) {
-            owner.setInvulnerable(true);
+        // Keep Red normal to one real damage lane only: a single manual explosion pulse.
+        double cnt6Val = Math.max(redEntity.getPersistentData().getDouble("addon_cnt6"), cnt6);
+        double CNT6 = 1.0 + cnt6Val * 0.1;
+        double impactRadius = 12.0 * CNT6 * radiusMultiplier;
+        double impactKnockback = 3.5 * CNT6 * knockbackMultiplier;
+        double baseExplosionDamage = Math.max(36.0 * CNT6 * normalDamageScale * distanceMultiplier, crouchRedMinimumDamage);
+        List<LivingEntity> explosionTargets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(pos, pos).inflate(impactRadius), e -> e.isAlive() && e != redEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+        for (LivingEntity target : explosionTargets) {
+            Vec3 delta = target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0).subtract(pos);
+            double distance = Math.max(0.001, delta.length());
+            if (distance > impactRadius) {
+                continue;
+            }
+            double falloff = 1.0 - Math.min(1.0, distance / impactRadius);
+            double finalDamage = Math.max(baseExplosionDamage * (0.8 + 0.2 * falloff), crouchRedMinimumDamage);
+            target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)finalDamage);
+            Vec3 push = delta.lengthSqr() < 1.0E-6 ? new Vec3(0.0, 1.0, 0.0) : delta.normalize();
+            target.setDeltaMovement(target.getDeltaMovement().add(push.x * impactKnockback, 0.6, push.z * impactKnockback));
+            target.hurtMarked = true;
         }
-        world.explode((Entity)owner, pos.x, pos.y, pos.z, blockPower, Level.ExplosionInteraction.MOB);
-        if (ownerHadInfinity && !wasInvulnerable) {
-            owner.setInvulnerable(false);
-        }
+        BlueRedPurpleNukeMod.applyRedExplosionTerrainBurst(serverLevel, redEntity, pos, chargeTier);
         redEntity.getPersistentData().putBoolean("addon_red_normal_active", false);
+        redEntity.getPersistentData().putBoolean("addon_red_crouch_low_charge", false);
         redEntity.discard();
     }
 
@@ -681,31 +921,33 @@ public class BlueRedPurpleNukeMod {
         redEntity.getPersistentData().putDouble("x_pos", pos.x);
         redEntity.getPersistentData().putDouble("y_pos", pos.y);
         redEntity.getPersistentData().putDouble("z_pos", pos.z);
-        for (int step = 0; step < 2; ++step) {
-            redEntity.getPersistentData().putDouble("Damage", 34.0 * CNT6);
-            redEntity.getPersistentData().putDouble("Range", 10.0 * CNT6);
-            redEntity.getPersistentData().putDouble("knockback", 2.0 * CNT6);
-            redEntity.getPersistentData().putDouble("effect", 0.0);
-            RangeAttackProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)pos.y, (double)pos.z, (Entity)redEntity);
-            redEntity.getPersistentData().putDouble("BlockRange", 4.0 * CNT6);
-            redEntity.getPersistentData().putDouble("BlockDamage", 4.0 * CNT6);
-            redEntity.getPersistentData().putBoolean("noParticle", true);
-            BlockDestroyAllDirectionProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)pos.y, (double)pos.z, (Entity)redEntity);
-            redEntity.getPersistentData().putDouble("Range", 10.0 * CNT6);
-            redEntity.getPersistentData().putDouble("knockback", 2.0 * CNT6);
-            KnockbackProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)pos.y, (double)pos.z, (Entity)redEntity);
-        }
+        // Shift Red keeps one setup pulse for crowd control, but removes the repeated full-damage calls that stacked multiple independent RangeAttack passes in a single cast.
+        redEntity.getPersistentData().putDouble("BlockRange", 6.0 * CNT6);
+        redEntity.getPersistentData().putDouble("BlockDamage", 4.0 * CNT6);
+        redEntity.getPersistentData().putBoolean("noParticle", true);
+        BlockDestroyAllDirectionProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)pos.y, (double)pos.z, (Entity)redEntity);
+        redEntity.getPersistentData().putDouble("Range", 10.0 * CNT6);
+        redEntity.getPersistentData().putDouble("knockback", 2.0 * CNT6);
+        redEntity.getPersistentData().putDouble("effect", 0.0);
+        KnockbackProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)pos.y, (double)pos.z, (Entity)redEntity);
         redEntity.getPersistentData().putDouble("BlockRange", 16.0 * CNT6);
         redEntity.getPersistentData().putDouble("BlockDamage", 0.33);
         redEntity.getPersistentData().putBoolean("noParticle", true);
         BlockDestroyAllDirectionProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)pos.y, (double)pos.z, (Entity)redEntity);
         serverLevel.sendParticles((ParticleOptions)ParticleTypes.EXPLOSION_EMITTER, pos.x, pos.y, pos.z, (int)(30.0 * CNT6), 4.0, 4.0, 4.0, 1.0);
-        redEntity.getPersistentData().putDouble("Damage", 34.0 * CNT6);
-        redEntity.getPersistentData().putDouble("Range", 16.0 * CNT6);
-        redEntity.getPersistentData().putDouble("knockback", 4.0 * CNT6);
+        // The finisher remains the main damaging hit, but it is no longer stacked on top of two earlier full-damage executions.
+        redEntity.getPersistentData().putDouble("Damage", 26.0 * CNT6);
+        redEntity.getPersistentData().putDouble("Range", 14.0 * CNT6);
+        redEntity.getPersistentData().putDouble("knockback", 3.6 * CNT6);
         redEntity.getPersistentData().putDouble("effect", 0.0);
         redEntity.getPersistentData().putDouble("y_knockback", 0.65);
-        RangeAttackProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)(pos.y - 1.5), (double)pos.z, (Entity)redEntity);
+        redEntity.getPersistentData().putBoolean("addon_red_shift_finisher_damage_active", true);
+        try {
+            RangeAttackProcedure.execute((LevelAccessor)serverLevel, (double)pos.x, (double)(pos.y - 1.5), (double)pos.z, (Entity)redEntity);
+        }
+        finally {
+            redEntity.getPersistentData().remove("addon_red_shift_finisher_damage_active");
+        }
         redEntity.getPersistentData().putDouble("Range", 16.0 * CNT6);
         redEntity.getPersistentData().putDouble("knockback", 4.0 * CNT6);
         redEntity.getPersistentData().putDouble("effect", 1.0);
@@ -720,16 +962,7 @@ public class BlueRedPurpleNukeMod {
         if (electric != null) {
             serverLevel.playSound(null, BlockPos.containing((Position)pos), electric, SoundSource.NEUTRAL, 2.0f, 0.8f);
         }
-        float blockPower = (float)(2.0 + CNT6 * 2.0);
-        boolean ownerHadInfinity = owner instanceof Player && owner.getPersistentData().getBoolean("infinity");
-        boolean wasInvulnerable = owner.isInvulnerable();
-        if (ownerHadInfinity && !wasInvulnerable) {
-            owner.setInvulnerable(true);
-        }
-        serverLevel.explode((Entity)owner, pos.x, pos.y, pos.z, blockPower, Level.ExplosionInteraction.MOB);
-        if (ownerHadInfinity && !wasInvulnerable) {
-            owner.setInvulnerable(false);
-        }
+        BlueRedPurpleNukeMod.applyRedExplosionTerrainBurst(serverLevel, redEntity, pos, chargeTier);
         redEntity.discard();
     }
 
@@ -848,26 +1081,48 @@ public class BlueRedPurpleNukeMod {
     }
 
     // ===== RED SHOCKWAVE SUPPORT =====
-    private static void applyRedExplosionShockwave(ServerLevel serverLevel, LivingEntity redEntity, LivingEntity owner, Vec3 pos, int chargeTier) {
+    private static void applyRedExplosionShockwave(ServerLevel serverLevel, LivingEntity redEntity, LivingEntity owner, Vec3 pos, int chargeTier, Set<UUID> excludedTargets, double distanceMultiplier, double radiusMultiplier, double knockbackMultiplier, double minimumDamage) {
         // Higher Red charge tiers widen the shockwave radius so fully committed casts punish larger groups.
-        double radius = 4.0 + (double)chargeTier * 2.4;
+        double radius = (6.0 + (double)chargeTier * 4.0) * radiusMultiplier;
         float baseDamage = switch (chargeTier) {
-            case 1 -> 16.0f;
-            case 2 -> 28.0f;
-            default -> 42.0f;
+            case 1 -> 28.0f;
+            case 2 -> 40.0f;
+            default -> 54.0f;
         };
         double normalDamageScale = BlueRedPurpleNukeMod.getNormalRedDamageScale(owner);
-        baseDamage = (float)((double)baseDamage * normalDamageScale);
-        List<LivingEntity> targets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(pos, pos).inflate(radius), e -> e.isAlive() && e != redEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+        double scaledBaseDamage = Math.max((double)baseDamage * normalDamageScale * distanceMultiplier, minimumDamage);
+        List<LivingEntity> targets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(pos, pos).inflate(radius), e -> e.isAlive() && e != redEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity) && (excludedTargets == null || !excludedTargets.contains(e.getUUID())));
         for (LivingEntity target : targets) {
             Vec3 delta = target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0).subtract(pos);
             double distance = Math.max(0.001, delta.length());
             double falloff = 1.0 - Math.min(1.0, distance / radius);
             if (falloff <= 0.0) continue;
-            target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)((double)baseDamage * (0.55 + 0.45 * falloff)));
-            Vec3 push = delta.normalize().scale((0.7 + (double)chargeTier * 0.3) * (0.35 + falloff));
-            target.setDeltaMovement(target.getDeltaMovement().add(push.x, 0.18 + falloff * 0.2, push.z));
+            target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)(scaledBaseDamage * (0.75 + 0.25 * falloff)));
+            Vec3 push = delta.normalize().scale((1.5 + (double)chargeTier * 0.5) * (0.35 + falloff) * knockbackMultiplier);
+            target.setDeltaMovement(target.getDeltaMovement().add(push.x, 0.35 + falloff * 0.25 * knockbackMultiplier, push.z));
         }
+    }
+
+    /**
+     * Replaces the vanilla Red explosion entity-damage lane with a terrain-only burst so direct hits and the manual shockwave stay distinct instead of triple-dipping the same target.
+     * @param serverLevel level value used by this operation.
+     * @param redEntity entity instance being processed by this helper.
+     * @param pos position used by this helper.
+     * @param chargeTier resolved Red charge tier.
+     */
+    private static void applyRedExplosionTerrainBurst(ServerLevel serverLevel, LivingEntity redEntity, Vec3 pos, int chargeTier) {
+        redEntity.getPersistentData().putDouble("BlockRange", switch (chargeTier) {
+            case 1 -> 8.0;
+            case 2 -> 10.0;
+            default -> 12.0;
+        });
+        redEntity.getPersistentData().putDouble("BlockDamage", switch (chargeTier) {
+            case 1 -> 5.0;
+            case 2 -> 6.5;
+            default -> 8.0;
+        });
+        redEntity.getPersistentData().putBoolean("noParticle", true);
+        BlockDestroyAllDirectionProcedure.execute((LevelAccessor)serverLevel, pos.x, pos.y, pos.z, (Entity)redEntity);
     }
 
     // ===== PURPLE FUSION SYSTEM =====
@@ -909,8 +1164,9 @@ public class BlueRedPurpleNukeMod {
                 purpleE.getPersistentData().putBoolean("explode", true);
                 purpleE.getPersistentData().putBoolean("addon_purple_fusion", true);
                 purpleE.getPersistentData().putString("OWNER_UUID", ownerPlayer.getStringUUID());
-                double maxCnt6 = Math.max(redCnt6, blueCnt6) * 2.0;
+                double maxCnt6 = Math.min(PURPLE_FUSION_CNT6_CAP, Math.max(redCnt6, blueCnt6) + 1.0);
                 purpleE.getPersistentData().putDouble("cnt6", maxCnt6);
+                purpleE.getPersistentData().putInt("jjkbrp_inf_rank_pass_count", 0);
                 if (purpleE instanceof LivingEntity) {
                     LivingEntity livingPurple = (LivingEntity)purpleE;
                     try {
@@ -976,7 +1232,7 @@ public class BlueRedPurpleNukeMod {
         CompoundTag data = player.getPersistentData();
         int activeTicks = data.getInt("addon_infinity_crusher_ticks") + 1;
         data.putInt("addon_infinity_crusher_ticks", activeTicks);
-        double ceDrain = 0.5 + (double)activeTicks * 0.02;
+        double ceDrain = CRUSHER_BASE_CE_DRAIN + (double)activeTicks * CRUSHER_CE_DRAIN_GROWTH;
         double currentCE = vars.PlayerCursePower;
         if (currentCE < ceDrain) {
             BlueRedPurpleNukeMod.resetInfinityCrusher(player);
@@ -990,8 +1246,9 @@ public class BlueRedPurpleNukeMod {
             cap.syncPlayerVariables((Entity)player);
         });
         double growthFactor = Math.min(1.0, (double)activeTicks / 200.0);
-        double currentRadius = 1.0 + 2.0 * growthFactor;
-        float wallDamage = 3.0f + (float)(growthFactor * 8.0) + (float)(totalCEDrained * 0.012);
+        double currentRadius = CRUSHER_MIN_RADIUS + (CRUSHER_MAX_RADIUS - CRUSHER_MIN_RADIUS) * growthFactor;
+        double effectiveCEDrained = BlueRedPurpleNukeMod.getSoftCappedValue(totalCEDrained, CRUSHER_CE_DAMAGE_SOFT_CAP, CRUSHER_CE_DAMAGE_OVERFLOW_WEIGHT);
+        float wallDamage = (float)((double)CRUSHER_BASE_WALL_DAMAGE + growthFactor * 2.5 + effectiveCEDrained * CRUSHER_CE_DAMAGE_SCALE);
         Vec3 center = new Vec3(player.getX(), player.getY() + (double)player.getBbHeight() * 0.5, player.getZ());
         Vec3 lookDir = player.getLookAngle().normalize();
         Vec3 auraCenter = center.add(lookDir.scale(currentRadius * 0.5));
@@ -1078,9 +1335,12 @@ public class BlueRedPurpleNukeMod {
                 mob.setDeltaMovement(Vec3.ZERO);
                 mob.setNoGravity(true);
                 mob.hurtMarked = true;
-                mob.hurt(serverLevel.damageSources().generic(), wallDamage);
+                if (activeTicks % CRUSHER_LOCK_DAMAGE_INTERVAL != 0) continue;
+                int hitIndex = BlueRedPurpleNukeMod.nextInfinityCrusherDamageHit(player);
+                float scaledDamage = (float)((double)wallDamage * BlueRedPurpleNukeMod.getInfinityCrusherDamageScaleForHit((LivingEntity)player, hitIndex));
+                mob.hurt(serverLevel.damageSources().generic(), scaledDamage);
                 BlueRedPurpleNukeMod.spawnCrushVFX(serverLevel, mob, auraColor, growthFactor);
-                if (activeTicks % 8 != 0) continue;
+                if (activeTicks % (CRUSHER_LOCK_DAMAGE_INTERVAL * 2) != 0) continue;
                 world.playSound(null, BlockPos.containing((double)lockX, (double)lockY, (double)lockZ), SoundEvents.ANVIL_LAND, SoundSource.NEUTRAL, 0.5f + (float)growthFactor * 0.3f, 1.4f);
                 continue;
             }
@@ -1092,22 +1352,25 @@ public class BlueRedPurpleNukeMod {
             }
             Vec3 toMobNorm = toMob.normalize();
             double dot = lookDir.x * toMobNorm.x + lookDir.y * toMobNorm.y + lookDir.z * toMobNorm.z;
-            if (dot < 0.5 || !isMovingForward) continue;
+            if (dot < CRUSHER_CONE_COS || !isMovingForward) continue;
             mob.getPersistentData().putInt("addon_crusher_contact_ticks", ++contactTicks);
-            if (contactTicks >= 15) {
+            if (contactTicks >= CRUSHER_HARDLOCK_THRESHOLD) {
                 mob.getPersistentData().putString("addon_crusher_lock_owner", playerUUID);
                 mob.getPersistentData().putDouble("addon_crusher_lock_x", mob.getX());
                 mob.getPersistentData().putDouble("addon_crusher_lock_y", mob.getY());
                 mob.getPersistentData().putDouble("addon_crusher_lock_z", mob.getZ());
             }
-            double pushStrength = 0.5 * (0.6 + 0.4 * dot) * (1.0 + growthFactor * 0.5);
+            double pushStrength = CRUSHER_PUSH_STRENGTH * (0.6 + 0.4 * dot) * (1.0 + growthFactor * 0.5);
             Vec3 pushDir = lookDir.scale(pushStrength).add(toMobNorm.scale(-0.05));
             mob.setDeltaMovement(mob.getDeltaMovement().scale(0.2).add(pushDir));
             mob.hurtMarked = true;
             if (!mob.horizontalCollision && !mob.verticalCollision || !(dist < currentRadius + 1.5)) continue;
-            mob.hurt(serverLevel.damageSources().generic(), wallDamage * 0.5f);
+            if (activeTicks % CRUSHER_COLLISION_DAMAGE_INTERVAL != 0) continue;
+            int hitIndex = BlueRedPurpleNukeMod.nextInfinityCrusherDamageHit(player);
+            float scaledDamage = (float)((double)(wallDamage * 0.5f) * BlueRedPurpleNukeMod.getInfinityCrusherDamageScaleForHit((LivingEntity)player, hitIndex));
+            mob.hurt(serverLevel.damageSources().generic(), scaledDamage);
             BlueRedPurpleNukeMod.spawnCrushVFX(serverLevel, mob, auraColor, growthFactor);
-            if (activeTicks % 12 != 0) continue;
+            if (activeTicks % (CRUSHER_COLLISION_DAMAGE_INTERVAL * 2) != 0) continue;
             world.playSound(null, BlockPos.containing((double)mob.getX(), (double)mob.getY(), (double)mob.getZ()), SoundEvents.ANVIL_LAND, SoundSource.NEUTRAL, 0.35f, 1.6f);
         }
     }
@@ -1119,6 +1382,7 @@ public class BlueRedPurpleNukeMod {
     private static void resetInfinityCrusher(ServerPlayer player) {
         CompoundTag data = player.getPersistentData();
         data.putInt("addon_infinity_crusher_ticks", 0);
+        data.putInt("addon_infinity_crusher_damage_hits", 0);
         data.putDouble("addon_infinity_crusher_total_ce", 0.0);
         Level level = player.level();
         if (!(level instanceof ServerLevel)) {
@@ -1217,8 +1481,12 @@ public class BlueRedPurpleNukeMod {
                 if (timer % 20 == 0) {
                     sl.sendParticles((ParticleOptions)ParticleTypes.END_ROD, lx, ly, lz, 10, 1.0, 1.0, 1.0, 0.1);
                 }
+                BlueRedPurpleNukeMod.applyBlueLingerControl(sl, blueEntity, timer, new Vec3(lx, ly, lz));
             }
             if (timer >= 200) {
+                if (level instanceof ServerLevel) {
+                    BlueRedPurpleNukeMod.releaseBlueFullChargeTargets((ServerLevel)level, blueEntity);
+                }
                 blueEntity.discard();
             }
             return;
@@ -1243,13 +1511,16 @@ public class BlueRedPurpleNukeMod {
                 if (cnt6 >= 5.0) {
                     blueEntity.addEffect(new MobEffectInstance(MobEffects.LUCK, 5, 15, false, false));
                 }
-                this.applyBlueAim(blueEntity);
+                BlueRedPurpleNukeMod.handleCrouchFullChargeBlueAim(blueEntity);
             }
         }
         if (cnt6 < 5.0) {
             return;
         }
         if (circle && !aiming && aimEnded) {
+            if (blueEntity.level() instanceof ServerLevel) {
+                BlueRedPurpleNukeMod.releaseBlueFullChargeTargets((ServerLevel)blueEntity.level(), blueEntity);
+            }
             shouldLinger = true;
         } else if (circle && aiming) {
             shouldLinger = false;
@@ -1326,6 +1597,51 @@ public class BlueRedPurpleNukeMod {
         blueEntity.getPersistentData().putDouble("z_power", look.z * 0.2);
         blueEntity.setYRot(playerOwner.getYRot());
         blueEntity.setXRot(playerOwner.getXRot());
+    }
+
+    /**
+     * Keeps addon-controlled Blue linger as the authoritative pull-and-DPS state after the base Blue AI is suppressed.
+     * @param serverLevel level value used by this operation.
+     * @param blueEntity entity instance being processed by this helper.
+     * @param timer current linger lifetime in ticks.
+     * @param orbPos authoritative linger position.
+     */
+    private static void applyBlueLingerControl(ServerLevel serverLevel, LivingEntity blueEntity, int timer, Vec3 orbPos) {
+        String ownerUUID = blueEntity.getPersistentData().getString("OWNER_UUID");
+        LivingEntity owner = ownerUUID.isEmpty() ? null : BlueRedPurpleNukeMod.resolveOwner(serverLevel, ownerUUID);
+        double cnt6 = Math.max(blueEntity.getPersistentData().getDouble("linger_cnt6"), blueEntity.getPersistentData().getDouble("cnt6"));
+        double cntFactor = 1.0 + Math.max(cnt6, 0.0) * 0.1;
+        double pullRadius = Math.max(3.5, 2.8 + cnt6 * 0.6);
+        boolean damagePulse = timer % 10 == 0;
+        long currentGameTime = serverLevel.getGameTime();
+        double basePulseDamage = 4.5 * cntFactor * BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner != null ? owner : blueEntity);
+        List<LivingEntity> nearby = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(orbPos, orbPos).inflate(pullRadius), e -> e.isAlive() && e != blueEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+        for (LivingEntity target : nearby) {
+            Vec3 delta = orbPos.subtract(target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0));
+            double dist = delta.length();
+            if (dist < 0.001 || dist > pullRadius) {
+                continue;
+            }
+            double falloff = 1.0 - Math.min(1.0, dist / pullRadius);
+            Vec3 pull = delta.normalize().scale((0.18 + falloff * 0.32) * cntFactor);
+            target.setDeltaMovement(target.getDeltaMovement().scale(0.35).add(pull));
+            target.hurtMarked = true;
+            if (dist < 1.4) {
+                Vec3 snap = orbPos.add(delta.normalize().scale(-0.6));
+                target.teleportTo(snap.x, snap.y - (double)target.getBbHeight() * 0.25, snap.z);
+            }
+            if (!damagePulse) {
+                continue;
+            }
+            CompoundTag targetData = target.getPersistentData();
+            long lastHitTick = targetData.getLong("addon_blue_linger_last_hit");
+            if (currentGameTime - lastHitTick < 10L) {
+                continue;
+            }
+            targetData.putLong("addon_blue_linger_last_hit", currentGameTime);
+            double pulseDamage = basePulseDamage * (0.55 + 0.25 * falloff);
+            target.hurt(serverLevel.damageSources().magic(), (float)pulseDamage);
+        }
     }
 
     /**
@@ -1425,13 +1741,6 @@ public class BlueRedPurpleNukeMod {
 
     // ===== FULL-CHARGE BLUE VARIANT =====
     public static void handleCrouchFullChargeBlueAim(LivingEntity blueEntity) {
-        Vec3 current;
-        Vec3 target;
-        Vec3 delta;
-        double dist;
-        Vec3 newPos;
-        Vec3 fromPlayer;
-        double distFromPlayer;
         Level level = blueEntity.level();
         if (!(level instanceof ServerLevel)) {
             return;
@@ -1445,23 +1754,24 @@ public class BlueRedPurpleNukeMod {
         if (!(owner instanceof Player)) {
             return;
         }
+        double ownerScale = BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner);
+        double rankBonus = Math.max(0.0, ownerScale - 1.0);
+        double pullRadius = BLUE_FULL_PULL_RADIUS * (1.0 + rankBonus * 0.35);
+        double pullStrength = BLUE_FULL_PULL_STRENGTH * (1.0 + rankBonus * 0.45);
         Player playerOwner = (Player)owner;
         Vec3 eye = playerOwner.getEyePosition(1.0f);
-        Vec3 rawLook2 = playerOwner.getLookAngle();
-        Vec3 look = rawLook2.lengthSqr() < 1.0E-6 ? new Vec3(0.0, 0.0, 1.0) : rawLook2.normalize();
-        Vec3 rayEnd = eye.add(look.scale(20.0));
-        BlockHitResult lookHit = serverLevel.clip(new ClipContext(eye, rayEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, (Entity)playerOwner));
-        double targetDist = 20.0;
-        if (lookHit != null && lookHit.getType() == HitResult.Type.BLOCK) {
-            targetDist = Math.min(targetDist, eye.distanceTo(lookHit.getLocation()));
-        }
-        if ((distFromPlayer = (fromPlayer = (newPos = (dist = (delta = (target = eye.add(look.scale(targetDist = Math.max(10.0, Math.min(20.0, targetDist))))).subtract(current = blueEntity.position())).length()) > 1.5 ? current.add(delta.normalize().scale(1.5)) : target).subtract(eye)).length()) < 10.0) {
-            newPos = eye.add(fromPlayer.normalize().scale(10.0));
-        } else if (distFromPlayer > 20.0) {
-            newPos = eye.add(fromPlayer.normalize().scale(20.0));
+        Vec3 rawLook = playerOwner.getLookAngle();
+        Vec3 look = rawLook.lengthSqr() < 1.0E-6 ? new Vec3(0.0, 0.0, 1.0) : rawLook.normalize();
+        Vec3 currentPos = blueEntity.position();
+        Vec3 desiredPos = BlueRedPurpleNukeMod.getBlueFullChargeAimTargetPosition(serverLevel, playerOwner, blueEntity, eye, look);
+        Vec3 orbTravel = desiredPos.subtract(currentPos);
+        Vec3 newPos = desiredPos;
+        if (orbTravel.length() > 1.1) {
+            newPos = currentPos.add(orbTravel.normalize().scale(1.1));
+            orbTravel = desiredPos.subtract(newPos);
         }
         blueEntity.teleportTo(newPos.x, newPos.y, newPos.z);
-        blueEntity.setDeltaMovement(Vec3.ZERO);
+        blueEntity.setDeltaMovement(BlueRedPurpleNukeMod.limitVectorLength(newPos.subtract(currentPos), 0.35));
         blueEntity.getPersistentData().putDouble("x_pos", newPos.x);
         blueEntity.getPersistentData().putDouble("y_pos", newPos.y);
         blueEntity.getPersistentData().putDouble("z_pos", newPos.z);
@@ -1471,8 +1781,63 @@ public class BlueRedPurpleNukeMod {
         blueEntity.setYRot(playerOwner.getYRot());
         blueEntity.setXRot(playerOwner.getXRot());
         blueEntity.addEffect(new MobEffectInstance(MobEffects.LUCK, 5, 15, false, false));
-        BlueRedPurpleNukeMod.pullMobsWithCrouchFullChargeBlue(serverLevel, blueEntity, owner, newPos, look);
-        BlueRedPurpleNukeMod.destroyBlocksNearCrouchBlue(serverLevel, blueEntity, owner, newPos, look);
+        int aimTicks = blueEntity.getPersistentData().getInt("addon_aim_ticks");
+        BlueRedPurpleNukeMod.emitCrouchFullChargeBlueOgEffects(serverLevel, blueEntity, newPos, aimTicks);
+        BlueRedPurpleNukeMod.pullMobsWithCrouchFullChargeBlue(serverLevel, blueEntity, owner, newPos, look, pullRadius, pullStrength);
+        if (aimTicks > 0 && aimTicks % BLUE_BLOCK_BREAK_INTERVAL == 0) {
+            BlueRedPurpleNukeMod.applyCrouchFullChargeBlueOgBlockBreak(serverLevel, blueEntity, newPos, aimTicks);
+        }
+    }
+
+    /**
+     * Restores the narrow OG Blue ambient effect slice that the aim mixin suppresses, without re-entering the original AI gameplay path.
+     * @param serverLevel level value used by this operation.
+     * @param blueEntity entity instance being processed by this helper.
+     * @param orbPos authoritative aimed orb position.
+     * @param aimTicks current addon aim tick counter.
+     */
+    private static void emitCrouchFullChargeBlueOgEffects(ServerLevel serverLevel, LivingEntity blueEntity, Vec3 orbPos, int aimTicks) {
+        double cnt6 = Math.max(5.0, blueEntity.getPersistentData().getDouble("cnt6"));
+        double size = 0.0;
+        if (blueEntity.getAttributes().hasAttribute((Attribute)JujutsucraftModAttributes.SIZE.get()) && blueEntity.getAttribute((Attribute)JujutsucraftModAttributes.SIZE.get()) != null) {
+            size = blueEntity.getAttribute((Attribute)JujutsucraftModAttributes.SIZE.get()).getValue();
+        }
+        double dis = Math.max(8.0, Math.max(size * 10.0, cnt6 * 2.0));
+        BlueRedPurpleNukeMod.emitCrouchFullChargeBlueOgSuctionParticles(serverLevel, orbPos, dis);
+        if (aimTicks != 1) {
+            return;
+        }
+        SoundEvent gatewaySpawn = (SoundEvent)ForgeRegistries.SOUND_EVENTS.getValue(new ResourceLocation("block.end_gateway.spawn"));
+        if (gatewaySpawn == null) {
+            return;
+        }
+        BlockPos soundPos = BlockPos.containing((Position)orbPos);
+        float volume = (float)(1.5 + (1.0 + cnt6 * 0.1));
+        serverLevel.playSound(null, soundPos, gatewaySpawn, SoundSource.NEUTRAL, volume, 1.0f);
+        serverLevel.playSound(null, soundPos, gatewaySpawn, SoundSource.NEUTRAL, volume, 0.5f);
+    }
+
+    /**
+     * Recreates the OG full-charge Blue `minecraft:enchanted_hit` suction streaks on the addon-only crouch path.
+     * @param serverLevel level value used by this operation.
+     * @param orbPos authoritative aimed orb position.
+     * @param dis resolved OG-like visual radius scalar.
+     */
+    private static void emitCrouchFullChargeBlueOgSuctionParticles(ServerLevel serverLevel, Vec3 orbPos, double dis) {
+        int burstCount = 8;
+        double radius = Math.max(8.0, Math.min(48.0, dis * 2.0));
+        for (int i = 0; i < burstCount; ++i) {
+            double startX = orbPos.x + (Math.random() - 0.5) * radius;
+            double startY = orbPos.y + (Math.random() - 0.5) * radius;
+            double startZ = orbPos.z + (Math.random() - 0.5) * radius;
+            Vec3 pull = orbPos.subtract(startX, startY, startZ);
+            double length = pull.length();
+            if (length < 0.001) {
+                continue;
+            }
+            Vec3 velocity = pull.scale(1.0 / length);
+            serverLevel.getServer().getCommands().performPrefixedCommand(new CommandSourceStack(CommandSource.NULL, new Vec3(startX, startY, startZ), Vec2.ZERO, serverLevel, 4, "", (Component)Component.literal((String)""), serverLevel.getServer(), null).withSuppressedOutput(), String.format(Locale.ROOT, "particle minecraft:enchanted_hit ~ ~ ~ %.4f %.4f %.4f 0.0025 0 force", velocity.x * 10000.0, velocity.y * 10000.0, velocity.z * 10000.0));
+        }
     }
 
     /**
@@ -1483,46 +1848,308 @@ public class BlueRedPurpleNukeMod {
      * @param orbPos orb pos used by this method.
      * @param lookDir look dir used by this method.
      */
-    private static void pullMobsWithCrouchFullChargeBlue(ServerLevel serverLevel, LivingEntity blueEntity, LivingEntity owner, Vec3 orbPos, Vec3 lookDir) {
-        List<LivingEntity> nearby = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(orbPos, orbPos).inflate(6.0), e -> e.isAlive() && e != blueEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+    private static void pullMobsWithCrouchFullChargeBlue(ServerLevel serverLevel, LivingEntity blueEntity, LivingEntity owner, Vec3 orbPos, Vec3 lookDir, double pullRadius, double pullStrength) {
+        double effectivePullRadius = Math.max(0.1, pullRadius);
+        double effectivePullStrength = Math.max(0.0, pullStrength);
+        Vec3 normalizedLook = lookDir.lengthSqr() > 1.0E-6 ? lookDir.normalize() : new Vec3(0.0, 0.0, 1.0);
+        List<LivingEntity> nearby = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(orbPos, orbPos).inflate(effectivePullRadius), e -> e.isAlive() && e != blueEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+        String blueLockUuid = blueEntity.getUUID().toString();
+        long gameTime = serverLevel.getGameTime();
         for (LivingEntity entity : nearby) {
-            Vec3 toOrb = orbPos.subtract(entity.position());
+            boolean lockedByThisBlue = BlueRedPurpleNukeMod.isBlueFullChargeLockedBy(entity, blueLockUuid);
+            Vec3 entityCenter = entity.position().add(0.0, (double)entity.getBbHeight() * 0.5, 0.0);
+            Vec3 toOrb = orbPos.subtract(entityCenter);
             double d = toOrb.length();
-            if (d > 6.0 || d < 0.001) continue;
-            double strength = 1.2 * (1.0 + (1.0 - d / 6.0) * 2.0);
-            Vec3 pull = toOrb.normalize().scale(strength);
-            Vec3 awayFromLook = lookDir.scale(0.6);
-            entity.setDeltaMovement(entity.getDeltaMovement().scale(0.2).add(pull).add(awayFromLook));
+            if (d > effectivePullRadius || d < 0.001) {
+                if (lockedByThisBlue) {
+                    BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+                }
+                continue;
+            }
+            Vec3 lockPos = BlueRedPurpleNukeMod.getBlueFullChargeLockAnchor(orbPos, normalizedLook, owner, entity);
+            if (!lockedByThisBlue && d <= BLUE_FULL_LOCK_ENTER_RADIUS) {
+                BlueRedPurpleNukeMod.beginBlueFullChargeTargetLock(serverLevel, entity, blueLockUuid);
+                lockedByThisBlue = true;
+                LOGGER.debug("[BlueFullChargeDiag] Locking target={} blue={} distToOrb={} distToLock={} motionBefore={}", new Object[]{entity.getName().getString(), blueLockUuid, d, lockPos.distanceTo(entityCenter), entity.getDeltaMovement()});
+            }
+            if (lockedByThisBlue) {
+                BlueRedPurpleNukeMod.refreshBlueFullChargeTargetLock(entity.getPersistentData(), gameTime);
+                if (d > Math.max(BLUE_FULL_LOCK_RELEASE_RADIUS, BLUE_FULL_LOCK_ENTER_RADIUS + 0.4)) {
+                    LOGGER.debug("[BlueFullChargeDiag] Releasing target={} blue={} distToOrb={} motion={}", new Object[]{entity.getName().getString(), blueLockUuid, d, entity.getDeltaMovement()});
+                    BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+                } else {
+                    BlueRedPurpleNukeMod.applyBlueFullChargeLockMotion(entity, lockPos, owner);
+                }
+                continue;
+            }
+            double falloff = 1.0 - Math.min(1.0, d / effectivePullRadius);
+            Vec3 pullTarget = d < BLUE_FULL_LOCK_RELEASE_RADIUS ? lockPos : orbPos.add(normalizedLook.scale(0.35));
+            Vec3 pullDelta = pullTarget.subtract(entityCenter);
+            if (pullDelta.lengthSqr() < 1.0E-6) {
+                pullDelta = toOrb;
+            }
+            double desiredSpeed = Math.min(BLUE_FULL_PULL_MAX_SPEED, 0.14 + effectivePullStrength * (0.08 + falloff * 0.16));
+            Vec3 desiredMotion = pullDelta.normalize().scale(desiredSpeed);
+            Vec3 blendedMotion = entity.getDeltaMovement().scale(0.72).add(desiredMotion.scale(0.28));
+            blendedMotion = BlueRedPurpleNukeMod.applyBlueFullChargeOwnerAvoidance(owner, entity, pullTarget, blendedMotion);
+            entity.setDeltaMovement(BlueRedPurpleNukeMod.limitVectorLength(blendedMotion, BLUE_FULL_PULL_MAX_SPEED));
             entity.hurtMarked = true;
-            if (!(d < 2.0)) continue;
-            entity.setNoGravity(true);
-            entity.teleportTo(orbPos.x - lookDir.x * 0.8, orbPos.y, orbPos.z - lookDir.z * 0.8);
         }
     }
 
     /**
-     * Performs destroy blocks near crouch blue for this addon component.
+     * Resolves the intended aim position for full-charge crouch Blue while keeping the orb within the supported front cone distance band.
+     * @param serverLevel level value used by this operation.
+     * @param playerOwner player instance involved in this operation.
+     * @param blueEntity entity instance being processed by this helper.
+     * @param eye eye position used by this helper.
+     * @param look normalized owner look vector.
+     * @return clamped target position for the current full-charge Blue aim tick.
+     */
+    private static Vec3 getBlueFullChargeAimTargetPosition(ServerLevel serverLevel, Player playerOwner, LivingEntity blueEntity, Vec3 eye, Vec3 look) {
+        Vec3 rayEnd = eye.add(look.scale(BLUE_CROUCH_MAX_DISTANCE));
+        BlockHitResult lookHit = serverLevel.clip(new ClipContext(eye, rayEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, (Entity)playerOwner));
+        double targetDist = BLUE_CROUCH_MAX_DISTANCE;
+        if (lookHit != null && lookHit.getType() == HitResult.Type.BLOCK) {
+            targetDist = Math.min(targetDist, eye.distanceTo(lookHit.getLocation()));
+        }
+        targetDist = Math.max(BLUE_CROUCH_MIN_DISTANCE, Math.min(BLUE_CROUCH_MAX_DISTANCE, targetDist));
+        Vec3 current = blueEntity.position();
+        Vec3 target = eye.add(look.scale(targetDist));
+        Vec3 delta = target.subtract(current);
+        Vec3 newPos = delta.length() > 1.1 ? current.add(delta.normalize().scale(1.1)) : target;
+        Vec3 fromPlayer = newPos.subtract(eye);
+        double distFromPlayer = fromPlayer.length();
+        if (distFromPlayer < BLUE_CROUCH_MIN_DISTANCE) {
+            Vec3 safeDir = fromPlayer.lengthSqr() > 1.0E-6 ? fromPlayer.normalize() : look;
+            newPos = eye.add(safeDir.scale(BLUE_CROUCH_MIN_DISTANCE));
+        } else if (distFromPlayer > BLUE_CROUCH_MAX_DISTANCE) {
+            newPos = eye.add(fromPlayer.normalize().scale(BLUE_CROUCH_MAX_DISTANCE));
+        }
+        return newPos;
+    }
+
+    /**
+     * Checks whether the specified target is currently locked by this Blue full-charge orb.
+     * @param target entity instance being processed by this helper.
+     * @param blueLockUuid identifier used to resolve runtime state for this operation.
+     * @return true when the target is locked by the provided Blue orb UUID.
+     */
+    private static boolean isBlueFullChargeLockedBy(LivingEntity target, String blueLockUuid) {
+        CompoundTag data = target.getPersistentData();
+        return data.getBoolean(BLUE_FULL_LOCKED) && blueLockUuid.equals(data.getString(BLUE_FULL_LOCK_UUID));
+    }
+
+    /**
+     * Enters the managed Blue full-charge lock state and enables NoGravity only once per target lifecycle.
+     * @param serverLevel level value used by this operation.
+     * @param target entity instance being processed by this helper.
+     * @param blueLockUuid identifier used to resolve runtime state for this operation.
+     */
+    private static void beginBlueFullChargeTargetLock(ServerLevel serverLevel, LivingEntity target, String blueLockUuid) {
+        CompoundTag data = target.getPersistentData();
+        data.putString(BLUE_FULL_LOCK_UUID, blueLockUuid);
+        data.putBoolean(BLUE_FULL_LOCKED, true);
+        data.putLong(BLUE_FULL_LOCK_LAST_SEEN_TICK, serverLevel.getGameTime());
+        if (!data.getBoolean(BLUE_FULL_LOCK_GRAVITY_MANAGED)) {
+            target.setNoGravity(true);
+            data.putBoolean(BLUE_FULL_LOCK_GRAVITY_MANAGED, true);
+        }
+    }
+
+    /**
+     * Refreshes the active Blue full-charge lock so orphaned targets can be detected by the validator.
+     * @param data persistent data container used by this helper.
+     * @param gameTime current server tick time.
+     */
+    private static void refreshBlueFullChargeTargetLock(CompoundTag data, long gameTime) {
+        data.putBoolean(BLUE_FULL_LOCKED, true);
+        data.putLong(BLUE_FULL_LOCK_LAST_SEEN_TICK, gameTime);
+    }
+
+    /**
+     * Computes a stable hold anchor behind the orb while preserving a safe horizontal gap from the owner.
+     * @param orbPos orb pos used by this method.
+     * @param normalizedLook normalized owner look vector.
+     * @param owner entity instance being processed by this helper.
+     * @param target entity instance being processed by this helper.
+     * @return safe hold anchor used for Blue's locked pull state.
+     */
+    private static Vec3 getBlueFullChargeLockAnchor(Vec3 orbPos, Vec3 normalizedLook, LivingEntity owner, LivingEntity target) {
+        Vec3 safeLook = normalizedLook.lengthSqr() > 1.0E-6 ? normalizedLook.normalize() : new Vec3(0.0, 0.0, 1.0);
+        Vec3 ownerCenter = owner.position().add(0.0, (double)owner.getBbHeight() * 0.5, 0.0);
+        double minOwnerClearance = Math.max(BLUE_FULL_OWNER_CLEARANCE, (double)(owner.getBbWidth() + target.getBbWidth()) * 0.5 + 0.75);
+        Vec3 anchor = orbPos.subtract(safeLook.scale(1.35));
+        anchor = new Vec3(anchor.x, orbPos.y - (double)target.getBbHeight() * 0.3, anchor.z);
+        Vec3 fromOwner = anchor.subtract(ownerCenter);
+        double horizontalDistanceSq = fromOwner.x * fromOwner.x + fromOwner.z * fromOwner.z;
+        if (horizontalDistanceSq < minOwnerClearance * minOwnerClearance) {
+            Vec3 lateral = new Vec3(-safeLook.z, 0.0, safeLook.x);
+            if (lateral.lengthSqr() < 1.0E-6) {
+                lateral = new Vec3(1.0, 0.0, 0.0);
+            }
+            double side = Math.signum(target.getX() - owner.getX());
+            if (side == 0.0) {
+                side = 1.0;
+            }
+            Vec3 forwardAnchor = ownerCenter.add(safeLook.scale(minOwnerClearance + 0.5));
+            anchor = forwardAnchor.add(lateral.normalize().scale(0.45 * side));
+            anchor = new Vec3(anchor.x, orbPos.y - (double)target.getBbHeight() * 0.3, anchor.z);
+        }
+        return anchor;
+    }
+
+    /**
+     * Applies a soft velocity-based hold motion for a locked Blue target instead of a hard snap or teleport.
+     * @param target entity instance being processed by this helper.
+     * @param lockPos lock anchor used by this helper.
+     * @param owner entity instance being processed by this helper.
+     */
+    private static void applyBlueFullChargeLockMotion(LivingEntity target, Vec3 lockPos, LivingEntity owner) {
+        Vec3 targetCenter = target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0);
+        Vec3 toLock = lockPos.subtract(targetCenter);
+        double lockDistance = toLock.length();
+        Vec3 desiredMotion;
+        if (lockDistance > 0.03) {
+            double holdSpeed = Mth.clamp(lockDistance * 0.2, 0.05, BLUE_FULL_LOCK_MAX_SPEED);
+            desiredMotion = toLock.normalize().scale(holdSpeed);
+        } else {
+            desiredMotion = target.getDeltaMovement().scale(0.45);
+        }
+        Vec3 blendedMotion = target.getDeltaMovement().scale(0.55).add(desiredMotion.scale(0.45));
+        blendedMotion = BlueRedPurpleNukeMod.applyBlueFullChargeOwnerAvoidance(owner, target, lockPos, blendedMotion);
+        target.setDeltaMovement(BlueRedPurpleNukeMod.limitVectorLength(blendedMotion, BLUE_FULL_LOCK_MAX_SPEED));
+        target.hurtMarked = true;
+        if (target.tickCount % 20 == 0 && lockDistance > 0.35) {
+            LOGGER.debug("[BlueFullChargeDiag] Holding target={} distToLock={} motion={}", new Object[]{target.getName().getString(), lockDistance, target.getDeltaMovement()});
+        }
+    }
+
+    /**
+     * Pushes Blue-held targets away from the owner if the proposed movement would collapse them into the caster's collision space.
+     * @param owner entity instance being processed by this helper.
+     * @param target entity instance being processed by this helper.
+     * @param pullTarget pull target used by this helper.
+     * @param proposedMotion proposed motion used by this helper.
+     * @return owner-safe target motion.
+     */
+    private static Vec3 applyBlueFullChargeOwnerAvoidance(LivingEntity owner, LivingEntity target, Vec3 pullTarget, Vec3 proposedMotion) {
+        Vec3 ownerCenter = owner.position().add(0.0, (double)owner.getBbHeight() * 0.5, 0.0);
+        Vec3 targetCenter = target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0);
+        Vec3 nextCenter = targetCenter.add(proposedMotion);
+        double minOwnerClearance = Math.max(BLUE_FULL_OWNER_CLEARANCE, (double)(owner.getBbWidth() + target.getBbWidth()) * 0.5 + 0.35);
+        Vec3 fromOwner = nextCenter.subtract(ownerCenter);
+        double horizontalDistance = Math.sqrt(fromOwner.x * fromOwner.x + fromOwner.z * fromOwner.z);
+        if (horizontalDistance >= minOwnerClearance) {
+            return proposedMotion;
+        }
+        Vec3 away = new Vec3(fromOwner.x, 0.0, fromOwner.z);
+        if (away.lengthSqr() < 1.0E-6) {
+            away = new Vec3(targetCenter.x - ownerCenter.x, 0.0, targetCenter.z - ownerCenter.z);
+        }
+        if (away.lengthSqr() < 1.0E-6) {
+            away = new Vec3(-(pullTarget.z - ownerCenter.z), 0.0, pullTarget.x - ownerCenter.x);
+        }
+        if (away.lengthSqr() < 1.0E-6) {
+            away = new Vec3(1.0, 0.0, 0.0);
+        }
+        double correction = minOwnerClearance - horizontalDistance + 0.05;
+        return proposedMotion.add(away.normalize().scale(correction));
+    }
+
+    /**
+     * Caps vector length without changing direction so Blue pull and hold movement stay smooth instead of snapping to large velocities.
+     * @param motion motion vector used by this helper.
+     * @param maxLength maximum allowed vector length.
+     * @return clamped motion vector.
+     */
+    private static Vec3 limitVectorLength(Vec3 motion, double maxLength) {
+        double safeMax = Math.max(0.0, maxLength);
+        if (motion.lengthSqr() < 1.0E-6 || safeMax <= 0.0) {
+            return Vec3.ZERO;
+        }
+        double length = motion.length();
+        if (length <= safeMax) {
+            return motion;
+        }
+        return motion.scale(safeMax / length);
+    }
+
+    /**
+     * Replays the OG Blue two-pass terrain break on the addon-only crouch max-charge route so smoke, debris, and material sounds come from the original destroy procedure.
      * @param serverLevel level value used by this operation.
      * @param blueEntity entity instance being processed by this helper.
-     * @param owner entity instance being processed by this helper.
      * @param orbPos orb pos used by this method.
-     * @param lookDir look dir used by this method.
+     * @param aimTicks current addon aim tick counter.
      */
-    private static void destroyBlocksNearCrouchBlue(ServerLevel serverLevel, LivingEntity blueEntity, LivingEntity owner, Vec3 orbPos, Vec3 lookDir) {
-        int bx = Mth.floor((double)orbPos.x);
-        int by = Mth.floor((double)orbPos.y);
-        int bz = Mth.floor((double)orbPos.z);
-        for (int dx = -4; dx <= 4; ++dx) {
-            for (int dy = -4; dy <= 4; ++dy) {
-                for (int dz = -4; dz <= 4; ++dz) {
-                    float hardness;
-                    BlockPos bpos;
-                    BlockState state;
-                    double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                    if (dist > 4.0 || (state = serverLevel.getBlockState(bpos = new BlockPos(bx + dx, by + dy, bz + dz))).isAir() || state.isSolid() || BlueRedPurpleNukeMod.isEssentialBlock(serverLevel, bpos) || (hardness = state.getDestroySpeed((BlockGetter)serverLevel, bpos)) < 0.0f || hardness > 10.0f) continue;
-                    serverLevel.destroyBlock(bpos, false, (Entity)blueEntity);
-                    serverLevel.sendParticles((ParticleOptions)new BlockParticleOption(ParticleTypes.BLOCK, state), (double)bpos.getX() + 0.5, (double)bpos.getY() + 0.5, (double)bpos.getZ() + 0.5, 4, 0.3, 0.3, 0.3, 0.02);
-                }
+    private static void applyCrouchFullChargeBlueOgBlockBreak(ServerLevel serverLevel, LivingEntity blueEntity, Vec3 orbPos, int aimTicks) {
+        double cnt6 = Math.max(5.0, blueEntity.getPersistentData().getDouble("cnt6"));
+        double cntFactor = 1.0 + cnt6 * 0.1;
+        double effectScale = 0.01;
+        MobEffectInstance luck = blueEntity.getEffect(MobEffects.LUCK);
+        if (luck != null) {
+            effectScale += Math.min(luck.getAmplifier(), 30) * 0.0333;
+        }
+        BlueRedPurpleNukeMod.executeCrouchFullChargeBlueOgBlockBreakPass(serverLevel, blueEntity, orbPos, Math.min(7.0 * cntFactor, (double)aimTicks * 0.5), 5.0 * effectScale * cntFactor);
+        BlueRedPurpleNukeMod.executeCrouchFullChargeBlueOgBlockBreakPass(serverLevel, blueEntity, orbPos, Math.min(9.0 * cntFactor, (double)aimTicks), 2.5 * effectScale * cntFactor);
+    }
+
+    /**
+     * Invokes the original `BlockDestroyAllDirectionProcedure.execute(...)` with a temporary OG-like Blue payload, then restores any prior orb state so other addon paths remain untouched.
+     * @param serverLevel level value used by this operation.
+     * @param blueEntity entity instance being processed by this helper.
+     * @param orbPos orb pos used by this method.
+     * @param blockRange block range used by this method.
+     * @param blockDamage block damage used by this method.
+     */
+    private static void executeCrouchFullChargeBlueOgBlockBreakPass(ServerLevel serverLevel, LivingEntity blueEntity, Vec3 orbPos, double blockRange, double blockDamage) {
+        if (blockRange <= 0.5 || blockDamage <= 0.0) {
+            return;
+        }
+        CompoundTag data = blueEntity.getPersistentData();
+        boolean hadKnockback = data.contains("knockback");
+        double oldKnockback = data.getDouble("knockback");
+        boolean hadBlockRange = data.contains("BlockRange");
+        double oldBlockRange = data.getDouble("BlockRange");
+        boolean hadBlockDamage = data.contains("BlockDamage");
+        double oldBlockDamage = data.getDouble("BlockDamage");
+        boolean hadNoParticle = data.contains("noParticle");
+        boolean oldNoParticle = data.getBoolean("noParticle");
+        boolean hadNoEffect = data.contains("noEffect");
+        boolean oldNoEffect = data.getBoolean("noEffect");
+        data.putDouble("knockback", -1.0);
+        data.putDouble("BlockRange", blockRange);
+        data.putDouble("BlockDamage", blockDamage);
+        data.putBoolean("noParticle", false);
+        data.remove("noEffect");
+        try {
+            BlockDestroyAllDirectionProcedure.execute((LevelAccessor)serverLevel, orbPos.x, orbPos.y, orbPos.z, (Entity)blueEntity);
+        }
+        finally {
+            if (hadKnockback) {
+                data.putDouble("knockback", oldKnockback);
+            } else {
+                data.remove("knockback");
+            }
+            if (hadBlockRange) {
+                data.putDouble("BlockRange", oldBlockRange);
+            } else {
+                data.remove("BlockRange");
+            }
+            if (hadBlockDamage) {
+                data.putDouble("BlockDamage", oldBlockDamage);
+            } else {
+                data.remove("BlockDamage");
+            }
+            if (hadNoParticle) {
+                data.putBoolean("noParticle", oldNoParticle);
+            } else {
+                data.remove("noParticle");
+            }
+            if (hadNoEffect) {
+                data.putBoolean("noEffect", oldNoEffect);
+            } else {
+                data.remove("noEffect");
             }
         }
     }
@@ -1557,11 +2184,7 @@ public class BlueRedPurpleNukeMod {
             return 1.0;
         }
         ServerPlayer player = (ServerPlayer)owner;
-        JujutsucraftModVariables.PlayerVariables vars = (JujutsucraftModVariables.PlayerVariables)player.getCapability((Capability)JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse((Object)new JujutsucraftModVariables.PlayerVariables());
-        double capabilityScale = BlueRedPurpleNukeMod.getScaleFromPlayerLevel(vars.PlayerLevel);
-        double advancementScale = BlueRedPurpleNukeMod.getAdvancementRankDamageScale(player);
-        double effectScale = BlueRedPurpleNukeMod.getDamageFixEquivalentScale(player);
-        return Math.max(Math.max(capabilityScale, advancementScale), effectScale);
+        return BlueRedPurpleNukeMod.getDamageFixEquivalentScale(player);
     }
 
     /**
@@ -1639,12 +2262,261 @@ public class BlueRedPurpleNukeMod {
     }
 
     /**
+     * Converts a raw owner-rank multiplier into an Infinity-technique-specific damage scale with damped bonus retention and a hard cap.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @param bonusWeight fraction of the rank bonus retained for this technique profile.
+     * @param maxScale hard upper bound applied after damping.
+     * @return balanced Infinity-technique damage scale.
+     */
+    public static double getInfinityTechniqueDamageScaleFromRank(double ownerRankScale, double bonusWeight, double maxScale) {
+        if (ownerRankScale <= 1.0) {
+            return 1.0;
+        }
+        double adjustedScale = 1.0 + (ownerRankScale - 1.0) * bonusWeight;
+        return Math.max(1.0, Math.min(adjustedScale, maxScale));
+    }
+
+    /**
+     * Returns direct owner-rank scaling with only a light repeated-pass reduction so sustained Infinity techniques still respect the user's real rank progression.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @param passIndex one-based execute or hit count for the current cast.
+     * @return lightly reduced direct owner-rank scale.
+     */
+    public static double getDirectOwnerRankScaleForPass(double ownerRankScale, int passIndex) {
+        return BlueRedPurpleNukeMod.getInfinityTechniquePassScale(ownerRankScale, passIndex, DIRECT_RANK_PASS_FALLOFF, DIRECT_RANK_PASS_MIN_RETENTION);
+    }
+
+    /**
+     * Returns the damped rank scale used by Blue multi-hit damage.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @return balanced Blue per-hit damage scale.
+     */
+    public static double getBlueMultiHitDamageScaleFromRank(double ownerRankScale) {
+        return BlueRedPurpleNukeMod.getInfinityTechniqueDamageScaleFromRank(ownerRankScale, BLUE_MULTI_HIT_RANK_BONUS_WEIGHT, BLUE_MULTI_HIT_MAX_SCALE);
+    }
+
+    /**
+     * Returns the damped rank scale used by Red burst damage.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @return balanced Red burst damage scale.
+     */
+    public static double getRedBurstDamageScaleFromRank(double ownerRankScale) {
+        return BlueRedPurpleNukeMod.getInfinityTechniqueDamageScaleFromRank(ownerRankScale, RED_BURST_RANK_BONUS_WEIGHT, RED_BURST_MAX_SCALE);
+    }
+
+    /**
+     * Returns the narrower rank scale used only by Red's crouch full-charge teleport finisher.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @return balanced Red shift-finisher damage scale.
+     */
+    public static double getRedShiftFinisherDamageScaleFromRank(double ownerRankScale) {
+        return BlueRedPurpleNukeMod.getInfinityTechniqueDamageScaleFromRank(ownerRankScale, RED_SHIFT_FINISHER_RANK_BONUS_WEIGHT, RED_SHIFT_FINISHER_MAX_SCALE);
+    }
+
+    /**
+     * Returns the damped rank scale used by Infinity Crusher damage.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @return balanced Infinity Crusher damage scale.
+     */
+    public static double getInfinityCrusherDamageScaleFromRank(double ownerRankScale) {
+        return BlueRedPurpleNukeMod.getInfinityTechniqueDamageScaleFromRank(ownerRankScale, CRUSHER_RANK_BONUS_WEIGHT, CRUSHER_MAX_SCALE);
+    }
+
+    /**
+     * Returns the damped rank scale used by Purple fusion damage before repeated-pass budgeting is applied.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @return balanced Purple fusion damage scale.
+     */
+    public static double getPurpleFusionDamageScaleFromRank(double ownerRankScale) {
+        return BlueRedPurpleNukeMod.getInfinityTechniqueDamageScaleFromRank(ownerRankScale, PURPLE_FUSION_RANK_BONUS_WEIGHT, PURPLE_FUSION_MAX_SCALE);
+    }
+
+    /**
+     * Applies a per-pass budget to the retained rank bonus so repeated execute calls from a single Infinity cast do not reuse the full progression multiplier every time.
+     * @param dampedScale technique-specific rank scale after the first damping step.
+     * @param passIndex one-based count of `RangeAttackProcedure.execute()` calls or sustained hit events for the current cast.
+     * @param falloff additional bonus-loss factor per pass.
+     * @param minRetention minimum retained share of the damped rank bonus.
+     * @return pass-adjusted rank scale.
+     */
+    public static double getInfinityTechniquePassScale(double dampedScale, int passIndex, double falloff, double minRetention) {
+        if (dampedScale <= 1.0) {
+            return 1.0;
+        }
+        int clampedPassIndex = Math.max(1, passIndex);
+        double retainedBonus = 1.0 / (1.0 + (double)(clampedPassIndex - 1) * Math.max(falloff, 0.0));
+        retainedBonus = Math.max(Math.min(retainedBonus, 1.0), minRetention);
+        return 1.0 + (dampedScale - 1.0) * retainedBonus;
+    }
+
+    /**
+     * Returns Blue's per-pass rank scale so sustained pull ticks keep progression without reusing the full bonus on every execute call.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @param passIndex one-based execute count for the current Blue cast.
+     * @return pass-adjusted Blue rank scale.
+     */
+    public static double getBlueRankScaleForPass(double ownerRankScale, int passIndex) {
+        return BlueRedPurpleNukeMod.getInfinityTechniquePassScale(BlueRedPurpleNukeMod.getBlueMultiHitDamageScaleFromRank(ownerRankScale), passIndex, BLUE_PASS_FALLOFF, BLUE_PASS_MIN_RETENTION);
+    }
+
+    /**
+     * Returns Red's per-pass rank scale so multi-pass base Red variants keep progression without reusing the full bonus on every execute call.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @param passIndex one-based execute count for the current Red cast.
+     * @return pass-adjusted Red rank scale.
+     */
+    public static double getRedRankScaleForPass(double ownerRankScale, int passIndex) {
+        return BlueRedPurpleNukeMod.getInfinityTechniquePassScale(BlueRedPurpleNukeMod.getRedBurstDamageScaleFromRank(ownerRankScale), passIndex, RED_PASS_FALLOFF, RED_PASS_MIN_RETENTION);
+    }
+
+    /**
+     * Returns Red shift-finisher's per-pass rank scale so the teleport finisher keeps some owner progression but no longer inherits the full direct-owner multiplier.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @param passIndex one-based execute count for the current Red shift-finisher cast.
+     * @return pass-adjusted Red shift-finisher rank scale.
+     */
+    public static double getRedShiftFinisherRankScaleForPass(double ownerRankScale, int passIndex) {
+        return BlueRedPurpleNukeMod.getInfinityTechniquePassScale(BlueRedPurpleNukeMod.getRedShiftFinisherDamageScaleFromRank(ownerRankScale), passIndex, RED_PASS_FALLOFF, RED_PASS_MIN_RETENTION);
+    }
+
+    /**
+     * Returns Purple fusion's per-pass rank scale so the fusion keeps its finisher fantasy without multiplying full owner rank on every repeated base beam tick.
+     * @param ownerRankScale raw owner rank multiplier resolved for the current attack.
+     * @param passIndex one-based execute count for the current Purple fusion cast.
+     * @return pass-adjusted Purple fusion rank scale.
+     */
+    public static double getPurpleFusionRankScaleForPass(double ownerRankScale, int passIndex) {
+        return BlueRedPurpleNukeMod.getInfinityTechniquePassScale(BlueRedPurpleNukeMod.getPurpleFusionDamageScaleFromRank(ownerRankScale), passIndex, PURPLE_PASS_FALLOFF, PURPLE_PASS_MIN_RETENTION);
+    }
+
+    /**
+     * Returns Infinity Crusher scaling for a specific sustained damage hit so repeated wall scrapes and locks do not reuse the full rank bonus every time.
+     * @param owner entity instance being processed by this helper.
+     * @param hitIndex one-based sustained hit count for the current Crusher use.
+     * @return pass-adjusted Infinity Crusher rank scale.
+     */
+    public static double getInfinityCrusherDamageScaleForHit(LivingEntity owner, int hitIndex) {
+        return BlueRedPurpleNukeMod.getDirectOwnerRankScaleForPass(BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner), hitIndex);
+    }
+
+    /**
+     * Advances the shared Crusher hit counter used for sustained rank-budget damping.
+     * @param player player instance involved in this operation.
+     * @return one-based damage hit index for the current Crusher use.
+     */
+    private static int nextInfinityCrusherDamageHit(ServerPlayer player) {
+        CompoundTag data = player.getPersistentData();
+        int hitIndex = data.getInt("addon_infinity_crusher_damage_hits") + 1;
+        data.putInt("addon_infinity_crusher_damage_hits", hitIndex);
+        return hitIndex;
+    }
+
+    /**
+     * Soft-caps an increasing value so overflow contributes only partially after the specified threshold.
+     * @param value raw value being balanced.
+     * @param softCap threshold where overflow damping begins.
+     * @param overflowWeight retained fraction of overflow after the soft cap.
+     * @return soft-capped value.
+     */
+    private static double getSoftCappedValue(double value, double softCap, double overflowWeight) {
+        double clamped = Math.max(0.0, value);
+        if (clamped <= softCap) {
+            return clamped;
+        }
+        return softCap + (clamped - softCap) * overflowWeight;
+    }
+
+    /**
+     * Returns Red burst scaling for the current owner using the shared Infinity-technique balance helper.
+     * @param owner entity instance being processed by this helper.
+     * @return balanced Red burst damage scale.
+     */
+    private static double getRedBurstDamageScale(LivingEntity owner) {
+        return BlueRedPurpleNukeMod.getRedBurstDamageScaleFromRank(BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner));
+    }
+
+    /**
+     * Returns Infinity Crusher scaling for the current owner using the shared Infinity-technique balance helper.
+     * @param owner entity instance being processed by this helper.
+     * @return balanced Infinity Crusher damage scale.
+     */
+    private static double getInfinityCrusherDamageScale(LivingEntity owner) {
+        return BlueRedPurpleNukeMod.getInfinityCrusherDamageScaleFromRank(BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner));
+    }
+
+    /**
      * Returns normal red damage scale for the current addon state.
      * @param owner entity instance being processed by this helper.
      * @return the resolved normal red damage scale.
      */
     private static double getNormalRedDamageScale(LivingEntity owner) {
         return BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner) * NORMAL_RED_DAMAGE_ADVANTAGE;
+    }
+
+    /**
+     * Returns crouch Red's finisher damage so normal-flight Red can never drop below the shift-cast baseline.
+     * @param cnt6 charge value used by the current Red cast.
+     * @return shift-cast Red finisher baseline damage.
+     */
+    private static double getShiftRedExplosionBaseDamage(double cnt6) {
+        double clampedCnt6 = Math.max(cnt6, 0.0);
+        return 28.0 * (1.0 + clampedCnt6 * 0.1);
+    }
+
+    /**
+     * Resolves how far the addon normal Red orb actually flew from its initial spawn position before detonation.
+     * @param redEntity entity instance being processed by this helper.
+     * @param currentPos tracked explosion position for the orb.
+     * @return real travel distance, or tracked fallback travel when spawn data is unavailable.
+     */
+    private static double getNormalRedDistanceTraveled(LivingEntity redEntity, Vec3 currentPos) {
+        CompoundTag data = redEntity.getPersistentData();
+        if (data.contains("addon_red_spawn_x") && data.contains("addon_red_spawn_y") && data.contains("addon_red_spawn_z")) {
+            double spawnX = data.getDouble("addon_red_spawn_x");
+            double spawnY = data.getDouble("addon_red_spawn_y");
+            double spawnZ = data.getDouble("addon_red_spawn_z");
+            double dx = currentPos.x - spawnX;
+            double dy = currentPos.y - spawnY;
+            double dz = currentPos.z - spawnZ;
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        return Math.max(0.0, data.getDouble("addon_red_travel"));
+    }
+
+    /**
+     * Normalizes Red's flight distance into a capped 0..1 factor used for distance-based bonuses.
+     * @param distanceTraveled measured orb flight distance.
+     * @return capped distance factor.
+     */
+    private static double getNormalRedDistanceFactor(double distanceTraveled) {
+        return Math.min(Math.max(distanceTraveled, 0.0) / NORMAL_RED_DISTANCE_BONUS_MAX_DISTANCE, 1.0);
+    }
+
+    /**
+     * Returns the damage multiplier granted by Red's travelled distance.
+     * @param distanceFactor normalized flight factor.
+     * @return distance-scaled damage multiplier.
+     */
+    private static double getNormalRedDistanceMultiplier(double distanceFactor) {
+        return 1.0 + Math.max(0.0, distanceFactor) * NORMAL_RED_DISTANCE_DAMAGE_BONUS;
+    }
+
+    /**
+     * Returns the radius multiplier granted by Red's travelled distance.
+     * @param distanceFactor normalized flight factor.
+     * @return distance-scaled radius multiplier.
+     */
+    private static double getNormalRedRadiusMultiplier(double distanceFactor) {
+        return 1.0 + Math.max(0.0, distanceFactor) * NORMAL_RED_DISTANCE_RADIUS_BONUS;
+    }
+
+    /**
+     * Returns the knockback multiplier granted by Red's travelled distance.
+     * @param distanceFactor normalized flight factor.
+     * @return distance-scaled knockback multiplier.
+     */
+    private static double getNormalRedKnockbackMultiplier(double distanceFactor) {
+        return 1.0 + Math.max(0.0, distanceFactor) * NORMAL_RED_DISTANCE_KNOCKBACK_BONUS;
     }
 
     // ===== NUMERIC HELPERS =====
@@ -1669,6 +2541,90 @@ public class BlueRedPurpleNukeMod {
             case 2 -> 3.2;
             default -> 4.3;
         };
+    }
+
+    /**
+     * Releases an invalid or expired full-charge Blue gravity lock during server living ticks.
+     * @param entity entity instance being processed by this helper.
+     */
+    private static void handleBlueFullChargeLockTick(LivingEntity entity) {
+        CompoundTag data = entity.getPersistentData();
+        boolean hasManagedLockState = data.contains(BLUE_FULL_LOCK_UUID) || data.getBoolean(BLUE_FULL_LOCKED) || data.getBoolean(BLUE_FULL_LOCK_GRAVITY_MANAGED);
+        if (!hasManagedLockState) {
+            return;
+        }
+        Level level = entity.level();
+        if (!(level instanceof ServerLevel)) {
+            return;
+        }
+        ServerLevel serverLevel = (ServerLevel)level;
+        if (data.getBoolean(BLUE_FULL_LOCK_GRAVITY_MANAGED) && !data.contains(BLUE_FULL_LOCK_UUID)) {
+            BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+            return;
+        }
+        String blueUuid = data.getString(BLUE_FULL_LOCK_UUID);
+        if (blueUuid.isEmpty()) {
+            BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+            return;
+        }
+        long currentGameTime = serverLevel.getGameTime();
+        long lastSeenTick = data.contains(BLUE_FULL_LOCK_LAST_SEEN_TICK) ? data.getLong(BLUE_FULL_LOCK_LAST_SEEN_TICK) : currentGameTime;
+        if (currentGameTime - lastSeenTick > (long)BLUE_FULL_LOCK_ORPHAN_TIMEOUT_TICKS) {
+            BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+            return;
+        }
+        try {
+            Entity blueEntity = serverLevel.getEntity(UUID.fromString(blueUuid));
+            if (!(blueEntity instanceof BlueEntity) || !blueEntity.isAlive() || blueEntity.isRemoved()) {
+                BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+                return;
+            }
+            CompoundTag blueData = blueEntity.getPersistentData();
+            if (!blueData.getBoolean("addon_aim_active") || blueData.getBoolean("aim_ended") || !blueData.getBoolean("circle")) {
+                BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+            }
+        }
+        catch (Exception exception) {
+            BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
+        }
+    }
+
+    /**
+     * Releases every target currently locked by the specified full-charge Blue orb.
+     * @param serverLevel level value used by this operation.
+     * @param blueEntity entity instance being processed by this helper.
+     */
+    private static void releaseBlueFullChargeTargets(ServerLevel serverLevel, LivingEntity blueEntity) {
+        String blueUuid = blueEntity.getUUID().toString();
+        List<LivingEntity> lockedTargets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(blueEntity.position(), blueEntity.position()).inflate(128.0), e -> blueUuid.equals(e.getPersistentData().getString(BLUE_FULL_LOCK_UUID)));
+        for (LivingEntity target : lockedTargets) {
+            BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(target);
+        }
+    }
+
+    /**
+     * Restores a target previously pinned by full-charge Blue and removes the persistent lock markers.
+     * @param target entity instance being processed by this helper.
+     */
+    private static void releaseBlueFullChargeTarget(LivingEntity target) {
+        CompoundTag data = target.getPersistentData();
+        boolean managedGravity = data.getBoolean(BLUE_FULL_LOCK_GRAVITY_MANAGED);
+        boolean hadManagedLock = data.contains(BLUE_FULL_LOCK_UUID) || data.getBoolean(BLUE_FULL_LOCKED) || managedGravity;
+        if (managedGravity) {
+            target.setNoGravity(false);
+        }
+        data.remove(BLUE_FULL_LOCK_UUID);
+        data.remove(BLUE_FULL_LOCKED);
+        data.remove(BLUE_FULL_LOCK_GRAVITY_MANAGED);
+        data.remove(BLUE_FULL_LOCK_LAST_SEEN_TICK);
+        if (hadManagedLock) {
+            Vec3 releaseMotion = target.getDeltaMovement();
+            if (releaseMotion.lengthSqr() > 1.0E-6) {
+                releaseMotion = new Vec3(releaseMotion.x * 0.65, Math.min(releaseMotion.y, 0.18), releaseMotion.z * 0.65);
+            }
+            target.setDeltaMovement(releaseMotion);
+            target.hurtMarked = true;
+        }
     }
 }
 

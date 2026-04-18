@@ -44,8 +44,8 @@ public class DomainOpenVfxMixin {
         }
         Player player = (Player)entity;
         CompoundTag nbt = player.getPersistentData();
-        // Treat runtime flags, effective form, and positive `cnt2` startup state as valid indicators that the caster is opening an open domain.
-        boolean bl = openDomainSelected = nbt.getBoolean("jjkbrp_open_form_active") || nbt.getInt("jjkbrp_domain_form_effective") == 2 || nbt.getDouble("cnt2") > 0.0;
+        // Treat explicit runtime flags as authoritative so stale startup markers cannot re-trigger open-domain VFX.
+        boolean bl = openDomainSelected = nbt.getBoolean("jjkbrp_open_form_active") || nbt.getInt("jjkbrp_domain_form_effective") == 2;
         if (!openDomainSelected) {
             return;
         }

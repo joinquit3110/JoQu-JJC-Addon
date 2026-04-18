@@ -3,7 +3,9 @@ package net.mcreator.jujutsucraft.addon.mixin;
 import net.mcreator.jujutsucraft.addon.util.DomainRadiusUtils;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionOnEffectActiveTickProcedure;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import org.spongepowered.asm.mixin.Mixin;
@@ -13,6 +15,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * Active-tick radius scaling mixin for `DomainExpansionOnEffectActiveTickProcedure.execute()` that temporarily swaps in the actual mastery-scaled domain radius while the original tick procedure runs.
+ *
+ * <p><b>Phase 1 NPC parity fix:</b> the original Player-only guard has been
+ * replaced with a LivingEntity check so that NPC domains also receive
+ * mastery-scaled radius when {@code jjkbrp_base_domain_radius} is present
+ * in their persistent data.</p>
  */
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={DomainExpansionOnEffectActiveTickProcedure.class}, remap=false)
@@ -33,26 +40,30 @@ public class DomainActiveTickRadiusMixin {
         if (world.isClientSide()) {
             return;
         }
-        if (!(entity instanceof Player)) {
+        // Phase 1 NPC parity: accept any LivingEntity, not just Player.
+        // Non-Player entities use the same jjkbrp_base_domain_radius / jjkbrp_radius_multiplier
+        // persistent data keys.  The mastery capability fallback already returns defaults for NPCs.
+        if (!(entity instanceof LivingEntity)) {
             return;
         }
-        Player player = (Player)entity;
+        LivingEntity living = (LivingEntity) entity;
+        CompoundTag nbt = living.getPersistentData();
         // Clear any stale scaling context first so an interrupted previous tick cannot leak its backup radius into the next execution.
         Double stale = DomainRadiusUtils.getOriginalRadiusIfScaling();
         if (stale != null) {
             DomainRadiusUtils.clearScalingContext();
         }
-        radiusMul = player.getPersistentData().getDouble("jjkbrp_radius_multiplier");
+        radiusMul = nbt.getDouble("jjkbrp_radius_multiplier");
         if (Math.abs(radiusMul) < 1.0E-4) {
             radiusMul = 1.0;
         }
-        if (!player.getPersistentData().contains("jjkbrp_base_domain_radius")) {
+        if (!nbt.contains("jjkbrp_base_domain_radius")) {
             return;
         }
         try {
             JujutsucraftModVariables.MapVariables mapVars = JujutsucraftModVariables.MapVariables.get((LevelAccessor)world);
             double original = mapVars.DomainExpansionRadius;
-            double scaled = Math.max(1.0, player.getPersistentData().getDouble("jjkbrp_base_domain_radius") * radiusMul);
+            double scaled = Math.max(1.0, nbt.getDouble("jjkbrp_base_domain_radius") * radiusMul);
             if (Math.abs(original - scaled) < 1.0E-4) {
                 return;
             }

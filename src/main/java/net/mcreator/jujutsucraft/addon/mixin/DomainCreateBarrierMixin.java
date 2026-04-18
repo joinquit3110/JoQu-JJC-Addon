@@ -5,13 +5,13 @@ import java.lang.reflect.Field;
 import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
+import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionCreateBarrierProcedure;
 import net.minecraft.ChatFormatting;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementProgress;
-import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
@@ -95,6 +95,7 @@ public abstract class DomainCreateBarrierMixin {
                 openRangeMultiplier = 2.5;
             }
             // Persist every startup multiplier into runtime NBT because downstream mixins read these keys during active ticks, clash handling, and cleanup.
+            DomainAddonUtils.clearIncompleteDomainData(nbt);
             nbt.putDouble("jjkbrp_incomplete_penalty_per_tick", policy.incompletePenaltyPerTick());
             nbt.putDouble("jjkbrp_open_range_multiplier", openRangeMultiplier);
             nbt.putDouble("jjkbrp_open_surehit_multiplier", policy.openSureHitMultiplier());
@@ -106,19 +107,6 @@ public abstract class DomainCreateBarrierMixin {
             }
             nbt.putDouble("jjkbrp_barrier_refinement", policy.barrierRefinement());
             double radiusBonus = data.getRadiusRuntimeMultiplier();
-            // Incomplete form uses a special surface multiplier and negative `cnt2` marker to signal the unstable partial-domain path to later mixins.
-            if (form == 0) {
-                double incompleteSurfaceMultiplier;
-                if (nbt.contains("jjkbrp_incomplete_surface_multiplier")) {
-                    incompleteSurfaceMultiplier = Math.max(1.0, nbt.getDouble("jjkbrp_incomplete_surface_multiplier"));
-                } else {
-                    incompleteSurfaceMultiplier = DomainCreateBarrierMixin.jjkbrp$resolveIncompleteSurfaceMultiplier(world, player);
-                    nbt.putDouble("jjkbrp_incomplete_surface_multiplier", incompleteSurfaceMultiplier);
-                }
-                radiusBonus *= incompleteSurfaceMultiplier;
-            } else {
-                nbt.remove("jjkbrp_incomplete_surface_multiplier");
-            }
             try {
                 JujutsucraftModVariables.MapVariables mapVars = JujutsucraftModVariables.MapVariables.get((LevelAccessor)world);
                 double origRadius = mapVars.DomainExpansionRadius;
@@ -189,7 +177,7 @@ public abstract class DomainCreateBarrierMixin {
                 DomainCreateBarrierMixin.promoteDomainAmplifier(player, 0);
             }
             nbt.putBoolean("jjkbrp_incomplete_form_active", form == 0);
-            nbt.putBoolean("jjkbrp_incomplete_session_active", form == 0);
+            nbt.remove("jjkbrp_incomplete_session_active");
             nbt.putInt("jjkbrp_domain_form_cast_locked", form);
             // Incomplete domains smooth the startup charge window slightly so the partial cast stabilizes fast enough to enter its special runtime path.
             if (form == 0 && (cnt3 = nbt.getDouble("cnt3")) > 0.0 && cnt3 < 20.0) {
@@ -472,68 +460,6 @@ public abstract class DomainCreateBarrierMixin {
         catch (Exception e) {
             return false;
         }
-    }
-
-    /**
-     * Resolves incomplete surface multiplier from the currently available runtime data.
-     * @param world world access used by the current mixin callback.
-     * @param player entity involved in the current mixin operation.
-     * @return the resulting resolve incomplete surface multiplier value.
-     */
-    private static double jjkbrp$resolveIncompleteSurfaceMultiplier(LevelAccessor world, Player player) {
-        if (player == null) {
-            return 1.2;
-        }
-        BlockPos origin = player.blockPosition();
-        int baseX = origin.getX();
-        int baseY = origin.getY();
-        int baseZ = origin.getZ();
-        int sampleRadius = 8;
-        int sampleStep = 2;
-        int samples = 0;
-        int supportCount = 0;
-        int roofCount = 0;
-        int surfaceSamples = 0;
-        int minSurfaceY = Integer.MAX_VALUE;
-        int maxSurfaceY = Integer.MIN_VALUE;
-        for (int dx = -sampleRadius; dx <= sampleRadius; dx += sampleStep) {
-            for (int dz = -sampleRadius; dz <= sampleRadius; dz += sampleStep) {
-                if (dx * dx + dz * dz > sampleRadius * sampleRadius) continue;
-                ++samples;
-                BlockPos belowPos = new BlockPos(baseX + dx, baseY - 1, baseZ + dz);
-                if (!world.getBlockState(belowPos).isAir()) {
-                    ++supportCount;
-                }
-                for (int dy = 2; dy <= 6; ++dy) {
-                    BlockPos roofPos = new BlockPos(baseX + dx, baseY + dy, baseZ + dz);
-                    if (world.getBlockState(roofPos).isAir()) continue;
-                    ++roofCount;
-                    break;
-                }
-                int foundSurfaceY = Integer.MIN_VALUE;
-                for (int dy = 4; dy >= -4; --dy) {
-                    BlockPos surfacePos = new BlockPos(baseX + dx, baseY + dy, baseZ + dz);
-                    if (world.getBlockState(surfacePos).isAir()) continue;
-                    foundSurfaceY = baseY + dy;
-                    break;
-                }
-                if (foundSurfaceY == Integer.MIN_VALUE) continue;
-                ++surfaceSamples;
-                minSurfaceY = Math.min(minSurfaceY, foundSurfaceY);
-                maxSurfaceY = Math.max(maxSurfaceY, foundSurfaceY);
-            }
-        }
-        if (samples <= 0) {
-            return 1.2;
-        }
-        double supportRatio = (double)supportCount / (double)samples;
-        double roofRatio = (double)roofCount / (double)samples;
-        double terrainRoughness = 0.0;
-        if (surfaceSamples > 0 && maxSurfaceY >= minSurfaceY) {
-            terrainRoughness = Math.min(1.0, (double)(maxSurfaceY - minSurfaceY) / 6.0);
-        }
-        double multiplier = 1.2 + supportRatio * 0.3 + roofRatio * 0.22 + terrainRoughness * 0.28;
-        return Math.max(1.2, Math.min(2.1, multiplier));
     }
 
     /**

@@ -3,10 +3,13 @@ package net.mcreator.jujutsucraft.addon.mixin;
 import com.mojang.logging.LogUtils;
 import java.util.Comparator;
 import java.util.List;
+import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
+import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
@@ -55,6 +58,107 @@ public abstract class DomainMasteryMixin {
     // Marks this helper member as mixin-unique so it cannot collide with names inside the target class.
     @Unique
     private static final Logger LOGGER = LogUtils.getLogger();
+    @Unique
+    private static final ThreadLocal<CompoundTag> JJKBRP$maskedIncompleteRuntime = new ThreadLocal();
+
+
+    // ===== INCOMPLETE ACTIVE-BEHAVIOR GATING =====
+    /**
+     * Masks domain-routing identifiers during the base active tick for incomplete summon or control archetypes so the vanilla active path cannot leak full-domain summons or special active behavior.
+     * @param world world access used by the current mixin callback.
+     * @param x world coordinate value used by this callback.
+     * @param y world coordinate value used by this callback.
+     * @param z world coordinate value used by this callback.
+     * @param entity entity involved in the current mixin operation.
+     * @param ci callback handle used to cancel or override the original procedure.
+     */
+    @Inject(method={"execute"}, at={@At(value="HEAD")}, remap=false)
+    private static void jjkbrp$maskIncompleteActiveBehavior(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
+        JJKBRP$maskedIncompleteRuntime.remove();
+        if (!(entity instanceof LivingEntity)) {
+            return;
+        }
+        LivingEntity caster = (LivingEntity)entity;
+        if (!DomainMasteryMixin.jjkbrp$shouldMaskIncompleteActiveBehavior(caster)) {
+            return;
+        }
+        CompoundTag data = caster.getPersistentData();
+        CompoundTag backup = new CompoundTag();
+        backup.putBoolean("has_select", data.contains("select"));
+        if (data.contains("select")) {
+            backup.putDouble("select", data.getDouble("select"));
+        }
+        backup.putBoolean("has_skill_domain", data.contains("skill_domain"));
+        if (data.contains("skill_domain")) {
+            backup.putDouble("skill_domain", data.getDouble("skill_domain"));
+        }
+        backup.putBoolean("has_runtime_domain_id", data.contains("jjkbrp_domain_id_runtime"));
+        if (data.contains("jjkbrp_domain_id_runtime")) {
+            backup.putDouble("jjkbrp_domain_id_runtime", data.getDouble("jjkbrp_domain_id_runtime"));
+        }
+        backup.putBoolean("DomainAttack", data.getBoolean("DomainAttack"));
+        JJKBRP$maskedIncompleteRuntime.set(backup);
+        data.putDouble("select", 0.0);
+        data.putDouble("skill_domain", 0.0);
+        data.remove("jjkbrp_domain_id_runtime");
+        data.putBoolean("DomainAttack", false);
+    }
+
+    @Unique
+    private static boolean jjkbrp$shouldMaskIncompleteActiveBehavior(LivingEntity caster) {
+        int domainId;
+        if (caster == null || !DomainAddonUtils.isIncompleteDomainState(caster)) {
+            return false;
+        }
+        CompoundTag data = caster.getPersistentData();
+        String archetypeName = data.getString("jjkbrp_domain_archetype");
+        DomainFormPolicy.Archetype archetype = null;
+        if (archetypeName != null && !archetypeName.isEmpty()) {
+            try {
+                archetype = DomainFormPolicy.Archetype.valueOf(archetypeName);
+            }
+            catch (IllegalArgumentException ignored) {
+                archetype = null;
+            }
+        }
+        if (archetype == null) {
+            domainId = (int)Math.round(data.getDouble("jjkbrp_domain_id_runtime"));
+            if (domainId <= 0) {
+                domainId = (int)Math.round(data.getDouble("skill_domain"));
+            }
+            if (domainId <= 0) {
+                domainId = (int)Math.round(data.getDouble("select"));
+            }
+            archetype = DomainFormPolicy.policyOf(domainId).archetype();
+        }
+        return archetype == DomainFormPolicy.Archetype.SUMMON || archetype == DomainFormPolicy.Archetype.CONTROL;
+    }
+
+    @Unique
+    private static void jjkbrp$restoreMaskedIncompleteActiveBehavior(LivingEntity caster) {
+        CompoundTag backup = JJKBRP$maskedIncompleteRuntime.get();
+        JJKBRP$maskedIncompleteRuntime.remove();
+        if (caster == null || backup == null) {
+            return;
+        }
+        CompoundTag data = caster.getPersistentData();
+        if (backup.getBoolean("has_select")) {
+            data.putDouble("select", backup.getDouble("select"));
+        } else {
+            data.remove("select");
+        }
+        if (backup.getBoolean("has_skill_domain")) {
+            data.putDouble("skill_domain", backup.getDouble("skill_domain"));
+        } else {
+            data.remove("skill_domain");
+        }
+        if (backup.getBoolean("has_runtime_domain_id")) {
+            data.putDouble("jjkbrp_domain_id_runtime", backup.getDouble("jjkbrp_domain_id_runtime"));
+        } else {
+            data.remove("jjkbrp_domain_id_runtime");
+        }
+        data.putBoolean("DomainAttack", backup.getBoolean("DomainAttack"));
+    }
 
 
     // ===== INCOMPLETE SURE-HIT GATING =====
@@ -69,18 +173,18 @@ public abstract class DomainMasteryMixin {
     // Redirects the targeted invocation so the addon can selectively replace that single call without copying the whole original method.
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/mcreator/jujutsucraft/procedures/DomainActiveProcedure;execute(Lnet/minecraft/world/level/LevelAccessor;DDDLnet/minecraft/world/entity/Entity;)V", remap=false), remap=false)
     private static void jjkbrp$runDomainActiveProcedure(LevelAccessor world, double x, double y, double z, Entity entity) {
-        LivingEntity livingEntity;
         // Re-stamp runtime form flags first because several older base procedure paths can partially clear the incomplete-domain markers.
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(entity);
-        // Incomplete domains must keep the active-domain pipeline alive, but force sure-hit off.
-        if (entity instanceof LivingEntity && DomainAddonUtils.isIncompleteDomainState(livingEntity = (LivingEntity)entity)) {
+        // Keep the full active-domain pipeline for incomplete form. Only sure-hit routing is disabled.
+        boolean incomplete = entity instanceof LivingEntity
+                && DomainAddonUtils.isIncompleteDomainState((LivingEntity)entity);
+        if (incomplete) {
             entity.getPersistentData().putBoolean("DomainAttack", false);
-            DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
-            entity.getPersistentData().putBoolean("DomainAttack", false);
-            LOGGER.debug("[IncompleteDomain] Ran DomainActiveProcedure in wrap-only mode for {} at ({}, {}, {})", new Object[]{entity.getName().getString(), x, y, z});
-            return;
         }
         DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
+        if (incomplete) {
+            entity.getPersistentData().putBoolean("DomainAttack", false);
+        }
     }
 
     /**
@@ -141,14 +245,11 @@ public abstract class DomainMasteryMixin {
         if (!data.contains("jjkbrp_domain_form_cast_locked")) {
             return;
         }
-        String castLocked = data.getString("jjkbrp_domain_form_cast_locked");
-        if ("incomplete".equalsIgnoreCase(castLocked) || Integer.toString(0).equals(castLocked) || data.getInt("jjkbrp_domain_form_cast_locked") == 0) {
+        if (data.getInt("jjkbrp_domain_form_cast_locked") == 0) {
             if (!data.getBoolean("jjkbrp_incomplete_form_active")) {
                 data.putBoolean("jjkbrp_incomplete_form_active", true);
             }
-            if (!data.getBoolean("jjkbrp_incomplete_session_active")) {
-                data.putBoolean("jjkbrp_incomplete_session_active", true);
-            }
+            data.remove("jjkbrp_incomplete_session_active");
             data.putBoolean("DomainAttack", false);
         }
     }
@@ -168,11 +269,19 @@ public abstract class DomainMasteryMixin {
     @Inject(method={"execute"}, at={@At(value="RETURN")}, remap=false)
     private static void jjkbrp$applyDomainMasteryEffects(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         if (!(entity instanceof LivingEntity)) {
+            JJKBRP$maskedIncompleteRuntime.remove();
             return;
         }
         LivingEntity caster = (LivingEntity)entity;
+        DomainMasteryMixin.jjkbrp$restoreMaskedIncompleteActiveBehavior(caster);
         if (world.isClientSide()) {
             return;
+        }
+        // Phase 2: Update the centralized clash registry entry for this caster
+        // each active tick so dynamic state (radius, power, defeat) stays current.
+        if (DomainClashConstants.USE_REGISTRY) {
+            DomainMasteryMixin.jjkbrp$processDeferredClashRegistration(caster, world);
+            DomainClashRegistry.updateFromEntity(caster, world);
         }
         if (caster instanceof Player) {
             Player masteryPlayer = (Player)caster;
@@ -237,12 +346,25 @@ public abstract class DomainMasteryMixin {
         }
     }
 
+    @Unique
+    private static void jjkbrp$processDeferredClashRegistration(LivingEntity caster, LevelAccessor world) {
+        if (caster == null || world == null) {
+            return;
+        }
+        CompoundTag nbt = caster.getPersistentData();
+        if (!nbt.getBoolean("jjkbrp_pending_clash_registration") || !nbt.contains("x_pos_doma")) {
+            return;
+        }
+        DomainClashRegistry.registerDomain(caster, DomainAddonUtils.resolveDomainForm(caster), DomainAddonUtils.getDomainCenter((Entity)caster), DomainAddonUtils.getActualDomainRadius(world, nbt), world);
+        nbt.remove("jjkbrp_pending_clash_registration");
+    }
+
     /**
      * Keeps the cleanup entity centered on the live domain and resets its break counters so it does not tear down the barrier while the domain still exists.
      * @param world world access used by the current mixin callback.
     * @param caster entity involved in the current mixin operation.
      */
-
+ 
     private static void jjkbrp$supplementMalevolentShrineVFX(ServerLevel world, LivingEntity caster) {
         CompoundTag nbt = caster.getPersistentData();
         int domainId = (int)Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
@@ -1141,8 +1263,7 @@ public abstract class DomainMasteryMixin {
         }
         Vec3 center = DomainAddonUtils.getDomainCenter((Entity)player);
         double baseRadius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, nbt));
-        double surfaceMultiplier = Math.max(1.0, nbt.getDouble("jjkbrp_incomplete_surface_multiplier"));
-        double leashMultiplier = Math.max(1.35, Math.min(1.95, 1.15 + (surfaceMultiplier - 1.0) * 0.7));
+        double leashMultiplier = 1.35;
         double cancelRange = baseRadius * leashMultiplier;
         double dx = player.getX() - center.x;
         double horizontalDistSq = dx * dx + (dz = player.getZ() - center.z) * dz;

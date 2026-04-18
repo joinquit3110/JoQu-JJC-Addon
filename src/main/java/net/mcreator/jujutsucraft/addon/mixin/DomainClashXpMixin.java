@@ -1,8 +1,16 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import com.mojang.logging.LogUtils;
+import java.util.List;
 import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
+import net.mcreator.jujutsucraft.addon.util.ClashOutcome;
+import net.mcreator.jujutsucraft.addon.util.ClashSessionSnapshot;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
+import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
+import net.mcreator.jujutsucraft.addon.util.DomainForm;
+import net.mcreator.jujutsucraft.addon.util.DomainParticipantSnapshot;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionOnEffectActiveTickProcedure;
 import net.minecraft.ChatFormatting;
@@ -17,6 +25,8 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -28,18 +38,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={DomainExpansionOnEffectActiveTickProcedure.class}, remap=false)
 public class DomainClashXpMixin {
-    // Mixin-local runtime state used for winner xp.
-    private static final int JJKBRP$WINNER_XP = 50;
-    // Mixin-local runtime state used for tie xp.
-    private static final int JJKBRP$TIE_XP = 30;
-    // Mixin-local runtime state used for loser xp.
-    private static final int JJKBRP$LOSER_XP = 10;
-    // Mixin-local runtime state used for tie window ticks.
-    private static final long JJKBRP$TIE_WINDOW_TICKS = 80L;
-    private static final long JJKBRP$MIN_CLASH_DURATION_TICKS = 60L;
-    private static final long JJKBRP$RESULT_COOLDOWN_TICKS = 200L;
-    // Mixin-local runtime state used for recent clash contact ticks.
-    private static final long JJKBRP$RECENT_CLASH_CONTACT_TICKS = 40L;
+    private static final Logger LOGGER = LogUtils.getLogger();
+    // Phase 1: constants now reference the centralized DomainClashConstants class.
+    private static final int JJKBRP$WINNER_XP = DomainClashConstants.WINNER_XP;
+    private static final int JJKBRP$TIE_XP = DomainClashConstants.TIE_XP;
+    private static final int JJKBRP$LOSER_XP = DomainClashConstants.LOSER_XP;
+    private static final long JJKBRP$TIE_WINDOW_TICKS = DomainClashConstants.TIE_WINDOW_TICKS;
+    private static final long JJKBRP$MIN_CLASH_DURATION_TICKS = DomainClashConstants.MIN_CLASH_DURATION_TICKS;
+    private static final long JJKBRP$RESULT_COOLDOWN_TICKS = DomainClashConstants.RESULT_COOLDOWN_TICKS;
+    private static final long JJKBRP$RECENT_CLASH_CONTACT_TICKS = DomainClashConstants.RECENT_CLASH_CONTACT_TICKS;
 
 
     // ===== CLASH OUTCOME RESOLUTION =====
@@ -69,6 +76,11 @@ public class DomainClashXpMixin {
         LivingEntity sourceEntity = (LivingEntity)entity;
         CompoundTag nbt = sourceEntity.getPersistentData();
         long currentTick = sl.getGameTime();
+        if (DomainClashConstants.USE_REGISTRY) {
+            DomainClashXpMixin.jjkbrp$clearOutcomeTracking(nbt, currentTick);
+            DomainClashXpMixin.jjkbrp$processRegistryResolvedSessions(sl, sourceEntity, currentTick);
+            return;
+        }
         boolean lossState = DomainClashXpMixin.jjkbrp$isLossState(nbt);
         AABB searchBox = DomainClashXpMixin.jjkbrp$buildClashSearchBox(world, sourceEntity);
         if (!lossState) {
@@ -111,6 +123,94 @@ public class DomainClashXpMixin {
         }
     }
 
+    private static void jjkbrp$processRegistryResolvedSessions(ServerLevel sl, LivingEntity sourceEntity, long currentTick) {
+        List<ClashSessionSnapshot> resolvedSessions = DomainClashRegistry.claimResolvedSessions(sourceEntity.getUUID());
+        if (resolvedSessions.isEmpty()) {
+            return;
+        }
+        for (ClashSessionSnapshot session : resolvedSessions) {
+            LivingEntity opponent = DomainClashXpMixin.jjkbrp$resolveRegistryOpponent(sl, session, sourceEntity.getUUID());
+            ClashOutcome outcome = session.getOutcome();
+            if (outcome == ClashOutcome.TIE) {
+                DomainClashXpMixin.jjkbrp$handleRegistryTieForParticipant(sourceEntity, opponent, currentTick);
+                continue;
+            }
+            if (outcome == ClashOutcome.A_WINS || outcome == ClashOutcome.B_WINS) {
+                boolean sourceWon = DomainClashXpMixin.jjkbrp$didSourceWinRegistrySession(session, sourceEntity.getUUID());
+                DomainClashXpMixin.jjkbrp$handleRegistryWinLoseForParticipant(sourceEntity, opponent, sourceWon, currentTick);
+                continue;
+            }
+            DomainClashXpMixin.jjkbrp$markResolved(sourceEntity, currentTick);
+        }
+    }
+
+    private static boolean jjkbrp$didSourceWinRegistrySession(ClashSessionSnapshot session, UUID sourceUuid) {
+        if (session == null || sourceUuid == null) {
+            return false;
+        }
+        if (session.getOutcome() == ClashOutcome.A_WINS) {
+            return sourceUuid.equals(session.getParticipantA());
+        }
+        if (session.getOutcome() == ClashOutcome.B_WINS) {
+            return sourceUuid.equals(session.getParticipantB());
+        }
+        return false;
+    }
+
+    private static LivingEntity jjkbrp$resolveRegistryOpponent(ServerLevel sl, ClashSessionSnapshot session, UUID sourceUuid) {
+        if (sl == null || session == null || sourceUuid == null) {
+            return null;
+        }
+        UUID opponentUuid = session.getOpponent(sourceUuid);
+        if (opponentUuid == null) {
+            return null;
+        }
+        Entity entity = sl.getEntity(opponentUuid);
+        if (entity instanceof LivingEntity living) {
+            return living;
+        }
+        return sl.getServer().getPlayerList().getPlayer(opponentUuid);
+    }
+
+    private static void jjkbrp$handleRegistryWinLoseForParticipant(LivingEntity sourceEntity, LivingEntity opponent, boolean sourceWon, long currentTick) {
+        if (sourceEntity == null) {
+            return;
+        }
+        DomainClashXpMixin.jjkbrp$markResolved(sourceEntity, currentTick);
+        if (opponent != null) {
+            DomainClashXpMixin.jjkbrp$markResolved(opponent, currentTick);
+        }
+        if (sourceWon) {
+            DomainClashXpMixin.jjkbrp$preserveWinnerIdentity(sourceEntity, opponent);
+            if (sourceEntity instanceof Player winnerPlayer) {
+                boolean winnerGranted = DomainClashXpMixin.grantXpIfNotMax(winnerPlayer, JJKBRP$WINNER_XP);
+                DomainClashXpMixin.sendOutcomeMessage(winnerPlayer, opponent, "Domain Clash WIN!", ChatFormatting.GOLD, JJKBRP$WINNER_XP, winnerGranted);
+            }
+            return;
+        }
+        if (opponent != null) {
+            DomainClashXpMixin.jjkbrp$preserveWinnerIdentity(opponent, sourceEntity);
+        }
+        if (sourceEntity instanceof Player loserPlayer) {
+            boolean loserGranted = DomainClashXpMixin.grantXpIfNotMax(loserPlayer, JJKBRP$LOSER_XP);
+            DomainClashXpMixin.sendOutcomeMessage(loserPlayer, opponent, "Domain Clash LOST.", ChatFormatting.GRAY, JJKBRP$LOSER_XP, loserGranted);
+        }
+    }
+
+    private static void jjkbrp$handleRegistryTieForParticipant(LivingEntity sourceEntity, LivingEntity opponent, long currentTick) {
+        if (sourceEntity == null) {
+            return;
+        }
+        DomainClashXpMixin.jjkbrp$markResolved(sourceEntity, currentTick);
+        if (opponent != null) {
+            DomainClashXpMixin.jjkbrp$markResolved(opponent, currentTick);
+        }
+        if (sourceEntity instanceof Player player) {
+            boolean granted = DomainClashXpMixin.grantXpIfNotMax(player, JJKBRP$TIE_XP);
+            DomainClashXpMixin.sendOutcomeMessage(player, opponent, "Domain Clash TIED.", ChatFormatting.YELLOW, JJKBRP$TIE_XP, granted);
+        }
+    }
+
     /**
      * Performs build clash search box for this mixin.
      * @param world world access used by the current mixin callback.
@@ -128,7 +228,7 @@ public class DomainClashXpMixin {
             cz = source.getZ();
         }
         double actualRange = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
-        double clashHalfRange = Math.max(6.0, DomainClashXpMixin.jjkbrp$baseClashRange(world, source, nbt) * 0.5);
+        double clashHalfRange = Math.max(6.0, DomainAddonUtils.baseClashRange(world, source, nbt) * 0.5);
         double searchRange = Math.max(actualRange * 2.5, clashHalfRange * 1.35);
         searchRange = Math.min(128.0, Math.max(searchRange, actualRange * 2.5));
         return new AABB(cx - searchRange, cy - searchRange, cz - searchRange, cx + searchRange, cy + searchRange, cz + searchRange);
@@ -367,70 +467,12 @@ public class DomainClashXpMixin {
         if (!DomainClashXpMixin.jjkbrp$isPlausibleLocalClashOpponent(world, source, candidate)) {
             return false;
         }
-        if (!DomainClashXpMixin.jjkbrp$isWithinBaseClashWindow(world, source, candidate)) {
-            return false;
-        }
-        return DomainClashXpMixin.jjkbrp$isWithinBaseClashWindow(world, candidate, source);
-    }
-
-    /**
-     * Performs is within base clash window for this mixin.
-     * @param world world access used by the current mixin callback.
-     * @param source source used by this method.
-     * @param target entity involved in the current mixin operation.
-     * @return whether is within base clash window is true for the current runtime state.
-     */
-    private static boolean jjkbrp$isWithinBaseClashWindow(LevelAccessor world, LivingEntity source, LivingEntity target) {
-        if (source == null || target == null) {
-            return false;
-        }
         CompoundTag sourceNbt = source.getPersistentData();
-        CompoundTag targetNbt = target.getPersistentData();
-        double sx = sourceNbt.contains("x_pos_doma") ? sourceNbt.getDouble("x_pos_doma") : source.getX();
-        double sy = sourceNbt.contains("y_pos_doma") ? sourceNbt.getDouble("y_pos_doma") : source.getY();
-        double sz = sourceNbt.contains("z_pos_doma") ? sourceNbt.getDouble("z_pos_doma") : source.getZ();
-        double tx = target.getX();
-        double ty = target.getY() + (double)target.getBbHeight() * 0.5;
-        double tz = target.getZ();
-        double dx = sx - tx;
-        double dy = sy - ty;
-        double dz = sz - tz;
-        double distToBodySq = dx * dx + dy * dy + dz * dz;
-        double tcx = targetNbt.contains("x_pos_doma") ? targetNbt.getDouble("x_pos_doma") : target.getX();
-        double tcy = targetNbt.contains("y_pos_doma") ? targetNbt.getDouble("y_pos_doma") : target.getY();
-        double tcz = targetNbt.contains("z_pos_doma") ? targetNbt.getDouble("z_pos_doma") : target.getZ();
-        double cdx = sx - tcx;
-        double cdy = sy - tcy;
-        double cdz = sz - tcz;
-        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
-        double distanceSq = Math.min(distToBodySq, distToCenterSq);
-        double sourceRange = DomainClashXpMixin.jjkbrp$baseClashRange(world, source, sourceNbt);
-        double targetRange = DomainClashXpMixin.jjkbrp$baseClashRange(world, target, targetNbt);
-        double combinedRange = Math.max(sourceRange, targetRange);
-        double threshold = Math.max(4.0, combinedRange * 0.65);
-        return distanceSq < threshold * threshold;
-    }
-
-    /**
-     * Performs base clash range for this mixin.
-     * @param world world access used by the current mixin callback.
-     * @param source source used by this method.
-     * @param sourceNbt source nbt used by this method.
-     * @return the resulting base clash range value.
-     */
-    private static double jjkbrp$baseClashRange(LevelAccessor world, LivingEntity source, CompoundTag sourceNbt) {
-        double radius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(world, sourceNbt));
-        return radius * (DomainClashXpMixin.jjkbrp$isOpenDomainState(source, sourceNbt) ? 18.0 : 2.0);
-    }
-
-    /**
-     * Performs is open domain state for this mixin.
-     * @param entity entity involved in the current mixin operation.
-     * @param nbt persistent data container used by this helper.
-     * @return whether is open domain state is true for the current runtime state.
-     */
-    private static boolean jjkbrp$isOpenDomainState(LivingEntity entity, CompoundTag nbt) {
-        return DomainAddonUtils.isOpenDomainState(entity);
+        CompoundTag candidateNbt = candidate.getPersistentData();
+        if (!DomainAddonUtils.isWithinBaseClashWindow(world, source, sourceNbt, candidate, candidateNbt)) {
+            return false;
+        }
+        return DomainAddonUtils.isWithinBaseClashWindow(world, candidate, candidateNbt, source, sourceNbt);
     }
 
     /**
@@ -547,7 +589,8 @@ public class DomainClashXpMixin {
         if (aDelta < 0L || bDelta < 0L) {
             return false;
         }
-        return aDelta <= 60L && bDelta <= 60L;
+        return aDelta <= DomainClashConstants.MUTUAL_CLASH_CONTACT_TICKS
+                && bDelta <= DomainClashConstants.MUTUAL_CLASH_CONTACT_TICKS;
     }
 
     /**
@@ -599,7 +642,7 @@ public class DomainClashXpMixin {
             return false;
         }
         long delta = currentTick - pendingTick;
-        return delta >= 0L && delta <= 5L;
+        return delta >= 0L && delta <= JJKBRP$TIE_WINDOW_TICKS;
     }
 
     /**
@@ -617,7 +660,7 @@ public class DomainClashXpMixin {
             return false;
         }
         long delta = currentTick - pendingTick;
-        return delta > 5L;
+        return delta > JJKBRP$TIE_WINDOW_TICKS;
     }
 
     /**
@@ -635,7 +678,7 @@ public class DomainClashXpMixin {
             return false;
         }
         long delta = currentTick - contactTick;
-        return delta >= 0L && delta <= 40L;
+        return delta >= 0L && delta <= JJKBRP$RECENT_CLASH_CONTACT_TICKS;
     }
 
     /**
@@ -687,40 +730,19 @@ public class DomainClashXpMixin {
         }
         DomainClashXpMixin.jjkbrp$markResolved(winnerEntity, currentTick);
         DomainClashXpMixin.jjkbrp$markResolved(loserEntity, currentTick);
-        if (DomainAddonUtils.isIncompleteDomainState(winnerEntity)) {
-            CompoundTag winData = winnerEntity.getPersistentData();
-            winData.putBoolean("jjkbrp_incomplete_form_active", true);
-            winData.putBoolean("jjkbrp_incomplete_session_active", true);
-            winData.putBoolean("DomainAttack", false);
-            if (!DomainAddonUtils.isIncompleteDomainState(loserEntity) && !DomainAddonUtils.isOpenDomainState(loserEntity)) {
-                CompoundTag loserNbt = loserEntity.getPersistentData();
-                String loserOutside = loserNbt.getString("domain_outside");
-                String loserInside = loserNbt.getString("domain_inside");
-                String loserFloor = loserNbt.getString("domain_floor");
-                if (!loserOutside.isEmpty()) {
-                    winData.putString("domain_outside", loserOutside);
-                    winData.putString("domain_inside", loserInside);
-                    winData.putString("domain_floor", loserFloor);
-                    winData.putBoolean("jjkbrp_adopted_barrier", true);
-                    winData.putDouble("jjkbrp_adopted_cx", loserNbt.getDouble("x_pos_doma"));
-                    winData.putDouble("jjkbrp_adopted_cy", loserNbt.getDouble("y_pos_doma"));
-                    winData.putDouble("jjkbrp_adopted_cz", loserNbt.getDouble("z_pos_doma"));
-                    winData.putDouble("jjkbrp_adopted_radius", DomainAddonUtils.getActualDomainRadius(
-                            winnerEntity.level(), loserNbt));
-                }
-            }
-        }
+        DomainClashXpMixin.jjkbrp$preserveWinnerIdentity(winnerEntity, loserEntity);
+        DomainClashXpMixin.jjkbrp$markOpenVsClosedLoserForCleanup(winnerEntity, loserEntity);
         if (winnerEntity instanceof Player) {
             Player winnerPlayer = (Player)winnerEntity;
-            boolean winnerGranted = DomainClashXpMixin.grantXpIfNotMax(winnerPlayer, 50);
+            boolean winnerGranted = DomainClashXpMixin.grantXpIfNotMax(winnerPlayer, JJKBRP$WINNER_XP);
         // Push a formatted result message to the player so the XP award and clash outcome are visible immediately.
-            DomainClashXpMixin.sendOutcomeMessage(winnerPlayer, loserEntity, "Domain Clash WIN!", ChatFormatting.GOLD, 50, winnerGranted);
+            DomainClashXpMixin.sendOutcomeMessage(winnerPlayer, loserEntity, "Domain Clash WIN!", ChatFormatting.GOLD, JJKBRP$WINNER_XP, winnerGranted);
         }
         if (loserEntity instanceof Player) {
             Player loserPlayer = (Player)loserEntity;
-            boolean loserGranted = DomainClashXpMixin.grantXpIfNotMax(loserPlayer, 10);
+            boolean loserGranted = DomainClashXpMixin.grantXpIfNotMax(loserPlayer, JJKBRP$LOSER_XP);
         // Push a formatted result message to the player so the XP award and clash outcome are visible immediately.
-            DomainClashXpMixin.sendOutcomeMessage(loserPlayer, winnerEntity, "Domain Clash LOST.", ChatFormatting.GRAY, 10, loserGranted);
+            DomainClashXpMixin.sendOutcomeMessage(loserPlayer, winnerEntity, "Domain Clash LOST.", ChatFormatting.GRAY, JJKBRP$LOSER_XP, loserGranted);
         }
     }
 
@@ -736,16 +758,138 @@ public class DomainClashXpMixin {
         DomainClashXpMixin.jjkbrp$markResolved(b, currentTick);
         if (a instanceof Player) {
             Player playerA = (Player)a;
-            boolean grantedA = DomainClashXpMixin.grantXpIfNotMax(playerA, 30);
+            boolean grantedA = DomainClashXpMixin.grantXpIfNotMax(playerA, JJKBRP$TIE_XP);
         // Push a formatted result message to the player so the XP award and clash outcome are visible immediately.
-            DomainClashXpMixin.sendOutcomeMessage(playerA, b, "Domain Clash TIED.", ChatFormatting.YELLOW, 30, grantedA);
+            DomainClashXpMixin.sendOutcomeMessage(playerA, b, "Domain Clash TIED.", ChatFormatting.YELLOW, JJKBRP$TIE_XP, grantedA);
         }
         if (b instanceof Player) {
             Player playerB = (Player)b;
-            boolean grantedB = DomainClashXpMixin.grantXpIfNotMax(playerB, 30);
+            boolean grantedB = DomainClashXpMixin.grantXpIfNotMax(playerB, JJKBRP$TIE_XP);
         // Push a formatted result message to the player so the XP award and clash outcome are visible immediately.
-            DomainClashXpMixin.sendOutcomeMessage(playerB, a, "Domain Clash TIED.", ChatFormatting.YELLOW, 30, grantedB);
+            DomainClashXpMixin.sendOutcomeMessage(playerB, a, "Domain Clash TIED.", ChatFormatting.YELLOW, JJKBRP$TIE_XP, grantedB);
         }
+    }
+
+    private static void jjkbrp$markOpenVsClosedLoserForCleanup(LivingEntity winnerEntity, LivingEntity loserEntity) {
+        if (winnerEntity == null || loserEntity == null) {
+            return;
+        }
+        DomainParticipantSnapshot winnerEntry = DomainClashRegistry.getEntry(winnerEntity.getUUID());
+        DomainForm winnerForm = winnerEntry != null ? winnerEntry.getFormAtCast() : DomainAddonUtils.resolveDomainForm(winnerEntity);
+        DomainParticipantSnapshot loserEntry = DomainClashRegistry.getEntry(loserEntity.getUUID());
+        DomainForm loserForm = loserEntry != null ? loserEntry.getFormAtCast() : DomainAddonUtils.resolveDomainForm(loserEntity);
+        if (winnerForm != DomainForm.OPEN || loserForm != DomainForm.CLOSED) {
+            return;
+        }
+        CompoundTag loserNbt = loserEntity.getPersistentData();
+        loserNbt.putBoolean("jjkbrp_force_closed_cleanup", true);
+        LOGGER.debug("[DomainClashXP] marked forced closed cleanup loser={} winner={} winnerForm={} loserForm={} openAttackerUuid={} incompleteWrapperUuid={}",
+                loserEntity.getName().getString(), winnerEntity.getName().getString(),
+                winnerForm, loserForm,
+                loserNbt.getString("jjkbrp_open_attacker_uuid"),
+                loserNbt.getString("jjkbrp_incomplete_wrapper_uuid"));
+    }
+
+    private static void jjkbrp$preserveWinnerIdentity(LivingEntity winnerEntity, LivingEntity loserEntity) {
+        if (winnerEntity == null) {
+            return;
+        }
+        CompoundTag winnerNbt = winnerEntity.getPersistentData();
+        DomainParticipantSnapshot winnerEntry = DomainClashRegistry.getEntry(winnerEntity.getUUID());
+        DomainForm winnerForm = winnerEntry != null ? winnerEntry.getFormAtCast() : DomainAddonUtils.resolveDomainForm(winnerEntity);
+        DomainParticipantSnapshot loserEntry = loserEntity != null ? DomainClashRegistry.getEntry(loserEntity.getUUID()) : null;
+        DomainForm loserForm = loserEntity != null
+                ? (loserEntry != null ? loserEntry.getFormAtCast() : DomainAddonUtils.resolveDomainForm(loserEntity))
+                : null;
+        LOGGER.debug("[DomainClashXP] preserveWinnerIdentity winner={} winnerForm={} loser={} loserForm={} tickCastLocked={} effectiveForm={} adoptedBefore={}",
+                winnerEntity.getName().getString(), winnerForm,
+                loserEntity != null ? loserEntity.getName().getString() : "null", loserForm,
+                winnerNbt.getInt("jjkbrp_domain_form_cast_locked"), winnerNbt.getInt("jjkbrp_domain_form_effective"),
+                winnerNbt.getBoolean("jjkbrp_adopted_barrier"));
+        DomainClashXpMixin.jjkbrp$clearAdoptedBarrierState(winnerNbt);
+        winnerNbt.putInt("jjkbrp_domain_form_cast_locked", winnerForm.getId());
+        winnerNbt.putInt("jjkbrp_domain_form_effective", winnerForm.getId());
+        switch (winnerForm) {
+            case OPEN -> {
+                winnerNbt.putBoolean("jjkbrp_open_form_active", true);
+                winnerNbt.remove("jjkbrp_incomplete_form_active");
+                winnerNbt.remove("jjkbrp_incomplete_session_active");
+                LOGGER.debug("[DomainClashXP] winner OPEN preserved open runtime winner={} loserForm={} adoptedAfterOpenBranch={}",
+                        winnerEntity.getName().getString(), loserForm, winnerNbt.getBoolean("jjkbrp_adopted_barrier"));
+            }
+            case INCOMPLETE -> {
+                winnerNbt.putBoolean("jjkbrp_incomplete_form_active", true);
+                winnerNbt.remove("jjkbrp_incomplete_session_active");
+                winnerNbt.putBoolean("DomainAttack", false);
+                winnerNbt.remove("jjkbrp_open_form_active");
+                DomainClashXpMixin.jjkbrp$adoptClosedShellSemanticsIfNeeded(winnerEntity, loserEntity);
+            }
+            case CLOSED -> {
+                winnerNbt.remove("jjkbrp_open_form_active");
+                winnerNbt.remove("jjkbrp_incomplete_form_active");
+                winnerNbt.remove("jjkbrp_incomplete_session_active");
+            }
+        }
+    }
+
+    private static void jjkbrp$adoptClosedShellSemanticsIfNeeded(LivingEntity winnerEntity, LivingEntity loserEntity) {
+        if (winnerEntity == null || loserEntity == null) {
+            return;
+        }
+        DomainParticipantSnapshot winnerEntry = DomainClashRegistry.getEntry(winnerEntity.getUUID());
+        DomainForm winnerForm = winnerEntry != null ? winnerEntry.getFormAtCast() : DomainAddonUtils.resolveDomainForm(winnerEntity);
+        DomainParticipantSnapshot loserEntry = DomainClashRegistry.getEntry(loserEntity.getUUID());
+        DomainForm loserForm = loserEntry != null ? loserEntry.getFormAtCast() : DomainAddonUtils.resolveDomainForm(loserEntity);
+        if (winnerForm != DomainForm.INCOMPLETE || loserForm != DomainForm.CLOSED) {
+            LOGGER.debug("[DomainClashXP] skipped closed-shell adoption winner={} loser={} winnerForm={} loserForm={} reason=unsupported_form_pair",
+                    winnerEntity.getName().getString(), loserEntity.getName().getString(), winnerForm, loserForm);
+            return;
+        }
+        CompoundTag winnerNbt = winnerEntity.getPersistentData();
+        CompoundTag loserNbt = loserEntity.getPersistentData();
+        DomainClashXpMixin.jjkbrp$copyShellBlockIfPresent(loserNbt, winnerNbt, "domain_outside");
+        DomainClashXpMixin.jjkbrp$copyShellBlockIfPresent(loserNbt, winnerNbt, "domain_inside");
+        DomainClashXpMixin.jjkbrp$copyShellBlockIfPresent(loserNbt, winnerNbt, "domain_floor");
+        Vec3 adoptedCenter = loserEntry != null ? loserEntry.getCenter() : DomainAddonUtils.getDomainCenter((Entity)loserEntity);
+        double adoptedRadius = loserEntry != null ? loserEntry.getRadius() : DomainAddonUtils.getActualDomainRadius((LevelAccessor)loserEntity.level(), loserNbt);
+        if (adoptedRadius <= 0.0) {
+            LOGGER.debug("[DomainClashXP] skipped closed-shell adoption winner={} loser={} reason=non_positive_radius radius={}",
+                    winnerEntity.getName().getString(), loserEntity.getName().getString(), adoptedRadius);
+            return;
+        }
+        // Preserve the incomplete form identity while remembering the defeated closed shell footprint for later cleanup sweeps.
+        winnerNbt.putBoolean("jjkbrp_adopted_barrier", true);
+        winnerNbt.putDouble("jjkbrp_adopted_cx", adoptedCenter.x);
+        winnerNbt.putDouble("jjkbrp_adopted_cy", adoptedCenter.y);
+        winnerNbt.putDouble("jjkbrp_adopted_cz", adoptedCenter.z);
+        winnerNbt.putDouble("jjkbrp_adopted_radius", adoptedRadius);
+        winnerNbt.putString("jjkbrp_adopted_owner_uuid", loserEntity.getStringUUID());
+        LOGGER.debug("[DomainClashXP] adopted closed shell winner={} loser={} adoptedRadius={} adoptedCenter=({}, {}, {})",
+                winnerEntity.getName().getString(), loserEntity.getName().getString(), adoptedRadius,
+                adoptedCenter.x, adoptedCenter.y, adoptedCenter.z);
+    }
+
+    private static void jjkbrp$copyShellBlockIfPresent(CompoundTag sourceNbt, CompoundTag targetNbt, String key) {
+        if (sourceNbt == null || targetNbt == null || key == null || key.isEmpty() || !sourceNbt.contains(key)) {
+            return;
+        }
+        String blockId = sourceNbt.getString(key);
+        if (blockId == null || blockId.isEmpty()) {
+            return;
+        }
+        targetNbt.putString(key, blockId);
+    }
+
+    private static void jjkbrp$clearAdoptedBarrierState(CompoundTag winnerNbt) {
+        if (winnerNbt == null) {
+            return;
+        }
+        winnerNbt.remove("jjkbrp_adopted_barrier");
+        winnerNbt.remove("jjkbrp_adopted_cx");
+        winnerNbt.remove("jjkbrp_adopted_cy");
+        winnerNbt.remove("jjkbrp_adopted_cz");
+        winnerNbt.remove("jjkbrp_adopted_radius");
+        winnerNbt.remove("jjkbrp_adopted_owner_uuid");
     }
 
     /**

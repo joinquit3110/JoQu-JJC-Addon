@@ -99,6 +99,62 @@ public class DomainAddonUtils {
     }
 
     /**
+     * Removes all addon incomplete-domain transient data, including both the
+     * current thin-form markers and legacy BFS/runtime keys from older builds.
+     *
+     * @param nbt the persistent tag to clean
+     */
+    public static void clearIncompleteDomainData(CompoundTag nbt) {
+        if (nbt == null) {
+            return;
+        }
+        nbt.remove("jjkbrp_incomplete_penalty_per_tick");
+        nbt.remove("jjkbrp_incomplete_surface_multiplier");
+        nbt.remove("jjkbrp_incomplete_form_active");
+        nbt.remove("jjkbrp_incomplete_session_active");
+        nbt.remove("jjkbrp_incomplete_cancelled");
+        nbt.remove("jjkbrp_incomplete_runtime_id");
+        nbt.remove("jjkbrp_incomplete_runtime_version");
+        nbt.remove("jjkbrp_incomplete_runtime_center_x");
+        nbt.remove("jjkbrp_incomplete_runtime_center_y");
+        nbt.remove("jjkbrp_incomplete_runtime_center_z");
+        nbt.remove("jjkbrp_incomplete_runtime_radius");
+        nbt.remove("jjkbrp_incomplete_runtime_frontier");
+        nbt.remove("jjkbrp_incomplete_runtime_next_frontier");
+        nbt.remove("jjkbrp_incomplete_runtime_visited");
+        nbt.remove("jjkbrp_incomplete_runtime_perimeter_index");
+        nbt.remove("jjkbrp_incomplete_runtime_perimeter_passes");
+        nbt.remove("jjkbrp_incomplete_runtime_next_floor_advance_tick");
+        nbt.remove("jjkbrp_incomplete_runtime_floor_plan");
+        nbt.remove("jjkbrp_incomplete_runtime_floor_plan_index");
+        nbt.remove("jjkbrp_incomplete_runtime_active_shell");
+        nbt.remove("jjkbrp_incomplete_runtime_next_shell_advance_tick");
+        nbt.remove("jjkbrp_incomplete_runtime_last_tick");
+        nbt.remove("jjkbrp_incomplete_runtime_blocked_edges");
+        nbt.remove("jjkbrp_incomplete_runtime_revisits");
+        nbt.remove("jjkbrp_incomplete_runtime_walls");
+        nbt.remove("jjkbrp_incomplete_runtime_complete");
+        nbt.remove("jjkbrp_ig2_version");
+        nbt.remove("jjkbrp_ig2_runtime_id");
+        nbt.remove("jjkbrp_ig2_center_x");
+        nbt.remove("jjkbrp_ig2_center_y");
+        nbt.remove("jjkbrp_ig2_center_z");
+        nbt.remove("jjkbrp_ig2_seed_floor_y");
+        nbt.remove("jjkbrp_ig2_radius");
+        nbt.remove("jjkbrp_ig2_stage");
+        nbt.remove("jjkbrp_ig2_last_tick");
+        nbt.remove("jjkbrp_ig2_frontier");
+        nbt.remove("jjkbrp_ig2_visited");
+        nbt.remove("jjkbrp_ig2_blocked_edges");
+        nbt.remove("jjkbrp_ig2_walls");
+        nbt.remove("jjkbrp_ig2_dome_state");
+        nbt.remove("jjkbrp_ig2_dome_cursor");
+        nbt.remove("jjkbrp_ig2_roof_frontier");
+        nbt.remove("jjkbrp_ig2_roof_visited");
+        nbt.remove("jjkbrp_ig2_roof_seeded");
+    }
+
+    /**
      * Resolves the actual domain radius used by gameplay systems.
      *
      * <p>The method first prefers persisted per-entity runtime values, then falls back to the map
@@ -201,9 +257,6 @@ public class DomainAddonUtils {
         if (data.contains("jjkbrp_domain_form_effective") && data.getInt("jjkbrp_domain_form_effective") == 2) {
             return true;
         }
-        if (data.contains("cnt2") && data.getDouble("cnt2") > 0.0) {
-            return true;
-        }
         MobEffect domainEffect = (MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get();
         MobEffectInstance effect = entity.getEffect(domainEffect);
 
@@ -214,33 +267,23 @@ public class DomainAddonUtils {
     /**
      * Determines whether an entity is currently in an incomplete-domain state.
      *
-     * <p>Several legacy data formats are supported here: string values, integer values, boolean
-     * flags, and the negative {@code cnt2} convention used by the original logic.</p>
-     *
      * @param entity the entity to inspect
      * @return {@code true} if the entity is treated as using the incomplete domain form
      */
     public static boolean isIncompleteDomainState(LivingEntity entity) {
-        String castLocked;
         if (entity == null) {
             return false;
         }
         CompoundTag data = entity.getPersistentData();
-
-        // CFR preserved the original mixed string/int checks, so keep all representations supported.
-        if (data.contains("jjkbrp_domain_form_cast_locked") && ("incomplete".equalsIgnoreCase(castLocked = data.getString("jjkbrp_domain_form_cast_locked")) || Integer.toString(0).equals(castLocked) || data.getInt("jjkbrp_domain_form_cast_locked") == 0)) {
+        if (data.contains("jjkbrp_domain_form_cast_locked")
+                && data.getInt("jjkbrp_domain_form_cast_locked") == 0) {
             return true;
         }
         if (data.getBoolean("jjkbrp_incomplete_form_active")) {
             return true;
         }
-        if (data.getBoolean("jjkbrp_incomplete_session_active")) {
-            return true;
-        }
-        if (data.contains("cnt2") && data.getDouble("cnt2") < 0.0) {
-            return true;
-        }
-        return data.contains("jjkbrp_domain_form_effective") && data.getInt("jjkbrp_domain_form_effective") == 0;
+        return data.contains("jjkbrp_domain_form_effective")
+                && data.getInt("jjkbrp_domain_form_effective") == 0;
     }
 
     /**
@@ -499,6 +542,9 @@ public class DomainAddonUtils {
             return false;
         }
         CompoundTag nbt = player.getPersistentData();
+        if (nbt.getBoolean("jjkbrp_force_closed_cleanup")) {
+            return false;
+        }
         if (!nbt.contains("x_pos_doma")) {
             return false;
         }
@@ -534,6 +580,9 @@ public class DomainAddonUtils {
             return false;
         }
         CompoundTag nbt = caster.getPersistentData();
+        if (nbt.getBoolean("jjkbrp_force_closed_cleanup")) {
+            return false;
+        }
         if (!nbt.contains("x_pos_doma")) {
             return false;
         }
@@ -840,6 +889,167 @@ public class DomainAddonUtils {
         catch (Exception ignored) {
             return null;
         }
+    }
+
+    // ==================== Phase 1 Foundation Helpers ====================
+
+    /**
+     * Resolves the domain form of a living entity as a type-safe {@link DomainForm} enum.
+     *
+     * <p>This is the canonical centralized implementation that replaces the
+     * scattered {@code jjkbrp$resolveDomainForm()} copies in the clash mixins.
+     * It inspects persistent data, capability state, and runtime flags in the
+     * same priority order as the original mixin implementations.</p>
+     *
+     * @param entity the entity to inspect; may be {@code null}
+     * @return the resolved {@link DomainForm}, defaulting to {@link DomainForm#CLOSED}
+     */
+    public static DomainForm resolveDomainForm(LivingEntity entity) {
+        return DomainForm.resolve(entity);
+    }
+
+    /**
+     * Resolves the domain form as a raw integer, matching the encoding stored
+     * in {@code jjkbrp_domain_form_cast_locked} and {@code jjkbrp_domain_form_effective}.
+     *
+     * @param entity the entity to inspect; may be {@code null}
+     * @return {@code 0} (incomplete), {@code 1} (closed), or {@code 2} (open)
+     */
+    public static int resolveDomainFormInt(LivingEntity entity) {
+        return resolveDomainForm(entity).getId();
+    }
+
+    /**
+     * Computes the effective clash range for a given entity and its persistent data.
+     *
+     * <p>Open domains use a much larger range multiplier than closed/incomplete ones.
+     * This method consolidates the three duplicate {@code jjkbrp$baseClashRange()}
+     * implementations that existed in the clash mixins.</p>
+     *
+     * @param world  the level accessor for radius lookup
+     * @param entity the entity whose clash range should be computed
+     * @param nbt    the entity's persistent data
+     * @return the computed base clash range in blocks
+     */
+    public static double baseClashRange(LevelAccessor world, LivingEntity entity, CompoundTag nbt) {
+        double radius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
+        boolean isOpen = DomainAddonUtils.isOpenDomainState(entity);
+        return radius * (isOpen
+                ? DomainClashConstants.OPEN_CLASH_RANGE_MULTIPLIER
+                : DomainClashConstants.CLOSED_CLASH_RANGE_MULTIPLIER);
+    }
+
+    /**
+     * Checks whether two domain casters are spatially close enough to be
+     * considered within the base clash window.
+     *
+     * <p>This consolidates the three duplicate {@code jjkbrp$isWithinBaseClashWindow()}
+     * implementations.  The check uses both body-center and domain-center distances,
+     * taking the minimum, and compares against a threshold derived from the
+     * combined clash ranges of both participants.</p>
+     *
+     * @param world     the level accessor for radius lookups
+     * @param source    the first participant
+     * @param sourceNbt the first participant's persistent data
+     * @param target    the second participant
+     * @param targetNbt the second participant's persistent data
+     * @return {@code true} if the two participants are within clash range
+     */
+    public static boolean isWithinBaseClashWindow(
+            LevelAccessor world,
+            LivingEntity source, CompoundTag sourceNbt,
+            LivingEntity target, CompoundTag targetNbt
+    ) {
+        if (source == null || target == null) {
+            return false;
+        }
+        Vec3 sourceCenter = DomainAddonUtils.getDomainCenter((Entity) source);
+        Vec3 targetBody = new Vec3(
+                target.getX(),
+                target.getY() + (double) target.getBbHeight() * 0.5,
+                target.getZ());
+        Vec3 targetCenter = DomainAddonUtils.getDomainCenter((Entity) target);
+
+        double dx = sourceCenter.x - targetBody.x;
+        double dy = sourceCenter.y - targetBody.y;
+        double dz = sourceCenter.z - targetBody.z;
+        double distToBodySq = dx * dx + dy * dy + dz * dz;
+
+        double cdx = sourceCenter.x - targetCenter.x;
+        double cdy = sourceCenter.y - targetCenter.y;
+        double cdz = sourceCenter.z - targetCenter.z;
+        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
+
+        double distanceSq = Math.min(distToBodySq, distToCenterSq);
+
+        double sourceRange = DomainAddonUtils.baseClashRange(world, source, sourceNbt);
+        double targetRange = DomainAddonUtils.baseClashRange(world, target, targetNbt);
+        double combinedRange = Math.max(sourceRange, targetRange);
+
+        if (combinedRange <= 0.0) {
+            return false;
+        }
+        double threshold = Math.max(
+                DomainClashConstants.CLASH_WINDOW_MINIMUM_THRESHOLD,
+                combinedRange * DomainClashConstants.CLASH_WINDOW_THRESHOLD_FACTOR);
+        return distanceSq < threshold * threshold;
+    }
+
+    /**
+     * Creates a {@link DomainParticipantSnapshot} from a live entity's current state.
+     *
+     * <p>This snapshot captures the entity's form, center, radius, power, and
+     * other clash-relevant properties at the moment of the call.  It is designed
+     * to be called from Phase 2's registry registration path, but is exposed now
+     * so that it can be tested independently.</p>
+     *
+     * @param entity    the living entity to snapshot
+     * @param world     the level accessor for radius/power lookups
+     * @param startTick the game time to record as the domain start tick
+     * @return a new snapshot, or {@code null} if the entity is {@code null}
+     */
+    public static DomainParticipantSnapshot createParticipantSnapshot(
+            LivingEntity entity, LevelAccessor world, long startTick
+    ) {
+        if (entity == null) {
+            return null;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        DomainForm form = resolveDomainForm(entity);
+        Vec3 center = getDomainCenter((Entity) entity);
+        double radius = getActualDomainRadius(world, nbt);
+        double effectivePower = nbt.contains("jjkbrp_effective_power")
+                ? nbt.getDouble("jjkbrp_effective_power")
+                : DomainClashConstants.DEFAULT_OPPONENT_POWER;
+
+        int domainId = (int) Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId == 0) {
+            domainId = (int) Math.round(nbt.getDouble("skill_domain"));
+        }
+        if (domainId == 0) {
+            domainId = (int) Math.round(nbt.getDouble("select"));
+        }
+
+        double barrierRefinement = nbt.contains("jjkbrp_barrier_refinement")
+                ? nbt.getDouble("jjkbrp_barrier_refinement")
+                : DomainClashConstants.NPC_DEFAULT_BARRIER_REFINEMENT;
+
+        double sureHitMultiplier = nbt.contains("jjkbrp_open_surehit_multiplier")
+                ? nbt.getDouble("jjkbrp_open_surehit_multiplier")
+                : 1.0;
+
+        boolean defeated = nbt.getBoolean("Failed") || nbt.getBoolean("DomainDefeated");
+
+        // Use the form at cast time if stored; otherwise use the current resolved form.
+        DomainForm formAtCast = nbt.contains("jjkbrp_domain_form_cast_locked")
+                ? DomainForm.fromId(nbt.getInt("jjkbrp_domain_form_cast_locked"))
+                : form;
+
+        return new DomainParticipantSnapshot(
+                entity.getUUID(), form, formAtCast, center, radius,
+                effectivePower, startTick, domainId, barrierRefinement,
+                sureHitMultiplier, defeated
+        );
     }
 
     public static String resolveDomainName(int domainId) {

@@ -5,6 +5,7 @@ import java.util.Comparator;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionCreateBarrierProcedure;
 import net.minecraft.advancements.Advancement;
@@ -71,11 +72,15 @@ public class DomainOpenClashCancelMixin {
         DomainOpenClashCancelMixin.jjkbrp$clearIncompleteWrapState(nbt);
         DomainOpenClashCancelMixin.jjkbrp$clearWrappedByIncompleteState(nbt);
         double domainRadius = DomainAddonUtils.getActualDomainRadius(world, nbt);
+        Vec3 casterCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
+        if (DomainClashConstants.USE_REGISTRY) {
+            nbt.putBoolean("jjkbrp_pending_clash_registration", true);
+            return;
+        }
         double casterRange = DomainOpenClashCancelMixin.jjkbrp$baseClashRange(world, caster, nbt);
         if (casterRange <= 0.0) {
             return;
         }
-        Vec3 casterCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
         double searchRange = Math.max(domainRadius * 2.0, Math.max(6.0, casterRange * 0.5 + 2.0));
         AABB searchBox = new AABB(casterCenter.x - searchRange, casterCenter.y - searchRange, casterCenter.z - searchRange, casterCenter.x + searchRange, casterCenter.y + searchRange, casterCenter.z + searchRange);
         ArrayList<LivingEntity> candidates = new ArrayList<LivingEntity>();
@@ -134,6 +139,7 @@ public class DomainOpenClashCancelMixin {
                 DomainOpenClashCancelMixin.jjkbrp$clearWrappedByIncompleteState(caster.getPersistentData());
             }
         }
+
     }
 
     /**
@@ -329,29 +335,7 @@ public class DomainOpenClashCancelMixin {
      * @return whether is within base clash window is true for the current runtime state.
      */
     private static boolean jjkbrp$isWithinBaseClashWindow(LevelAccessor world, LivingEntity source, CompoundTag sourceNbt, LivingEntity target, CompoundTag targetNbt) {
-        if (source == null || target == null) {
-            return false;
-        }
-        Vec3 sourceCenter = DomainAddonUtils.getDomainCenter((Entity)source);
-        Vec3 targetBody = new Vec3(target.getX(), target.getY() + (double)target.getBbHeight() * 0.5, target.getZ());
-        Vec3 targetCenter = DomainAddonUtils.getDomainCenter((Entity)target);
-        double dx = sourceCenter.x - targetBody.x;
-        double dy = sourceCenter.y - targetBody.y;
-        double dz = sourceCenter.z - targetBody.z;
-        double distToBodySq = dx * dx + dy * dy + dz * dz;
-        double cdx = sourceCenter.x - targetCenter.x;
-        double cdy = sourceCenter.y - targetCenter.y;
-        double cdz = sourceCenter.z - targetCenter.z;
-        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
-        double distanceSq = Math.min(distToBodySq, distToCenterSq);
-        double sourceRange = DomainOpenClashCancelMixin.jjkbrp$baseClashRange(world, source, sourceNbt);
-        double targetRange = DomainOpenClashCancelMixin.jjkbrp$baseClashRange(world, target, targetNbt);
-        double combinedRange = Math.max(sourceRange, targetRange);
-        if (combinedRange <= 0.0) {
-            return false;
-        }
-        double threshold = Math.max(4.0, combinedRange * 0.65);
-        return distanceSq < threshold * threshold;
+        return DomainAddonUtils.isWithinBaseClashWindow(world, source, sourceNbt, target, targetNbt);
     }
 
     /**
@@ -362,34 +346,7 @@ public class DomainOpenClashCancelMixin {
      * @return the resulting base clash range value.
      */
     private static double jjkbrp$baseClashRange(LevelAccessor world, LivingEntity entity, CompoundTag nbt) {
-        double radius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
-        return radius * (DomainOpenClashCancelMixin.jjkbrp$isOpenDomainState(entity) ? 18.0 : 2.0);
+        return DomainAddonUtils.baseClashRange(world, entity, nbt);
     }
 
-    /**
-     * Performs is base startup open state for this mixin.
-     * @param entity entity involved in the current mixin operation.
-     * @param nbt persistent data container used by this helper.
-     * @return whether is base startup open state is true for the current runtime state.
-     */
-    private static boolean jjkbrp$isBaseStartupOpenState(LivingEntity entity, CompoundTag nbt) {
-        int resolvedId;
-        if (entity == null || nbt == null) {
-            return false;
-        }
-        if (!nbt.contains("cnt2") || nbt.getDouble("cnt2") <= 0.0) {
-            return false;
-        }
-        if (nbt.getDouble("cnt7") <= 0.0 && !nbt.contains("x_pos_doma")) {
-            return false;
-        }
-        double domainId = nbt.getDouble("select");
-        if (domainId == 0.0) {
-            domainId = nbt.getDouble("skill_domain");
-        }
-        if (domainId == 0.0) {
-            domainId = nbt.getDouble("jjkbrp_domain_id_runtime");
-        }
-        return (resolvedId = (int)Math.round(domainId)) == 1 || resolvedId == 18;
-    }
 }

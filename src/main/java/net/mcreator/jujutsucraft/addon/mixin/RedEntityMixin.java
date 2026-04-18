@@ -41,7 +41,7 @@ public class RedEntityMixin {
         // Resolve the Red orb owner up front because addon override rules depend on the caster's current domain state.
         LivingEntity owner = DomainAddonUtils.resolveOwnerEntity(world, (Entity)livingRed);
         boolean entityOpen = livingRed.getPersistentData().getBoolean("jjkbrp_open_form_active");
-        boolean entityIncomplete = livingRed.getPersistentData().getBoolean("jjkbrp_incomplete_form_active") || livingRed.getPersistentData().getBoolean("jjkbrp_incomplete_session_active");
+        boolean entityIncomplete = livingRed.getPersistentData().getBoolean("jjkbrp_incomplete_form_active");
         boolean ownerOpen = owner != null && DomainAddonUtils.isOpenDomainState(owner);
         boolean ownerIncomplete = owner != null && DomainAddonUtils.isIncompleteDomainState(owner);
         boolean ownerClosed = owner != null && DomainAddonUtils.isClosedDomainActive(owner);
@@ -49,7 +49,8 @@ public class RedEntityMixin {
         if (owner != null && livingRed.tickCount % 20 == 0 && (!entityOpen && ownerOpen || !entityIncomplete && ownerIncomplete || ownerClosed && !entityOpen && !entityIncomplete)) {
             LOGGER.debug("[GojoDomainDiag] Red entity state mismatch entity={} owner={} entityOpen={} entityIncomplete={} ownerOpen={} ownerIncomplete={} ownerClosed={} ownerDomainActive={} cnt1={} cnt6={}", new Object[]{livingRed.getClass().getSimpleName(), owner.getName().getString(), entityOpen, entityIncomplete, ownerOpen, ownerIncomplete, ownerClosed, ownerDomainActive, livingRed.getPersistentData().getDouble("cnt1"), livingRed.getPersistentData().getDouble("cnt6")});
         }
-        // Only replace the original Red AI when the entity is server-controlled, not already committed to Purple, and owned by a valid addon-controlled caster.
+        // Only replace the original Red AI when the addon routing says this cast should stay on the addon path.
+        // This must still allow crouch low-charge Red to fall back to the original AIRed flow.
         if (RedEntityMixin.jjkblueredpurple$shouldUseAddonOverride(livingRed, owner)) {
             if (owner != null && ownerDomainActive && livingRed.tickCount % 20 == 0) {
                 LOGGER.debug("[GojoDomainDiag] Red using addon override inside domain owner={} open={} incomplete={} closed={} cnt1={} cnt6={}", new Object[]{owner.getName().getString(), ownerOpen, ownerIncomplete, ownerClosed, livingRed.getPersistentData().getDouble("cnt1"), livingRed.getPersistentData().getDouble("cnt6")});
@@ -62,7 +63,8 @@ public class RedEntityMixin {
     }
 
     /**
-     * Determines whether this Red entity should use the addon override based on ownership, Purple state, and server-side control rules.
+     * Determines whether this Red entity should use the addon override based on the live addon routing check.
+     * The routing helper inside Blue/Red/Purple mod is authoritative because it explicitly returns false for crouch low-charge Red.
      * @param redEntity entity involved in the current mixin operation.
      * @param owner entity involved in the current mixin operation.
      * @return whether should use addon override is true for the current runtime state.
@@ -88,9 +90,6 @@ public class RedEntityMixin {
         // Purple-bound Red orbs must continue down the original path so the fusion sequence is not interrupted.
         if (redEntity.getPersistentData().getBoolean("flag_purple")) {
             return false;
-        }
-        if (owner instanceof Player) {
-            return true;
         }
         return BlueRedPurpleNukeMod.shouldOverrideBaseRed(redEntity);
     }

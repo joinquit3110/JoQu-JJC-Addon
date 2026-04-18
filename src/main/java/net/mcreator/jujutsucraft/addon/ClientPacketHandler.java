@@ -89,19 +89,26 @@ public final class ClientPacketHandler {
         mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> data.applySync(xp, level, form, points, propLevels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement));
     }
 
-    public static void updateDomainClash(float powerRatio, String opponentName,
-                                          int casterDomainId, int opponentDomainId,
-                                          int casterForm, int opponentForm,
-                                          String casterName, boolean active) {
-        ClientDomainClashCache.powerRatio = powerRatio;
-        ClientDomainClashCache.opponentName = opponentName;
+    public static void updateDomainClash(float casterPower, int casterDomainId,
+                                          int casterForm, String casterName,
+                                          boolean active, long syncedGameTime,
+                                          List<ModNetworking.DomainClashOpponentPayload> opponents) {
+        ClientDomainClashCache.casterPower = Math.max(0.0f, casterPower);
         ClientDomainClashCache.casterDomainId = casterDomainId;
-        ClientDomainClashCache.opponentDomainId = opponentDomainId;
         ClientDomainClashCache.casterForm = casterForm;
-        ClientDomainClashCache.opponentForm = opponentForm;
-        ClientDomainClashCache.casterName = casterName;
+        ClientDomainClashCache.casterName = casterName == null ? "" : casterName;
         ClientDomainClashCache.active = active;
-        ClientDomainClashCache.lastUpdateTime = System.currentTimeMillis();
+        ClientDomainClashCache.syncedGameTime = syncedGameTime;
+        ClientDomainClashCache.opponents.clear();
+        if (opponents != null) {
+            for (ModNetworking.DomainClashOpponentPayload opponent : opponents) {
+                if (opponent == null) {
+                    continue;
+                }
+                ClientDomainClashCache.opponents.add(new ClientDomainClashCache.OpponentCacheEntry(
+                        opponent.power(), opponent.form(), opponent.domainId(), opponent.name()));
+            }
+        }
     }
 
     /**
@@ -211,22 +218,42 @@ public final class ClientPacketHandler {
     }
 
     public static final class ClientDomainClashCache {
-        public static float powerRatio = 0.5f;
-        public static String opponentName = "";
+        private static final long STALE_TICK_WINDOW = 40L;
+        public static float casterPower = 0.0f;
         public static int casterDomainId = 0;
-        public static int opponentDomainId = 0;
-        public static int casterForm = 0;
-        public static int opponentForm = 0;
+        public static int casterForm = 1;
         public static String casterName = "";
         public static boolean active = false;
-        public static long lastUpdateTime = 0L;
-        private static final long EXPIRE_MS = 1500L;
+        public static long syncedGameTime = Long.MIN_VALUE;
+        public static final List<OpponentCacheEntry> opponents = new java.util.ArrayList<>();
 
         private ClientDomainClashCache() {
         }
 
         public static boolean isActive() {
-            return active && (System.currentTimeMillis() - lastUpdateTime) < EXPIRE_MS;
+            Minecraft mc = Minecraft.getInstance();
+            if (!active || mc.level == null) {
+                return false;
+            }
+            if (syncedGameTime == Long.MIN_VALUE) {
+                return false;
+            }
+            long age = mc.level.getGameTime() - syncedGameTime;
+            return age >= 0L && age <= STALE_TICK_WINDOW && !opponents.isEmpty();
+        }
+
+        public static final class OpponentCacheEntry {
+            public final float power;
+            public final int form;
+            public final int domainId;
+            public final String name;
+
+            public OpponentCacheEntry(float power, int form, int domainId, String name) {
+                this.power = Math.max(0.0f, power);
+                this.form = form;
+                this.domainId = domainId;
+                this.name = name == null ? "" : name;
+            }
         }
     }
 }

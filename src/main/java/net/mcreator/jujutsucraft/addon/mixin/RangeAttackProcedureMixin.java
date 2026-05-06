@@ -7,7 +7,6 @@ import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementProgress;
 import net.mcreator.jujutsucraft.addon.BlueRedPurpleNukeMod;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
-import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
 import net.mcreator.jujutsucraft.entity.RedEntity;
@@ -446,12 +445,8 @@ public class RangeAttackProcedureMixin {
         long currentGameTime = serverLevel.getGameTime();
         List<LivingEntity> nearbyTargets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(x, y, z, x, y, z).inflate(range / 2.0), target -> target.isAlive() && target != entity);
         boolean foundTarget = false;
-        Player owner = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, data.getString("OWNER_UUID"));
         for (LivingEntity target : nearbyTargets) {
-            if (RangeAttackProcedureMixin.jjkbrp$isOwnedRikaFriendlyFire(owner, target)) {
-                continue;
-            }
-            boolean betrayal = RangeAttackProcedureMixin.jjkblueredpurple$executeLogicBetrayal(world, entity, target);
+            boolean betrayal = LogicBetrayalProcedure.execute(world, entity, target);
             if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
                 continue;
             }
@@ -466,10 +461,7 @@ public class RangeAttackProcedureMixin {
             return false;
         }
         for (LivingEntity target : nearbyTargets) {
-            if (RangeAttackProcedureMixin.jjkbrp$isOwnedRikaFriendlyFire(owner, target)) {
-                continue;
-            }
-            boolean betrayal = RangeAttackProcedureMixin.jjkblueredpurple$executeLogicBetrayal(world, entity, target);
+            boolean betrayal = LogicBetrayalProcedure.execute(world, entity, target);
             if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
                 continue;
             }
@@ -506,14 +498,10 @@ public class RangeAttackProcedureMixin {
             return target.hurt(source, amount);
         }
         CompoundTag attackerData = attacker.getPersistentData();
-        Player owner = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, attackerData.getString("OWNER_UUID"));
-        if (RangeAttackProcedureMixin.jjkbrp$isOwnedRikaFriendlyFire(owner, livingTarget)) {
-            return false;
-        }
         if (attackerData.getBoolean("DomainAttack")) {
             return target.hurt(source, amount);
         }
-        boolean betrayal = RangeAttackProcedureMixin.jjkblueredpurple$executeLogicBetrayal(world, attacker, livingTarget);
+        boolean betrayal = LogicBetrayalProcedure.execute(world, attacker, livingTarget);
         if (!LogicAttackProcedure.execute(world, attacker, livingTarget) && !betrayal) {
             return target.hurt(source, amount);
         }
@@ -528,27 +516,6 @@ public class RangeAttackProcedureMixin {
             targetData.putLong(KEY_RED_LAST_HIT_TICK, currentGameTime);
         }
         return hurt;
-    }
-
-    @Unique
-    private static boolean jjkbrp$isOwnedRikaFriendlyFire(Player owner, Entity target) {
-        return owner != null && target != null && YutaCopyStore.isOwnedRika(owner, target);
-    }
-
-    @Unique
-    private static boolean jjkblueredpurple$executeLogicBetrayal(LevelAccessor world, Entity attacker, Entity target) {
-        try {
-            return LogicBetrayalProcedure.execute(world, attacker, target);
-        } catch (NoSuchMethodError error) {
-            try {
-                java.lang.reflect.Method legacyExecute = LogicBetrayalProcedure.class.getMethod("execute", Entity.class, Entity.class);
-                Object result = legacyExecute.invoke(null, attacker, target);
-                return result instanceof Boolean && ((Boolean)result).booleanValue();
-            } catch (ReflectiveOperationException reflectionError) {
-                LOGGER.warn("[JJKBRP] LogicBetrayalProcedure legacy fallback failed; treating as non-betrayal", reflectionError);
-                return false;
-            }
-        }
     }
 
     /**

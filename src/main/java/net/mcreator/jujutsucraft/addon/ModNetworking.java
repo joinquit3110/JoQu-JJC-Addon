@@ -1764,8 +1764,16 @@ public class ModNetworking {
         }
     }
 
+    public static void sendGojoShiftTap() {
+        CHANNEL.sendToServer((Object)new GojoShiftTapPacket());
+    }
+
     public static void sendBlackFlashRelease(float clientNeedle, long timingNonce) {
-        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, timingNonce));
+        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, timingNonce, false));
+    }
+
+    public static void sendBlackFlashRelease(float clientNeedle, long timingNonce, boolean clientTimingSuccess) {
+        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, timingNonce, clientTimingSuccess));
     }
 
     public static void sendBlackFlashFeedback(net.minecraft.server.level.ServerPlayer player, boolean success, boolean confirmedHit) {
@@ -1775,19 +1783,26 @@ public class ModNetworking {
     public static class BlackFlashReleasePacket {
         private final float clientNeedle;
         private final long timingNonce;
+        private final boolean clientTimingSuccess;
 
         public BlackFlashReleasePacket(float clientNeedle, long timingNonce) {
+            this(clientNeedle, timingNonce, false);
+        }
+
+        public BlackFlashReleasePacket(float clientNeedle, long timingNonce, boolean clientTimingSuccess) {
             this.clientNeedle = clientNeedle;
             this.timingNonce = timingNonce;
+            this.clientTimingSuccess = clientTimingSuccess;
         }
 
         public static void encode(BlackFlashReleasePacket pkt, FriendlyByteBuf buf) {
             buf.writeFloat(pkt.clientNeedle);
             buf.writeLong(pkt.timingNonce);
+            buf.writeBoolean(pkt.clientTimingSuccess);
         }
 
         public static BlackFlashReleasePacket decode(FriendlyByteBuf buf) {
-            return new BlackFlashReleasePacket(buf.readFloat(), buf.readLong());
+            return new BlackFlashReleasePacket(buf.readFloat(), buf.readLong(), buf.readBoolean());
         }
 
         public static void handle(BlackFlashReleasePacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
@@ -1795,7 +1810,7 @@ public class ModNetworking {
             ctx.enqueueWork(() -> {
                 ServerPlayer player = ctx.getSender();
                 if (player != null) {
-                    BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, pkt.clientNeedle, pkt.timingNonce);
+                    BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, pkt.clientNeedle, pkt.timingNonce, pkt.clientTimingSuccess);
                 }
             });
             ctx.setPacketHandled(true);

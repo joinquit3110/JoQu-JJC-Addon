@@ -60,7 +60,7 @@ public final class ClientPacketHandler {
         ClientBlackFlashCache.timingRedStart = timingRedStart;
         ClientBlackFlashCache.timingRedSize = timingRedSize;
         ClientBlackFlashCache.timingNonce = timingNonce;
-        ClientBlackFlashCache.flow = Math.max(0, Math.min(8, flow));
+        ClientBlackFlashCache.flow = Math.max(0, Math.min(BlueRedPurpleNukeMod.BF_FLOW_MAX, flow));
         ClientBlackFlashCache.flowCooldown = Math.max(0, flowCooldown);
         if (newSession || ClientBlackFlashCache.clientTimingStartTick == Long.MIN_VALUE) {
             long clientNow = mc.level != null ? mc.level.getGameTime() : timingStartTick;
@@ -82,7 +82,7 @@ public final class ClientPacketHandler {
             if (sameLocalReleaseNonce || ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.localReleaseNonce != 0L) {
                 // A charging=false sync with the same nonce is the server acknowledgement that the release
                 // left the ring phase. Close the local RELEASED/ring state immediately; explicit feedback
-                // packets may then show TIMED, BLACK FLASH, or FAILED without leaving a pending timeout path.
+                // packets may then show RELEASED, BLACK FLASH, or FAILED without leaving a pending timeout path.
                 System.out.println("[BlackFlashTimingDiag] CLIENT_RELEASE_ACK_SYNC nonce=" + ClientBlackFlashCache.localReleaseNonce + " previousNonce=" + previousNonce);
                 ClientBlackFlashCache.awaitingReleaseAck = false;
                 ClientBlackFlashCache.localReleaseResolved = false;
@@ -202,11 +202,32 @@ public final class ClientPacketHandler {
         mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> data.applySync(xp, level, form, points, propLevels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement));
     }
 
-
     public static void spawnGojoTeleportGhost(double x, double y, double z, float yaw, int lifetime) {
-        // Gojo teleport ghost renderer is optional in this build; packet is intentionally a no-op when renderer is unavailable.
+        // Gojo teleport ghost renderer is optional in this build; server-side teleport, particles, and sound remain authoritative.
     }
- 
+
+    public static void updateDomainClash(float casterPower, int casterDomainId,
+                                          int casterForm, String casterName,
+                                          boolean active, long syncedGameTime,
+                                          List<ModNetworking.DomainClashOpponentPayload> opponents) {
+        ClientDomainClashCache.casterPower = Math.max(0.0f, casterPower);
+        ClientDomainClashCache.casterDomainId = casterDomainId;
+        ClientDomainClashCache.casterForm = casterForm;
+        ClientDomainClashCache.casterName = casterName == null ? "" : casterName;
+        ClientDomainClashCache.active = active;
+        ClientDomainClashCache.syncedGameTime = syncedGameTime;
+        ClientDomainClashCache.opponents.clear();
+        if (opponents != null) {
+            for (ModNetworking.DomainClashOpponentPayload opponent : opponents) {
+                if (opponent == null) {
+                    continue;
+                }
+                ClientDomainClashCache.opponents.add(new ClientDomainClashCache.OpponentCacheEntry(
+                        opponent.power(), opponent.form(), opponent.domainId(), opponent.name()));
+            }
+        }
+    }
+
     /**
      * Lightweight client cache for the most recent technique and combat cooldown sync values.
      */
@@ -274,6 +295,9 @@ public final class ClientPacketHandler {
             if (combatRemaining > 0 && --combatRemaining <= 0) {
                 combatMax = 0;
             }
+            if (ClientBlackFlashCache.flowCooldown > 0) {
+                ClientBlackFlashCache.flowCooldown--;
+            }
         }
     }
 
@@ -294,7 +318,7 @@ public final class ClientPacketHandler {
         // Difference between local client game time and the synced server timing start; render math uses this bridge but never packet-arrival time as phase zero.
         public static long clientServerTickOffset = 0L;
         // Server-authoritative needle lap duration for the current timing session.
-        public static float timingPeriodTicks = 18.0f;
+        public static float timingPeriodTicks = BlueRedPurpleNukeMod.BF_TIMING_PERIOD_TICKS;
         // Randomized red target arc start, normalized to the 0..1 ring interval.
         public static float timingRedStart = 0.0f;
         // Randomized red target arc size, normalized to the 0..1 ring interval.
@@ -343,6 +367,44 @@ public final class ClientPacketHandler {
         }
     }
 
-}
+    public static final class ClientDomainClashCache {
+        private static final long STALE_TICK_WINDOW = 40L;
+        public static float casterPower = 0.0f;
+        public static int casterDomainId = 0;
+        public static int casterForm = 1;
+        public static String casterName = "";
+        public static boolean active = false;
+        public static long syncedGameTime = Long.MIN_VALUE;
+        public static final List<OpponentCacheEntry> opponents = new java.util.ArrayList<>();
 
+        private ClientDomainClashCache() {
+        }
+
+        public static boolean isActive() {
+            Minecraft mc = Minecraft.getInstance();
+            if (!active || mc.level == null) {
+                return false;
+            }
+            if (syncedGameTime == Long.MIN_VALUE) {
+                return false;
+            }
+            long age = mc.level.getGameTime() - syncedGameTime;
+            return age >= 0L && age <= STALE_TICK_WINDOW && !opponents.isEmpty();
+        }
+
+        public static final class OpponentCacheEntry {
+            public final float power;
+            public final int form;
+            public final int domainId;
+            public final String name;
+
+            public OpponentCacheEntry(float power, int form, int domainId, String name) {
+                this.power = Math.max(0.0f, power);
+                this.form = form;
+                this.domainId = domainId;
+                this.name = name == null ? "" : name;
+            }
+        }
+    }
+}
 

@@ -18,11 +18,11 @@ import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.EntityRenderersEvent;
 import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
+import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.client.settings.IKeyConflictContext;
 import net.minecraftforge.client.settings.KeyConflictContext;
 import net.minecraftforge.event.TickEvent;
@@ -42,7 +42,7 @@ public class ClientEvents {
     private static boolean wasKeyDown;
     // Previous frame state for the domain mastery key so the screen only opens on a fresh press.
     private static boolean wasDMKeyDown;
-    private static boolean wasShiftDown;
+    private static boolean wasSneakDown;
 
     @SubscribeEvent
     /**
@@ -58,6 +58,8 @@ public class ClientEvents {
             return;
         }
         NearDeathClientState.clientTick();
+        BlackFlashHudOverlay.clientTick();
+        ClientEvents.tickGojoSneakTap(mc);
         if (mc.screen instanceof SkillWheelScreen) {
             long window = mc.getWindow().getWindow();
             ClientEvents.tickMovementKey(mc.options.keyUp, window);
@@ -67,11 +69,18 @@ public class ClientEvents {
             ClientEvents.tickMovementKey(mc.options.keyShift, window);
             ClientEvents.tickMovementKey(mc.options.keySprint, window);
         }
-        boolean shiftDown = mc.options.keyShift.isDown();
-        if (shiftDown && !wasShiftDown && mc.screen == null) {
-            ClientEvents.handleShiftTap(mc);
+    }
+
+    private static void tickGojoSneakTap(Minecraft mc) {
+        if (mc.screen != null || mc.options == null || mc.options.keyShift == null) {
+            wasSneakDown = false;
+            return;
         }
-        wasShiftDown = shiftDown;
+        boolean down = mc.options.keyShift.isDown();
+        if (down && !wasSneakDown) {
+            ModNetworking.sendGojoShiftTap();
+        }
+        wasSneakDown = down;
     }
 
     /**
@@ -80,6 +89,11 @@ public class ClientEvents {
      * @param window window used by this method.
      */
     private static void tickMovementKey(KeyMapping key, long window) {
+    }
+
+    @SubscribeEvent
+    public static void onRenderLevelStage(RenderLevelStageEvent event) {
+        BlackFlashHudOverlay.renderWorldBillboard(event);
     }
 
     @SubscribeEvent
@@ -92,6 +106,7 @@ public class ClientEvents {
         if (mc.player == null || mc.gameMode == null) {
             return;
         }
+        BlackFlashHudOverlay.onRawKeyInput(event.getKey(), event.getAction());
         if (mc.screen != null) {
             // While a GUI is open (notably chat), consume key state only for edge tracking and never open gameplay menus.
             wasKeyDown = ClientEvents.isWheelKeyDown();
@@ -108,26 +123,6 @@ public class ClientEvents {
             ClientEvents.openDomainMastery(mc);
         }
         wasDMKeyDown = isDMDown;
-    }
-
-    private static void handleShiftTap(Minecraft mc) {
-        LocalPlayer player = mc.player;
-        if (player == null) {
-            return;
-        }
-        if (ClientPacketHandler.ClientBlackFlashCache.charging) {
-            float needle = ClientPacketHandler.getBlackFlashClientNeedle(0.0f);
-            long nonce = ClientPacketHandler.ClientBlackFlashCache.timingNonce;
-            if (ClientPacketHandler.markBlackFlashReleasedLocally(needle, nonce)) {
-                ModNetworking.sendBlackFlashRelease(needle, nonce);
-            }
-            return;
-        }
-        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
-        double activeTechnique = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
-        if ((int)Math.round(activeTechnique) == 2 && (int)Math.round(vars.PlayerSelectCurseTechnique) == 7) {
-            ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.GojoShiftTapPacket());
-        }
     }
 
     /**
@@ -249,7 +244,6 @@ public class ClientEvents {
          */
         public static void registerEntityRenderers(EntityRenderersEvent.RegisterRenderers event) {
             event.registerEntityRenderer((EntityType)LimbEntityRegistry.SEVERED_LIMB.get(), SeveredLimbRenderer::new);
-            event.registerEntityRenderer((EntityType)LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), net.minecraft.client.renderer.entity.VillagerRenderer::new);
         }
 
         @SubscribeEvent

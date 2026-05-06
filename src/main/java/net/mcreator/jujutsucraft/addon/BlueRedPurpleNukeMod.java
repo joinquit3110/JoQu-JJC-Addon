@@ -2,18 +2,21 @@ package net.mcreator.jujutsucraft.addon;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.logging.LogUtils;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.CooldownTrackerEvents;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCommands;
+import net.mcreator.jujutsucraft.addon.ModItems;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
-import net.mcreator.jujutsucraft.addon.ModItems;
 import net.mcreator.jujutsucraft.addon.yuta.YutaFakePlayerCommands;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
@@ -22,6 +25,8 @@ import net.mcreator.jujutsucraft.init.JujutsucraftModAttributes;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.init.JujutsucraftModParticleTypes;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
+import net.minecraft.advancements.Advancement;
+import net.minecraft.advancements.AdvancementProgress;
 import net.mcreator.jujutsucraft.procedures.BlockDestroyAllDirectionProcedure;
 import net.mcreator.jujutsucraft.procedures.KnockbackProcedure;
 import net.mcreator.jujutsucraft.procedures.RangeAttackProcedure;
@@ -29,6 +34,7 @@ import net.mcreator.jujutsucraft.procedures.SetRangedAmmoProcedure;
 import net.mcreator.jujutsucraft.procedures.AIRedProcedure;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Position;
 import net.minecraft.core.particles.BlockParticleOption;
@@ -52,13 +58,17 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Block;
@@ -75,13 +85,16 @@ import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
 import net.minecraftforge.event.entity.living.LivingEvent;
+import net.minecraftforge.event.entity.living.LivingAttackEvent;
+import net.minecraftforge.event.entity.living.LivingDamageEvent;
+import net.minecraftforge.event.entity.living.LivingHurtEvent;
+import net.minecraftforge.event.entity.player.AttackEntityEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.ForgeRegistries;
-import net.minecraft.world.entity.npc.Villager;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 
@@ -116,6 +129,60 @@ public class BlueRedPurpleNukeMod {
     private static final int RED_PREINIT_TICKS = 5;
     // Particle tint used for the energized Red orb trail visuals.
     private static final Vector3f RED_TRAIL_COLOR = new Vector3f(0.95f, 0.15f, 0.1f);
+    // Normalized size of the client-visible Black Flash timing target arc for normal characters.
+    private static final float BF_TIMING_RED_SIZE = 0.045f;
+    // Yuji's Black Flash identity keeps a modestly easier target arc without making timed releases too forgiving.
+    private static final float BF_TIMING_RED_SIZE_YUJI = 0.075f;
+    // Yuji's timing needle completes a lap faster; 13 ticks is about 28% faster than the normal 18-tick lap.
+    private static final float BF_TIMING_PERIOD_TICKS_YUJI = 13.0f;
+    // Wider normalized edge tolerance for visual/input-boundary error; client decides timing against the visible red arc.
+    public static final float BF_TIMING_EDGE_TOLERANCE = 0.012f;
+    // Maximum normalized client/server needle drift accepted for normal diagnostics; visual-in-red client releases are not rejected unless drift is extreme.
+    private static final float BF_TIMING_CLIENT_DRIFT_TOLERANCE = 0.34f;
+    // Very large drift is still suspicious, but only rejects packets that are not visually inside the synced red arc.
+    private static final float BF_TIMING_EXTREME_DRIFT_TOLERANCE = 0.48f;
+    // Server grace window after charge release so a same-frame client release packet can arrive before cleanup.
+    private static final int BF_TIMING_RELEASE_PACKET_GRACE_TICKS = 6;
+    // Ignore sub-frame/client-race releases before the HUD/server session has had enough ticks to stabilize.
+    public static final int BF_TIMING_MIN_RELEASE_AGE_TICKS = 3;
+    // Keep the first visible target arc away from the t=0 needle so fresh rings do not bait instant releases.
+    private static final float BF_TIMING_INITIAL_NEEDLE_MIN_SEPARATION = 0.26f;
+    // Short grace only for diagnostics/legacy state; resolved casts are primarily gated by an explicit release/reset latch.
+    private static final int BF_RESOLVED_CAST_DEBOUNCE_TICKS = 4;
+    // cnt6 must leave the completed-cast charge state before another timing ring may start.
+    // This is intentionally a hard reset threshold: key-up/idle flags can become true while the base cast still holds cnt6 high.
+    private static final double BF_CHARGE_RETRIGGER_RESET_CNT6 = 1.0;
+    private static final String BF_STATE_IDLE = "IDLE";
+    private static final String BF_STATE_RING_ACTIVE = "RING_ACTIVE";
+    private static final String BF_STATE_WAITING_HIT = "WAITING_HIT";
+    private static final String BF_STATE_LOCKED_UNTIL_RESET = "LOCKED_UNTIL_RESET";
+    // Server ticks after a timed release where the next valid hit may consume the guaranteed Black Flash proc.
+    public static final int BF_GUARANTEE_TIMEOUT_TICKS = 40;
+    public static final int BF_FLOW_MAX = 8;
+    public static final int BF_FLOW_COOLDOWN_TICKS = 1200;
+    // Tunable one-shot celebration when the player completes all eight Black Flash timing flow hits.
+    private static final int BF_SPARKS_BLESSING_BUFF_TICKS = 160;
+    private static final int BF_SPARKS_SMOKE_RING_POINTS = 48;
+    private static final double BF_SPARKS_SMOKE_RING_RADIUS = 5.8;
+    private static final double BF_SPARKS_SHOCKWAVE_RADIUS = 4.6;
+    private static final boolean BF_BLESSING_BREAK_BLOCKS = true;
+    private static final int[] BF_BLESSING_BLOCK_BREAK_WAVE_RADII = new int[]{7, 11, 15, 20};
+    private static final int[] BF_BLESSING_BLOCK_BREAK_WAVE_CAPS = new int[]{80, 110, 140, 170};
+    private static final int[] BF_BLESSING_BLOCK_BREAK_WAVE_DELAYS = new int[]{0, 10, 20, 32};
+    private static final int BF_BLESSING_MAX_BLOCK_BREAKS = 500;
+    private static final float BF_BLESSING_MAX_BLOCK_HARDNESS = 2.4f;
+    private static final double BF_BLESSING_ENTITY_RADIUS = 7.0;
+    private static final DustParticleOptions BF_SPARKS_RED_DUST = new DustParticleOptions(new Vector3f(0.95f, 0.02f, 0.02f), 1.9f);
+    private static final DustParticleOptions BF_SPARKS_BLACK_DUST = new DustParticleOptions(new Vector3f(0.02f, 0.0f, 0.0f), 2.15f);
+    // Hard lifetime for an unconsumed timed success. Expiry sends explicit fail feedback instead of leaving TIMED pending.
+    private static final int BF_PENDING_SUCCESS_EXPIRE_TICKS = BF_GUARANTEE_TIMEOUT_TICKS;
+    // One full lap of the Black Flash timing needle for normal characters, in ticks.
+    public static final float BF_TIMING_PERIOD_TICKS = 18.0f;
+    // Base cnt6 charge required before the Black Flash timing session becomes available.
+    private static final double BF_CHARGE_REQUIRED_BASE = 5.0;
+    // Flow now makes the next timing session arrive sooner; the hard no-retrigger lock below still prevents same-cast phantom rings.
+    private static final double BF_CHARGE_REQUIRED_REDUCTION_PER_FLOW = 0.12;
+    private static final double BF_CHARGE_REQUIRED_MIN = 3.8;
     // Particle tint used for Blue-style support visuals around addon orb effects.
     private static final Vector3f BLUE_AURA_COLOR = new Vector3f(0.1f, 0.3f, 0.95f);
     // Forward offset used to anchor the charging Red orb in front of its owner.
@@ -250,92 +317,29 @@ public class BlueRedPurpleNukeMod {
     private static final double NORMAL_RED_DISTANCE_RADIUS_BONUS = 0.3;
     // Maximum bonus added to normal Red explosion knockback from long flight.
     private static final double NORMAL_RED_DISTANCE_KNOCKBACK_BONUS = 0.4;
-
-
-    public static final int BF_FLOW_MAX = 8;
-    public static final float BF_TIMING_PERIOD_TICKS = 18.0f;
-
-    public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle, long clientNonce) {
-        if (player == null) {
-            return;
-        }
-        CompoundTag data = player.getPersistentData();
-        long serverNonce = data.getLong("addon_bf_timing_nonce");
-        boolean nonceMatches = clientNonce == 0L || serverNonce == 0L || clientNonce == serverNonce;
-        boolean canRelease = releasedFromCharge && data.getBoolean("addon_bf_charging") && nonceMatches;
-        if (!canRelease) {
-            ModNetworking.sendBlackFlashFeedback(player, false, false);
-            ModNetworking.sendBlackFlashSync(player);
-            return;
-        }
-        data.putBoolean("addon_bf_waiting_hit", true);
-        data.putBoolean("addon_bf_released", true);
-        data.putBoolean("addon_bf_timing_resolved", true);
-        data.putBoolean("addon_bf_guaranteed", true);
-        data.putBoolean("addon_bf_charging", false);
-        data.putLong("addon_bf_guarantee_nonce", clientNonce != 0L ? clientNonce : serverNonce);
-        data.putLong("addon_bf_release_tick", player.level().getGameTime());
-        data.putFloat("addon_bf_release_needle", clientNeedle);
-        player.displayClientMessage(Component.literal("§6Black Flash timing locked - land the hit!"), true);
-        ModNetworking.sendBlackFlashFeedback(player, true, false);
-        ModNetworking.sendBlackFlashSync(player);
-    }
-
-    public static void handleGojoShiftTapPacket(ServerPlayer player) {
-        if (player == null || !(player.level() instanceof ServerLevel serverLevel)) {
-            return;
-        }
-        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
-        double activeTechnique = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
-        if ((int)Math.round(activeTechnique) != 2 || (int)Math.round(vars.PlayerSelectCurseTechnique) != 7) {
-            return;
-        }
-        Vec3 eyePos = player.getEyePosition(1.0f);
-        Vec3 lookVec = player.getLookAngle().normalize();
-        double cosThreshold = Math.cos(Math.toRadians(AIM_CONE_ANGLE));
-        LivingEntity target = null;
-        double bestScore = Double.MAX_VALUE;
-        List<LivingEntity> candidates = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(player.position(), player.position()).inflate(TELEPORT_RANGE), e -> e.isAlive() && e != player && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
-        for (LivingEntity candidate : candidates) {
-            Vec3 toEntity = candidate.position().add(0.0, (double)candidate.getBbHeight() * 0.5, 0.0).subtract(eyePos);
-            double dist = toEntity.length();
-            if (dist < 1.0 || dist > TELEPORT_RANGE) {
-                continue;
-            }
-            double dot = lookVec.dot(toEntity.normalize());
-            if (dot < cosThreshold) {
-                continue;
-            }
-            double score = dist + (1.0 - dot) * 10.0;
-            if (score < bestScore) {
-                bestScore = score;
-                target = candidate;
-            }
-        }
-        if (target == null) {
-            player.displayClientMessage(Component.literal("§7[Gojo] No teleport target in sight."), true);
-            return;
-        }
-        Vec3 oldPos = player.position();
-        Vec3 targetPos = target.position();
-        Vec3 dirToOwner = player.position().subtract(targetPos);
-        if (dirToOwner.lengthSqr() < 1.0E-6) {
-            dirToOwner = lookVec.reverse();
-        }
-        Vec3 behindPos = targetPos.subtract(dirToOwner.normalize().scale(BEHIND_DISTANCE));
-        behindPos = new Vec3(behindPos.x, target.getY(), behindPos.z);
-        double dx = target.getX() - behindPos.x;
-        double dz = target.getZ() - behindPos.z;
-        float newYaw = (float)(Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-        double dy = target.getY() + (double)target.getBbHeight() * 0.5 - (behindPos.y + (double)player.getEyeHeight());
-        double horizDist = Math.sqrt(dx * dx + dz * dz);
-        float newPitch = (float)(-Math.toDegrees(Math.atan2(dy, horizDist)));
-        ModNetworking.sendGojoTeleportGhost(player, oldPos.x, oldPos.y, oldPos.z, player.getYRot(), 12);
-        player.teleportTo(serverLevel, behindPos.x, behindPos.y, behindPos.z, newYaw, newPitch);
-        serverLevel.sendParticles((ParticleOptions)ParticleTypes.REVERSE_PORTAL, oldPos.x, oldPos.y + 1.0, oldPos.z, 24, 0.4, 0.8, 0.4, 0.08);
-        serverLevel.sendParticles((ParticleOptions)ParticleTypes.REVERSE_PORTAL, behindPos.x, behindPos.y + 1.0, behindPos.z, 32, 0.5, 0.9, 0.5, 0.1);
-        serverLevel.playSound(null, BlockPos.containing((Position)behindPos), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 1.4f, 1.2f);
-    }
+    // Gojo double-shift teleport: cursed energy cost paid up front when the blink is armed.
+    private static final double GOJO_TELEPORT_CE_COST = 60.0;
+    // Gojo double-shift teleport cooldown after the delayed blink resolves.
+    private static final int GOJO_TELEPORT_COOLDOWN_TICKS = 60;
+    // Maximum ticks between two crouch rising edges for the double-shift trigger.
+    private static final int GOJO_TELEPORT_DOUBLE_SHIFT_WINDOW = 12;
+    // Startup delay before the server moves the player to the calculated destination.
+    private static final int GOJO_TELEPORT_DELAY_TICKS = 5;
+    // Maximum server-side raycast distance in the player's look direction.
+    private static final double GOJO_TELEPORT_RANGE = 18.0;
+    // Short lockout so the first crouch ticks used to arm teleport do not immediately over-feed Infinity Crusher.
+    private static final int GOJO_TELEPORT_CRUSHER_SUPPRESS_TICKS = 4;
+    private static final String GOJO_TP_CD = "addon_gojo_tp_cd";
+    private static final String GOJO_TP_LAST_SHIFT_TICK = "addon_gojo_tp_last_shift_tick";
+    private static final String GOJO_TP_PENDING = "addon_gojo_tp_pending";
+    private static final String GOJO_TP_EXECUTE_TICK = "addon_gojo_tp_execute_tick";
+    private static final String GOJO_TP_TARGET_X = "addon_gojo_tp_target_x";
+    private static final String GOJO_TP_TARGET_Y = "addon_gojo_tp_target_y";
+    private static final String GOJO_TP_TARGET_Z = "addon_gojo_tp_target_z";
+    private static final String GOJO_TP_YAW = "addon_gojo_tp_yaw";
+    private static final String GOJO_TP_PITCH = "addon_gojo_tp_pitch";
+    private static final String GOJO_TP_CRUSHER_SUPPRESS_UNTIL = "addon_gojo_tp_crusher_suppress_until";
+    private static final List<BlackFlashBlessingWaveSession> BF_BLESSING_WAVE_SESSIONS = new ArrayList<>();
 
     /**
      * Initializes the addon mod, registers custom entities, subscribes Forge event listeners, and prepares the networking channel.
@@ -349,15 +353,101 @@ public class BlueRedPurpleNukeMod {
         ModNetworking.register();
     }
 
+    public static void registerEntityAttributes(EntityAttributeCreationEvent event) {
+        event.put(LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), Villager.createAttributes().build());
+    }
+
     @SubscribeEvent
     // ===== FORGE EVENT REGISTRATION =====
     public void onRegisterCommands(RegisterCommandsEvent event) {
-        DomainMasteryCommands.register((CommandDispatcher<CommandSourceStack>)event.getDispatcher());
-        YutaFakePlayerCommands.register((CommandDispatcher<CommandSourceStack>)event.getDispatcher());
+        CommandDispatcher<CommandSourceStack> dispatcher = (CommandDispatcher<CommandSourceStack>)event.getDispatcher();
+        DomainMasteryCommands.register(dispatcher);
+        YutaFakePlayerCommands.register(dispatcher);
+        dispatcher.register(Commands.literal("jjkbrp_bf_reset_timing_cd").requires(src -> src.hasPermission(0)).executes(ctx -> BlueRedPurpleNukeMod.resetBlackFlashTimingCooldown(ctx.getSource())));
+        dispatcher.register(Commands.literal("jjkbrp_bf_test_effects").requires(src -> src.hasPermission(0))
+                .then(Commands.literal("completion").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashCompletionEffects(ctx.getSource())))
+                .then(Commands.literal("blackflash").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashHudFeedback(ctx.getSource(), true, true)))
+                .then(Commands.literal("released").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashHudFeedback(ctx.getSource(), true, false)))
+                .then(Commands.literal("failed").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashHudFeedback(ctx.getSource(), false, false)))
+                .then(Commands.literal("ring").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashTimingRing(ctx.getSource()))));
     }
 
-    public static void registerEntityAttributes(EntityAttributeCreationEvent event) {
-        event.put(LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), Villager.createAttributes().build());
+    private static int resetBlackFlashTimingCooldown(CommandSourceStack source) {
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            CompoundTag data = player.getPersistentData();
+            data.putInt("addon_bf_flow_cd", 0);
+            data.putInt("addon_bf_flow", 0);
+            data.putBoolean("addon_bf_guaranteed", false);
+            data.putBoolean("addon_bf_waiting_hit", false);
+            data.putBoolean("addon_bf_released", false);
+            data.putBoolean("addon_bf_timing_resolved", false);
+            data.putBoolean("addon_bf_resolved_cooldown", false);
+            data.putBoolean("addon_bf_no_retrigger_until_cnt6_drop", false);
+            data.remove("addon_bf_no_retrigger_tick");
+            BlueRedPurpleNukeMod.clearBlackFlashRuntimeState(player);
+            ModNetworking.sendBlackFlashSync(player);
+            source.sendSuccess(() -> Component.literal("Reset Black Flash timing cooldown and flow."), false);
+            return 1;
+        } catch (Exception e) {
+            source.sendFailure(Component.literal("This command must be run by a player."));
+            return 0;
+        }
+    }
+
+    private static int testBlackFlashCompletionEffects(CommandSourceStack source) {
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            CompoundTag data = player.getPersistentData();
+            data.putInt("addon_bf_flow", BF_FLOW_MAX);
+            data.putInt("addon_bf_flow_cd", 0);
+            ModNetworking.sendBlackFlashSync(player);
+            BlueRedPurpleNukeMod.playBlackFlashFlowBlessingEffects(player);
+            source.sendSuccess(() -> Component.literal("Played Black Flash 8/8 completion effect."), false);
+            return 1;
+        } catch (Exception e) {
+            source.sendFailure(Component.literal("This command must be run by a player."));
+            return 0;
+        }
+    }
+
+    private static int testBlackFlashHudFeedback(CommandSourceStack source, boolean success, boolean confirmedHit) {
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            CompoundTag data = player.getPersistentData();
+            data.putInt("addon_bf_flow", confirmedHit ? BF_FLOW_MAX : Math.max(1, data.getInt("addon_bf_flow")));
+            data.putInt("addon_bf_flow_cd", 0);
+            ModNetworking.sendBlackFlashSync(player);
+            ModNetworking.sendBlackFlashFeedback(player, success, confirmedHit);
+            source.sendSuccess(() -> Component.literal("Played Black Flash HUD feedback: success=" + success + ", confirmedHit=" + confirmedHit + "."), false);
+            return 1;
+        } catch (Exception e) {
+            source.sendFailure(Component.literal("This command must be run by a player."));
+            return 0;
+        }
+    }
+
+    private static int testBlackFlashTimingRing(CommandSourceStack source) {
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            CompoundTag data = player.getPersistentData();
+            long nowTick = player.serverLevel().getGameTime();
+            data.putInt("addon_bf_flow", Math.max(1, data.getInt("addon_bf_flow")));
+            data.putInt("addon_bf_flow_cd", 0);
+            data.putBoolean("addon_bf_charging", true);
+            BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_RING_ACTIVE);
+            data.putLong("addon_bf_timing_start_tick", nowTick);
+            data.putFloat("addon_bf_timing_period_ticks", BF_TIMING_PERIOD_TICKS);
+            data.putFloat("addon_bf_timing_red_start", 0.72f);
+            data.putFloat("addon_bf_timing_red_size", BF_TIMING_RED_SIZE);
+            data.putLong("addon_bf_timing_nonce", nowTick == 0L ? 1L : nowTick);
+            ModNetworking.sendBlackFlashSync(player);
+            source.sendSuccess(() -> Component.literal("Started Black Flash timing ring test."), false);
+            return 1;
+        } catch (Exception e) {
+            source.sendFailure(Component.literal("This command must be run by a player."));
+            return 0;
+        }
     }
 
     @SubscribeEvent
@@ -371,9 +461,17 @@ public class BlueRedPurpleNukeMod {
             ServerPlayer player2 = (ServerPlayer)player;
             BlueRedPurpleNukeMod.resetInfinityCrusher(player2);
         }
-        DomainAddonUtils.cleanupDomainRuntimeState((LivingEntity)player);
     }
 
+    // ===== SERVER TICK HELPERS =====
+
+    @SubscribeEvent
+    public void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
+        BlueRedPurpleNukeMod.tickBlackFlashBlessingWaveSessions();
+    }
 
     @SubscribeEvent
     // ===== ENTITY TICK HANDLERS =====
@@ -407,6 +505,50 @@ public class BlueRedPurpleNukeMod {
     }
 
     @SubscribeEvent
+    public void onLivingAttackForBlackFlashConfirm(LivingAttackEvent event) {
+        if (event == null || event.getEntity() == null || event.getEntity().level().isClientSide() || event.getAmount() <= 0.0f) {
+            return;
+        }
+        LivingEntity target = event.getEntity();
+        Entity attacker = event.getSource().getEntity();
+        Entity direct = event.getSource().getDirectEntity();
+        BlueRedPurpleNukeMod.tryConfirmBlackFlashDamageHit(target, attacker, direct, "living_attack");
+    }
+
+    @SubscribeEvent
+    public void onLivingHurtForBlackFlashConfirm(LivingHurtEvent event) {
+        if (event == null || event.getEntity() == null || event.getEntity().level().isClientSide() || event.getAmount() <= 0.0f) {
+            return;
+        }
+        LivingEntity target = event.getEntity();
+        Entity attacker = event.getSource().getEntity();
+        Entity direct = event.getSource().getDirectEntity();
+        BlueRedPurpleNukeMod.tryConfirmBlackFlashDamageHit(target, attacker, direct, "living_hurt");
+    }
+
+    @SubscribeEvent
+    public void onLivingDamageForBlackFlashConfirm(LivingDamageEvent event) {
+        if (event == null || event.getEntity() == null || event.getEntity().level().isClientSide() || event.getAmount() <= 0.0f) {
+            return;
+        }
+        LivingEntity target = event.getEntity();
+        Entity attacker = event.getSource().getEntity();
+        Entity direct = event.getSource().getDirectEntity();
+        BlueRedPurpleNukeMod.tryConfirmBlackFlashDamageHit(target, attacker, direct, "living_damage");
+    }
+
+    @SubscribeEvent
+    public void onAttackEntityForBlackFlashConfirm(AttackEntityEvent event) {
+        if (event == null || event.getEntity() == null || event.getTarget() == null || event.getEntity().level().isClientSide()) {
+            return;
+        }
+        if (!(event.getEntity() instanceof ServerPlayer owner) || !(event.getTarget() instanceof LivingEntity target)) {
+            return;
+        }
+        BlueRedPurpleNukeMod.tryConfirmBlackFlashCombatHit(owner, target, "attack_entity");
+    }
+
+    @SubscribeEvent
     // ===== PLAYER TICK HANDLERS =====
     public void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) {
@@ -420,12 +562,14 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         ServerPlayer player2 = (ServerPlayer)player;
-        BlueRedPurpleNukeMod.handleInfinityCrusher(player2);
-        BlueRedPurpleNukeMod.handleBlackFlashCharge(player2);
-        BlueRedPurpleNukeMod.handleDomainBFBoostCleanup(player2);
-        if (!player2.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) && DomainAddonUtils.hasActiveDomainExpansion(player2)) {
-            DomainAddonUtils.cleanupDomainRuntimeState((LivingEntity)player2);
+        boolean teleportConsumedOrSuppressesCrusher = BlueRedPurpleNukeMod.handleGojoDoubleShiftTeleport(player2);
+        if (!teleportConsumedOrSuppressesCrusher) {
+            BlueRedPurpleNukeMod.handleInfinityCrusher(player2);
         }
+        BlueRedPurpleNukeMod.tickBlackFlashFlowCooldown(player2);
+        BlueRedPurpleNukeMod.handleBlackFlashCharge(player2);
+        BlueRedPurpleNukeMod.expireBlackFlashGuaranteeIfNeeded(player2, player2.getPersistentData());
+        BlueRedPurpleNukeMod.handleDomainBFBoostCleanup(player2);
     }
 
     // ===== BLACK FLASH SUPPORT =====
@@ -457,33 +601,946 @@ public class BlueRedPurpleNukeMod {
         }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         int selectId = (int)Math.round(vars.PlayerSelectCurseTechnique);
-        if (selectId > 2) {
-            if (data.getBoolean("addon_bf_charging")) {
-                data.putBoolean("addon_bf_charging", false);
-                data.putBoolean("addon_bf_guaranteed", false);
+        double cnt6 = data.getDouble("cnt6");
+        double skillTag = data.getDouble("skill");
+        boolean resetReached = BlueRedPurpleNukeMod.shouldClearBlackFlashNoRetriggerLock(data, cnt6, skillTag);
+        String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
+        if (resetReached && !BF_STATE_IDLE.equals(state)) {
+            LOGGER.warn("[BlackFlashState] transition player={} {}->IDLE reason=charge_reset cnt6={} skill={}", new Object[]{player.getName().getString(), state, cnt6, skillTag});
+            BlueRedPurpleNukeMod.closeBlackFlashPendingWithFailure(player, data, "charge_reset");
+            BlueRedPurpleNukeMod.clearBlackFlashCastGates(data);
+            BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+            ModNetworking.sendBlackFlashSync(player);
+            state = BF_STATE_IDLE;
+        }
+        if (BlueRedPurpleNukeMod.isBlackFlashFlowCooldownActive(player)) {
+            if (!BF_STATE_LOCKED_UNTIL_RESET.equals(state)) {
+                BlueRedPurpleNukeMod.closeBlackFlashPendingWithFailure(player, data, "flow_cooldown_active");
+                BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+                BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
+                BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, player.serverLevel().getGameTime());
+                ModNetworking.sendBlackFlashSync(player);
             }
             return;
         }
-        double cnt6 = data.getDouble("cnt6");
-        double skillTag = data.getDouble("skill");
-        // The addon treats a nearly full melee charge as a Black Flash-ready window and upgrades it to guaranteed once the charge is high enough.
-        if (cnt6 >= 4.5 && skillTag != 0.0) {
-            if (!data.getBoolean("addon_bf_guaranteed")) {
-                data.putBoolean("addon_bf_guaranteed", true);
-                data.putBoolean("addon_bf_charging", true);
+        BlueRedPurpleNukeMod.expireBlackFlashGuaranteeIfNeeded(player, data);
+        state = BlueRedPurpleNukeMod.getBlackFlashState(data);
+        boolean pressZ = data.getBoolean("PRESS_Z");
+        boolean lastPressZ = data.contains("addon_bf_last_press_z") ? data.getBoolean("addon_bf_last_press_z") : pressZ;
+        data.putBoolean("addon_bf_last_press_z", pressZ);
+        boolean ringActive = BF_STATE_RING_ACTIVE.equals(state) && data.getBoolean("addon_bf_charging");
+        if (selectId > 2) {
+            if (ringActive) {
+                BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, false);
             }
-        } else if (cnt6 > 0.0 && skillTag != 0.0) {
-            data.putBoolean("addon_bf_charging", true);
-            data.putBoolean("addon_bf_charge_announced", false);
-        } else if (cnt6 <= 0.0 && skillTag == 0.0) {
-            data.putBoolean("addon_bf_charging", false);
-            data.putBoolean("addon_bf_charge_announced", false);
+            return;
         }
-        // The final announce gate only fires once per charge cycle to avoid flooding the action bar while the user holds the input.
-        if (cnt6 >= 5.0 && skillTag != 0.0 && !data.getBoolean("addon_bf_charge_announced")) {
+        if (ringActive && lastPressZ && !pressZ && data.getLong("addon_bf_timing_nonce") != 0L) {
+            float serverNeedle = BlueRedPurpleNukeMod.computeBlackFlashNeedle(player.serverLevel().getGameTime() - data.getLong("addon_bf_timing_start_tick"), 0.0f, BlueRedPurpleNukeMod.getBlackFlashTimingPeriodTicks(data));
+            LOGGER.warn("[BlackFlashReleaseDiag] server detected OG PRESS_Z release edge player={} state={} nonce={} needle={}", new Object[]{player.getName().getString(), state, data.getLong("addon_bf_timing_nonce"), serverNeedle});
+            BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, serverNeedle, data.getLong("addon_bf_timing_nonce"), false);
+            return;
+        }
+        if (!BF_STATE_IDLE.equals(state)) {
+            return;
+        }
+        double requiredCharge = BlueRedPurpleNukeMod.getBlackFlashRequiredCharge(data);
+        if (cnt6 >= requiredCharge && skillTag != 0.0 && data.getInt("addon_bf_flow_cd") <= 0) {
+            BlueRedPurpleNukeMod.startBlackFlashTiming(player, data);
+        }
+    }
+
+    private static boolean shouldClearBlackFlashNoRetriggerLock(CompoundTag data, double cnt6, double skillTag) {
+        return skillTag == 0.0 || cnt6 <= BF_CHARGE_RETRIGGER_RESET_CNT6;
+    }
+
+    private static String getBlackFlashState(CompoundTag data) {
+        return data == null ? BF_STATE_IDLE : BlueRedPurpleNukeMod.normalizeBlackFlashState(data.getString("addon_bf_state"));
+    }
+
+    private static String normalizeBlackFlashState(String state) {
+        if (BF_STATE_RING_ACTIVE.equals(state) || BF_STATE_WAITING_HIT.equals(state) || BF_STATE_LOCKED_UNTIL_RESET.equals(state)) {
+            return state;
+        }
+        if ("RESOLVED_LOCK".equals(state)) {
+            return BF_STATE_LOCKED_UNTIL_RESET;
+        }
+        return BF_STATE_IDLE;
+    }
+
+    private static void setBlackFlashState(CompoundTag data, String state) {
+        data.putString("addon_bf_state", BlueRedPurpleNukeMod.normalizeBlackFlashState(state));
+    }
+
+    private static void clearBlackFlashCastGates(CompoundTag data) {
+        data.putBoolean("addon_bf_resolved_cooldown", false);
+        data.putBoolean("addon_bf_block_until_charge_released", false);
+        data.putBoolean("addon_bf_no_retrigger_until_cnt6_drop", false);
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_timing_resolved", false);
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_timed_feedback_sent", false);
+        data.putBoolean("addon_bf_expire_feedback_sent", false);
+        data.remove("addon_bf_release_tick");
+        data.remove("addon_bf_guarantee_nonce");
+        data.remove("addon_bf_resolved_cooldown_tick");
+        data.remove("addon_bf_resolved_cnt6");
+        data.remove("addon_bf_no_retrigger_tick");
+        data.putBoolean("addon_bf_seen_charge_reset", false);
+        BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_IDLE);
+    }
+
+    private static void armBlackFlashResolvedCastGate(CompoundTag data, long nowTick) {
+        data.putBoolean("addon_bf_resolved_cooldown", true);
+        data.putBoolean("addon_bf_block_until_charge_released", true);
+        data.putBoolean("addon_bf_no_retrigger_until_cnt6_drop", true);
+        data.putLong("addon_bf_resolved_cooldown_tick", nowTick);
+        data.putLong("addon_bf_no_retrigger_tick", nowTick);
+        data.putDouble("addon_bf_resolved_cnt6", data.getDouble("cnt6"));
+        data.putBoolean("addon_bf_seen_charge_reset", false);
+        BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_LOCKED_UNTIL_RESET);
+    }
+
+    private static double getBlackFlashRequiredCharge(CompoundTag data) {
+        int flow = data == null ? 0 : Math.max(0, Math.min(BF_FLOW_MAX, data.getInt("addon_bf_flow")));
+        // Red/Blue charge state in the base mod caps around cnt6=5.0. Keep ring start under that cap,
+        // and make higher flow feel faster by shaving a small amount per confirmed Black Flash.
+        return Math.max(BF_CHARGE_REQUIRED_MIN, BF_CHARGE_REQUIRED_BASE - (double)flow * BF_CHARGE_REQUIRED_REDUCTION_PER_FLOW);
+    }
+
+    private static void startBlackFlashTiming(ServerPlayer player, CompoundTag data) {
+        String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
+        if (!BF_STATE_IDLE.equals(state) || data.getBoolean("addon_bf_no_retrigger_until_cnt6_drop")) {
+            LOGGER.warn("[BlackFlashReleaseDiag] blocked timing start player={} state={} cnt6={} skill={} noRetrigger={}", new Object[]{player.getName().getString(), state, data.getDouble("cnt6"), data.getDouble("skill"), data.getBoolean("addon_bf_no_retrigger_until_cnt6_drop")});
+            return;
+        }
+        BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_RING_ACTIVE);
+        data.putBoolean("addon_bf_seen_charge_reset", false);
+        data.putBoolean("addon_bf_charging", true);
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_timing_resolved", false);
+        data.putBoolean("addon_bf_timed_feedback_sent", false);
+        data.putBoolean("addon_bf_expire_feedback_sent", false);
+        boolean yuji = BlueRedPurpleNukeMod.isYuji(player);
+        data.putLong("addon_bf_timing_nonce", data.getLong("addon_bf_timing_nonce") + 1L);
+        data.putLong("addon_bf_timing_start_tick", player.serverLevel().getGameTime());
+        float basePeriod = yuji ? BF_TIMING_PERIOD_TICKS_YUJI : BF_TIMING_PERIOD_TICKS;
+        int flow = Math.max(0, Math.min(BF_FLOW_MAX, data.getInt("addon_bf_flow")));
+        data.putFloat("addon_bf_timing_period_ticks", Math.max(6.0f, basePeriod - (float)flow * (yuji ? 0.65f : 0.85f)));
+        float redSize = yuji ? BF_TIMING_RED_SIZE_YUJI : BF_TIMING_RED_SIZE;
+        data.putFloat("addon_bf_timing_red_start", BlueRedPurpleNukeMod.chooseBlackFlashRedStartAwayFromInitialNeedle(player, redSize));
+        data.putFloat("addon_bf_timing_red_size", redSize);
+        if (!data.getBoolean("addon_bf_charge_announced")) {
             data.putBoolean("addon_bf_charge_announced", true);
-            player.displayClientMessage((Component)Component.literal((String)"\u00a7l\"Black Flash\""), false);
         }
+        LOGGER.warn("[BlackFlashTimingDiag] START nonce={} state={} flow={} redStart={} redSize={} period={} startTick={}", new Object[]{data.getLong("addon_bf_timing_nonce"), BlueRedPurpleNukeMod.getBlackFlashState(data), flow, data.getFloat("addon_bf_timing_red_start"), data.getFloat("addon_bf_timing_red_size"), data.getFloat("addon_bf_timing_period_ticks"), data.getLong("addon_bf_timing_start_tick")});
+        ModNetworking.sendBlackFlashSync(player);
+    }
+
+    public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge) {
+        BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, releasedFromCharge, Float.NaN, 0L, false);
+    }
+
+    public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle) {
+        BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, releasedFromCharge, clientNeedle, 0L, false);
+    }
+
+    public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle, long clientNonce) {
+        BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, releasedFromCharge, clientNeedle, clientNonce, false);
+    }
+
+    public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle, long clientNonce, boolean clientTimingSuccess) {
+        CompoundTag data = player.getPersistentData();
+        String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
+        long serverNonce = data.getLong("addon_bf_timing_nonce");
+        boolean charging = data.getBoolean("addon_bf_charging");
+        boolean sameNonce = clientNonce != 0L && clientNonce == serverNonce;
+        if (!releasedFromCharge || !BF_STATE_RING_ACTIVE.equals(state) || !charging) {
+            String rejectReason = !releasedFromCharge ? "not_released_from_charge" : (!BF_STATE_RING_ACTIVE.equals(state) ? "state_" + state.toLowerCase(Locale.ROOT) : "not_charging");
+            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason={} nonce={} clientNeedle={} state={} age={}", new Object[]{rejectReason, clientNonce != 0L ? clientNonce : serverNonce, clientNeedle, state, BlueRedPurpleNukeMod.getBlackFlashTimingAge(player, data)});
+            LOGGER.warn("[BlackFlashReleaseDiag] invalid/stale release rejected player={} state={} releasedFromCharge={} charging={} clientNonce={} serverNonce={} sameNonce={}", new Object[]{player.getName().getString(), state, releasedFromCharge, charging, clientNonce, serverNonce, sameNonce});
+            if (BF_STATE_RING_ACTIVE.equals(state) && !releasedFromCharge) {
+                BlueRedPurpleNukeMod.handleBlackFlashFlowFailure(player, data, "not_released_from_charge");
+                BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "not_released_from_charge");
+                BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, player.serverLevel().getGameTime());
+            } else if (sameNonce) {
+                BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "release_rejected_state_" + state.toLowerCase(Locale.ROOT));
+            }
+            BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+            ModNetworking.sendBlackFlashSync(player);
+            return;
+        }
+        if (clientNonce != serverNonce || serverNonce == 0L) {
+            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason=nonce_mismatch nonce={} clientNeedle={} state={} age={}", new Object[]{clientNonce, clientNeedle, state, BlueRedPurpleNukeMod.getBlackFlashTimingAge(player, data)});
+            LOGGER.warn("[BlackFlashReleaseDiag] stale release packet sync-clear player={} state={} clientNonce={} serverNonce={} charging={}", new Object[]{player.getName().getString(), state, clientNonce, serverNonce, charging});
+            BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "release_nonce_mismatch");
+            BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+            ModNetworking.sendBlackFlashSync(player);
+            return;
+        }
+        float redSize = Math.max(0.01f, data.getFloat("addon_bf_timing_red_size"));
+        float redStart = BlueRedPurpleNukeMod.frac(data.getFloat("addon_bf_timing_red_start"));
+        long nowTick = player.serverLevel().getGameTime();
+        long elapsed = nowTick - data.getLong("addon_bf_timing_start_tick");
+        if (elapsed >= 0L && elapsed < (long)BF_TIMING_MIN_RELEASE_AGE_TICKS) {
+            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason=too_early nonce={} clientNeedle={} state={} age={}", new Object[]{serverNonce, clientNeedle, state, elapsed});
+            LOGGER.warn("[BlackFlashReleaseDiag] early release ignored player={} nonce={} age={} minAge={} redStart={} redSize={}", new Object[]{player.getName().getString(), serverNonce, elapsed, BF_TIMING_MIN_RELEASE_AGE_TICKS, redStart, redSize});
+            BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "release_too_early");
+            BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+            BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, nowTick);
+            ModNetworking.sendBlackFlashSync(player);
+            return;
+        }
+        float serverNeedle = BlueRedPurpleNukeMod.computeBlackFlashNeedle(elapsed, 0.0f, BlueRedPurpleNukeMod.getBlackFlashTimingPeriodTicks(data));
+        float normalizedClientNeedle = BlueRedPurpleNukeMod.frac(clientNeedle);
+        boolean clientProvided = !Float.isNaN(clientNeedle) && !Float.isInfinite(clientNeedle);
+        boolean staleByAge = elapsed < 0L || elapsed > 80L;
+        float clientSelfCheckTolerance = Math.max(BF_TIMING_EDGE_TOLERANCE, 0.018f);
+        boolean clientVisiblyInsideRed = clientProvided && BlueRedPurpleNukeMod.isBlackFlashNeedleInRedArc(normalizedClientNeedle, redStart, redSize, clientSelfCheckTolerance);
+        boolean serverInsideRed = BlueRedPurpleNukeMod.isBlackFlashNeedleInRedArc(serverNeedle, redStart, redSize, BF_TIMING_EDGE_TOLERANCE);
+        float drift = clientProvided ? BlueRedPurpleNukeMod.circularDistance(normalizedClientNeedle, serverNeedle) : 1.0f;
+        boolean clientSelfConsistent = clientTimingSuccess == clientVisiblyInsideRed;
+        boolean driftExtreme = drift > BF_TIMING_EXTREME_DRIFT_TOLERANCE;
+        boolean success = !staleByAge && clientTimingSuccess && clientSelfConsistent;
+        String reason = success ? "client_visible_window" : (staleByAge ? "stale_age" : (!clientTimingSuccess ? "client_missed_window" : (!clientSelfConsistent ? "client_success_mismatch" : "unknown")));
+        LOGGER.warn("[BlackFlashTimingDiag] {} reason={} nonce={} clientNeedle={} state={} age={}", new Object[]{success ? "RELEASE_ACCEPT" : "RELEASE_REJECT", reason, serverNonce, normalizedClientNeedle, state, elapsed});
+        LOGGER.warn("[BlackFlashState] release player={} nonce={} {}->{} success={} clientTimingSuccess={} clientNeedle={} clientVisiblyInsideRed={} clientSelfConsistent={} serverNeedle={} serverInsideRed={} drift={} driftExtreme={} redStart={} redSize={}", new Object[]{player.getName().getString(), serverNonce, state, success ? BF_STATE_WAITING_HIT : BF_STATE_LOCKED_UNTIL_RESET, success, clientTimingSuccess, normalizedClientNeedle, clientVisiblyInsideRed, clientSelfConsistent, serverNeedle, serverInsideRed, drift, driftExtreme, redStart, redSize});
+        BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+        data.putBoolean("addon_bf_timing_resolved", true);
+        data.putBoolean("addon_bf_released", true);
+        data.putLong("addon_bf_last_resolved_nonce", serverNonce);
+        if (success) {
+            data.putBoolean("addon_bf_waiting_hit", true);
+            data.putBoolean("addon_bf_guaranteed", true);
+            data.putLong("addon_bf_release_tick", nowTick);
+            data.putLong("addon_bf_guarantee_nonce", serverNonce);
+            data.putBoolean("addon_bf_timed_feedback_sent", true);
+            BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_WAITING_HIT);
+            ModNetworking.sendBlackFlashFeedback(player, true, false);
+        } else {
+            data.putBoolean("addon_bf_waiting_hit", false);
+            data.putBoolean("addon_bf_guaranteed", false);
+            data.remove("addon_bf_release_tick");
+            data.remove("addon_bf_guarantee_nonce");
+            BlueRedPurpleNukeMod.handleBlackFlashFlowFailure(player, data, "release_missed_window");
+            BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "release_missed_window");
+            BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, nowTick);
+        }
+        ModNetworking.sendBlackFlashSync(player);
+    }
+
+    private static float computeBlackFlashNeedle(long elapsedTicks, float partialTick, float periodTicks) {
+        return BlueRedPurpleNukeMod.frac(((float)Math.max(0L, elapsedTicks) + partialTick) / Math.max(1.0f, periodTicks));
+    }
+
+    private static float getBlackFlashTimingPeriodTicks(CompoundTag data) {
+        return data != null && data.contains("addon_bf_timing_period_ticks") ? Math.max(1.0f, data.getFloat("addon_bf_timing_period_ticks")) : BF_TIMING_PERIOD_TICKS;
+    }
+
+    private static float chooseBlackFlashRedStartAwayFromInitialNeedle(ServerPlayer player, float redSize) {
+        float randomStart = player != null ? player.getRandom().nextFloat() : 0.5f;
+        float safeSize = Math.max(0.01f, Math.min(0.95f, redSize));
+        float minSep = Math.max(BF_TIMING_INITIAL_NEEDLE_MIN_SEPARATION, safeSize + 0.06f);
+        float distFromNeedleZero = Math.min(BlueRedPurpleNukeMod.frac(randomStart), 1.0f - BlueRedPurpleNukeMod.frac(randomStart + safeSize));
+        if (distFromNeedleZero >= minSep) {
+            return BlueRedPurpleNukeMod.frac(randomStart);
+        }
+        float safeSpan = Math.max(0.02f, 1.0f - safeSize - minSep * 2.0f);
+        return BlueRedPurpleNukeMod.frac(minSep + (player != null ? player.getRandom().nextFloat() : 0.5f) * safeSpan);
+    }
+
+    private static boolean isYuji(ServerPlayer player) {
+        if (player == null) {
+            return false;
+        }
+        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+        double activeTech = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
+        return (int)Math.round(activeTech) == 21;
+    }
+
+    public static boolean isBlackFlashNeedleInRedArc(float needle, float redStart, float redSize, float tolerance) {
+        float clampedSize = Math.max(0.01f, Math.min(1.0f, redSize));
+        float edgeTolerance = Math.max(0.0f, tolerance);
+        float delta = BlueRedPurpleNukeMod.frac(needle - redStart);
+        return delta <= clampedSize + edgeTolerance || delta >= 1.0f - edgeTolerance;
+    }
+
+    private static float circularDistance(float a, float b) {
+        float delta = Math.abs(BlueRedPurpleNukeMod.frac(a) - BlueRedPurpleNukeMod.frac(b));
+        return Math.min(delta, 1.0f - delta);
+    }
+
+    private static float frac(float value) {
+        return value - (float)Math.floor(value);
+    }
+
+    private static long getBlackFlashTimingAge(ServerPlayer player, CompoundTag data) {
+        if (player == null || data == null || !data.contains("addon_bf_timing_start_tick")) {
+            return -1L;
+        }
+        return player.serverLevel().getGameTime() - data.getLong("addon_bf_timing_start_tick");
+    }
+
+    private static void clearBlackFlashTiming(CompoundTag data) {
+        data.putBoolean("addon_bf_charging", false);
+        data.putBoolean("addon_bf_charge_announced", false);
+        data.putBoolean("addon_bf_release_pending", false);
+        data.remove("addon_bf_release_pending_tick");
+        data.remove("addon_bf_timing_start_tick");
+        data.remove("addon_bf_timing_period_ticks");
+        data.remove("addon_bf_timing_red_start");
+        data.remove("addon_bf_timing_red_size");
+    }
+
+    public static void clearBlackFlashRuntimeState(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        data.putInt("addon_bf_flow_cd", 0);
+        data.putInt("addon_bf_flow", 0);
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_timing_resolved", false);
+        data.putBoolean("addon_bf_resolved_cooldown", false);
+        data.putBoolean("addon_bf_no_retrigger_until_cnt6_drop", false);
+        data.putBoolean("addon_bf_block_until_charge_released", false);
+        data.putBoolean("addon_bf_timed_feedback_sent", false);
+        data.putBoolean("addon_bf_expire_feedback_sent", false);
+        data.putBoolean("addon_bf_seen_charge_reset", false);
+        data.remove("addon_bf_release_tick");
+        data.remove("addon_bf_guarantee_nonce");
+        data.remove("addon_bf_resolved_cooldown_tick");
+        data.remove("addon_bf_resolved_cnt6");
+        data.remove("addon_bf_no_retrigger_tick");
+        BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+        BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
+        BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_IDLE);
+        ModNetworking.sendBlackFlashSync(player);
+    }
+
+    public static boolean isBlackFlashGuaranteeActive(ServerPlayer player) {
+        if (player == null) {
+            return false;
+        }
+        if (BlueRedPurpleNukeMod.isBlackFlashFlowCooldownActive(player)) {
+            return false;
+        }
+        CompoundTag data = player.getPersistentData();
+        BlueRedPurpleNukeMod.expireBlackFlashGuaranteeIfNeeded(player, data);
+        return BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) && data.getBoolean("addon_bf_guaranteed") && data.getBoolean("addon_bf_waiting_hit") && data.contains("addon_bf_release_tick") && player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick") <= (long)BF_GUARANTEE_TIMEOUT_TICKS;
+    }
+
+    public static boolean consumeBlackFlashGuarantee(ServerPlayer player) {
+        if (!BlueRedPurpleNukeMod.isBlackFlashGuaranteeActive(player)) {
+            return false;
+        }
+        BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
+        return true;
+    }
+
+    public static void clearBlackFlashGuarantee(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_expire_feedback_sent", false);
+        data.remove("addon_bf_release_tick");
+        data.remove("addon_bf_guarantee_nonce");
+    }
+
+    public static void tryConfirmBlackFlashGuaranteeHit(ServerPlayer player, String source) {
+        if (player == null || !BlueRedPurpleNukeMod.isBlackFlashGuaranteeActive(player)) {
+            return;
+        }
+        LOGGER.warn("[BlackFlashReleaseDiag] direct guarantee confirm source={} player={}", new Object[]{source, player.getName().getString()});
+        BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, source);
+    }
+
+    public static void tryConfirmBlackFlashCombatHit(ServerPlayer player, LivingEntity target, String source) {
+        if (player == null || target == null || target == player || target.level().isClientSide()) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        if (!data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || !BlueRedPurpleNukeMod.isBlackFlashGuaranteeActive(player)) {
+            return;
+        }
+        if (!target.isAlive() && target.getHealth() <= 0.0f) {
+            return;
+        }
+        long age = player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick");
+        if (age < 0L || age > (long)BF_GUARANTEE_TIMEOUT_TICKS) {
+            return;
+        }
+        LOGGER.warn("[BlackFlashReleaseDiag] combat guarantee confirm source={} player={} target={} age={} nonce={}", new Object[]{source, player.getName().getString(), target.getType().toString(), age, data.getLong("addon_bf_guarantee_nonce")});
+        BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, source);
+    }
+
+    private static void tryConfirmBlackFlashDamageHit(LivingEntity target, Entity attacker, Entity direct, String source) {
+        if (target == null || target.level().isClientSide()) {
+            return;
+        }
+        ServerPlayer owner = BlueRedPurpleNukeMod.resolveBlackFlashDamageOwner(target.level(), attacker, direct, target);
+        if (owner != null) {
+            BlueRedPurpleNukeMod.tryConfirmBlackFlashCombatHit(owner, target, source);
+        }
+    }
+
+    private static ServerPlayer resolveBlackFlashDamageOwner(Level level, Entity attacker, Entity direct, LivingEntity target) {
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+        if (attacker instanceof ServerPlayer serverPlayer) {
+            return serverPlayer;
+        }
+        ServerPlayer owner = BlueRedPurpleNukeMod.resolveBlackFlashDamageOwnerFromEntity(serverLevel, attacker);
+        if (owner != null) {
+            return owner;
+        }
+        owner = BlueRedPurpleNukeMod.resolveBlackFlashDamageOwnerFromEntity(serverLevel, direct);
+        if (owner != null) {
+            return owner;
+        }
+        return BlueRedPurpleNukeMod.resolveBlackFlashWaitingOwnerNearTarget(serverLevel, target);
+    }
+
+    private static ServerPlayer resolveBlackFlashDamageOwnerFromEntity(ServerLevel serverLevel, Entity entity) {
+        if (entity == null) {
+            return null;
+        }
+        if (entity instanceof ServerPlayer serverPlayer) {
+            return serverPlayer;
+        }
+        String ownerUUID = entity.getPersistentData().getString("OWNER_UUID");
+        if (ownerUUID == null || ownerUUID.isEmpty()) {
+            ownerUUID = entity.getPersistentData().getString("OwnerUUID");
+        }
+        if (ownerUUID == null || ownerUUID.isEmpty()) {
+            ownerUUID = entity.getPersistentData().getString("owner_uuid");
+        }
+        if (ownerUUID == null || ownerUUID.isEmpty()) {
+            Entity ownerEntity = entity instanceof Projectile projectile ? projectile.getOwner() : null;
+            return ownerEntity instanceof ServerPlayer serverPlayer ? serverPlayer : null;
+        }
+        try {
+            return serverLevel.getServer().getPlayerList().getPlayer(UUID.fromString(ownerUUID));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static ServerPlayer resolveBlackFlashWaitingOwnerNearTarget(ServerLevel serverLevel, LivingEntity target) {
+        if (serverLevel == null || target == null) {
+            return null;
+        }
+        ServerPlayer best = null;
+        double bestDist = 100.0;
+        for (ServerPlayer candidate : serverLevel.players()) {
+            CompoundTag data = candidate.getPersistentData();
+            if (!data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || !data.contains("addon_bf_release_tick")) {
+                continue;
+            }
+            long age = candidate.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick");
+            if (age < 0L || age > (long)BF_GUARANTEE_TIMEOUT_TICKS) {
+                continue;
+            }
+            double dist = candidate.distanceToSqr(target);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = candidate;
+            }
+        }
+        if (best != null) {
+            LOGGER.warn("[BlackFlashReleaseDiag] fallback_owner_near_target player={} target={} distSq={}", new Object[]{best.getName().getString(), target.getType().toString(), bestDist});
+        }
+        return best;
+    }
+
+    public static boolean confirmBlackFlashGuaranteeHit(ServerPlayer player) {
+        return BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, "direct");
+    }
+
+    public static boolean confirmBlackFlashGuaranteeHit(ServerPlayer player, String source) {
+        if (player == null) {
+            return false;
+        }
+        CompoundTag data = player.getPersistentData();
+        long confirmedNonce = data.getLong("addon_bf_guarantee_nonce");
+        long confirmedAge = data.contains("addon_bf_release_tick") ? player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick") : -1L;
+        long lastConfirmedNonce = data.getLong("addon_bf_last_confirmed_nonce");
+        boolean stateActive = BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) && data.getBoolean("addon_bf_guaranteed") && data.getBoolean("addon_bf_waiting_hit") && data.contains("addon_bf_release_tick") && confirmedNonce != 0L;
+        boolean ageValid = confirmedAge >= 0L && confirmedAge <= (long)BF_GUARANTEE_TIMEOUT_TICKS;
+        if (!stateActive || !ageValid || lastConfirmedNonce == confirmedNonce) {
+            LOGGER.warn("[BlackFlashReleaseDiag] suppress duplicate/stale guarantee confirm source={} player={} nonce={} lastConfirmed={} age={} state={} stateActive={} ageValid={} guaranteed={} waitingHit={} flow={}", new Object[]{source, player.getName().getString(), confirmedNonce, lastConfirmedNonce, confirmedAge, BlueRedPurpleNukeMod.getBlackFlashState(data), stateActive, ageValid, data.getBoolean("addon_bf_guaranteed"), data.getBoolean("addon_bf_waiting_hit"), data.getInt("addon_bf_flow")});
+            return false;
+        }
+        data.putLong("addon_bf_last_confirmed_nonce", confirmedNonce);
+        BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
+        data.putBoolean("addon_bf_timed_feedback_sent", true);
+        data.putBoolean("addon_bf_expire_feedback_sent", true);
+        LOGGER.warn("[BlackFlashTimingDiag] HIT_CONFIRM nonce={} source={} event={} state={} age={}", new Object[]{confirmedNonce, source, source, BlueRedPurpleNukeMod.getBlackFlashState(data), confirmedAge});
+        LOGGER.warn("[BlackFlashReleaseDiag] confirmed guarantee hit source={} player={} nonce={} age={} flowBefore={}", new Object[]{source, player.getName().getString(), confirmedNonce, confirmedAge, data.getInt("addon_bf_flow")});
+        BlueRedPurpleNukeMod.advanceBlackFlashFlow(player, data);
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_timing_resolved", true);
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_charging", false);
+        BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+        BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, player.serverLevel().getGameTime());
+        ModNetworking.sendBlackFlashFeedback(player, true, true);
+        ModNetworking.sendBlackFlashSync(player);
+        return true;
+    }
+
+    private static void expireBlackFlashGuaranteeIfNeeded(ServerPlayer player, CompoundTag data) {
+        if (!data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || !data.contains("addon_bf_release_tick")) {
+            return;
+        }
+        long releaseTick = data.getLong("addon_bf_release_tick");
+        long guaranteeNonce = data.getLong("addon_bf_guarantee_nonce");
+        long age = player.serverLevel().getGameTime() - releaseTick;
+        if (age <= (long)BF_PENDING_SUCCESS_EXPIRE_TICKS) {
+            return;
+        }
+        if (!data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || data.getLong("addon_bf_release_tick") != releaseTick || data.getLong("addon_bf_guarantee_nonce") != guaranteeNonce) {
+            LOGGER.warn("[BlackFlashReleaseDiag] skip stale guarantee expiry player={} age={} nonce={} waitingHit={} guaranteed={}", new Object[]{player.getName().getString(), age, guaranteeNonce, data.getBoolean("addon_bf_waiting_hit"), data.getBoolean("addon_bf_guaranteed")});
+            return;
+        }
+        LOGGER.warn("[BlackFlashTimingDiag] TIMEOUT_FAIL nonce={} age={} state={}", new Object[]{guaranteeNonce, age, BlueRedPurpleNukeMod.getBlackFlashState(data)});
+        LOGGER.warn("[BlackFlashReleaseDiag] fail_reason=timeout_no_hit_confirm player={} age={} nonce={} waitingHit={} timedFeedbackSent={}", new Object[]{player.getName().getString(), age, guaranteeNonce, data.getBoolean("addon_bf_waiting_hit"), data.getBoolean("addon_bf_timed_feedback_sent")});
+        if (!data.getBoolean("addon_bf_expire_feedback_sent")) {
+            data.putBoolean("addon_bf_expire_feedback_sent", true);
+            ModNetworking.sendBlackFlashFeedback(player, false, false);
+        }
+        BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
+        BlueRedPurpleNukeMod.handleBlackFlashFlowFailure(player, data, "guarantee_expired");
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_waiting_hit", false);
+        BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, player.serverLevel().getGameTime());
+        ModNetworking.sendBlackFlashSync(player);
+    }
+
+
+    public static boolean isBlackFlashFlowCooldownActive(ServerPlayer player) {
+        return player != null && player.getPersistentData().getInt("addon_bf_flow_cd") > 0;
+    }
+
+    private static void tickBlackFlashFlowCooldown(ServerPlayer player) {
+        CompoundTag data = player.getPersistentData();
+        int cd = data.getInt("addon_bf_flow_cd");
+        if (cd > 0) {
+            data.putInt("addon_bf_flow_cd", cd - 1);
+            if (cd - 1 <= 0) {
+                data.putInt("addon_bf_flow", 0);
+                BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+                BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
+                BlueRedPurpleNukeMod.clearBlackFlashCastGates(data);
+                ModNetworking.sendBlackFlashSync(player);
+            }
+        }
+    }
+
+    private static void advanceBlackFlashFlow(ServerPlayer player, CompoundTag data) {
+        int next = Math.min(BF_FLOW_MAX, Math.max(0, data.getInt("addon_bf_flow")) + 1);
+        data.putInt("addon_bf_flow", next);
+        if (next >= BF_FLOW_MAX) {
+            data.putBoolean("addon_bf_sparks_blessed", true);
+            data.putInt("addon_bf_flow_cd", BF_FLOW_COOLDOWN_TICKS);
+            BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+            BlueRedPurpleNukeMod.grantBlackFlashFlowAdvancement(player);
+            BlueRedPurpleNukeMod.playBlackFlashFlowBlessingEffects(player);
+        }
+    }
+
+    private static void handleBlackFlashFlowFailure(ServerPlayer player, CompoundTag data, String reason) {
+        if (data.getInt("addon_bf_flow") > 0 || data.getBoolean("addon_bf_charging") || data.getBoolean("addon_bf_guaranteed")) {
+            LOGGER.warn("[BlackFlashFlow] reset player={} reason={} flow={}", new Object[]{player.getName().getString(), reason, data.getInt("addon_bf_flow")});
+            data.putInt("addon_bf_flow", 0);
+            data.putInt("addon_bf_flow_cd", BF_FLOW_COOLDOWN_TICKS);
+            data.putBoolean("addon_bf_guaranteed", false);
+            data.putBoolean("addon_bf_waiting_hit", false);
+            data.putBoolean("addon_bf_charging", false);
+            BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
+            BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, player.serverLevel().getGameTime());
+            ModNetworking.sendBlackFlashSync(player);
+        }
+    }
+
+    private static boolean grantBlackFlashFlowAdvancement(ServerPlayer player) {
+        try {
+            Advancement adv = player.server.getAdvancements().getAdvancement(new ResourceLocation("jjkblueredpurple:blessed_by_the_sparks_of_black"));
+            if (adv == null) {
+                return false;
+            }
+            AdvancementProgress progress = player.getAdvancements().getOrStartProgress(adv);
+            if (!progress.isDone()) {
+                for (String criterion : progress.getRemainingCriteria()) {
+                    player.getAdvancements().award(adv, criterion);
+                }
+                player.displayClientMessage(Component.literal("\u00a70\u26a1 \u00a74Blessed by the Black Sparks"), false);
+                return true;
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    private static void playBlackFlashFlowBlessingEffects(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        ServerLevel level = player.serverLevel();
+        double x = player.getX();
+        double y = player.getY() + 0.15;
+        double z = player.getZ();
+        level.playSound(null, x, y, z, SoundEvents.RESPAWN_ANCHOR_CHARGE, SoundSource.PLAYERS, 1.75f, 0.42f);
+        level.playSound(null, x, y, z, SoundEvents.WARDEN_HEARTBEAT, SoundSource.PLAYERS, 1.25f, 0.46f);
+        level.sendParticles(ParticleTypes.FLASH, x, y + 1.05, z, 2, 0.05, 0.05, 0.05, 0.0);
+        level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, x, y + 0.55, z, 1, 0.45, 0.2, 0.45, 0.0);
+        level.sendParticles(ParticleTypes.REVERSE_PORTAL, x, y + 1.05, z, 60, 0.9, 1.35, 0.9, 0.12);
+        level.sendParticles(ParticleTypes.ELECTRIC_SPARK, x, y + 1.15, z, 48, 1.25, 0.9, 1.25, 0.26);
+        level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_BLACK_FLASH_1.get()), x, y + 1.0, z, 12, 0.75, 1.15, 0.75, 0.0);
+        level.sendParticles(BF_SPARKS_BLACK_DUST, x, y + 0.95, z, 70, 1.2, 0.9, 1.2, 0.045);
+        level.sendParticles(BF_SPARKS_RED_DUST, x, y + 1.05, z, 76, 1.3, 1.0, 1.3, 0.055);
+        for (int pillar = 0; pillar < 7; ++pillar) {
+            double py = y + 0.2 + (double)pillar * 0.36;
+            double spread = 0.25 + (double)pillar * 0.08;
+            level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_CURSE_POWER_RED.get()), x, py, z, 18, spread, 0.08, spread, 0.018 + (double)pillar * 0.004);
+            level.sendParticles(pillar % 2 == 0 ? BF_SPARKS_RED_DUST : BF_SPARKS_BLACK_DUST, x, py, z, 14, spread * 0.82, 0.05, spread * 0.82, 0.025);
+        }
+        for (int wave = 0; wave < 8; ++wave) {
+            double smokeRadius = 1.8 + (double)wave * 1.45;
+            double sparkRadius = 2.35 + (double)wave * 1.62;
+            int samples = 28 + wave * 6;
+            for (int i = 0; i < samples; ++i) {
+                double angle = (Math.PI * 2.0 * (double)i) / (double)samples + (double)wave * 0.33;
+                double ringX = Math.cos(angle);
+                double ringZ = Math.sin(angle);
+                double ripple = Math.sin((double)i * 0.75 + (double)wave) * 0.12;
+                if (i % 2 == 0) {
+                    level.sendParticles(wave >= 5 ? ParticleTypes.CAMPFIRE_SIGNAL_SMOKE : ParticleTypes.CAMPFIRE_COSY_SMOKE, x + ringX * smokeRadius, y + 0.08 + ripple, z + ringZ * smokeRadius, 1, ringX * (0.16 + (double)wave * 0.05), 0.025, ringZ * (0.16 + (double)wave * 0.05), 0.012);
+                }
+                level.sendParticles(i % 3 == 0 ? BF_SPARKS_BLACK_DUST : BF_SPARKS_RED_DUST, x + ringX * sparkRadius, y + 0.7 + (double)wave * 0.08 + ripple, z + ringZ * sparkRadius, 1, ringX * 0.05, 0.08, ringZ * 0.05, 0.018);
+                if (i % 9 == 0) {
+                    level.sendParticles(ParticleTypes.ELECTRIC_SPARK, x + ringX * (sparkRadius + 0.55), y + 0.95 + (double)wave * 0.1, z + ringZ * (sparkRadius + 0.55), 1, ringX * 0.12, 0.06, ringZ * 0.12, 0.16);
+                }
+                if (i % 14 == 0) {
+                    level.sendParticles(ParticleTypes.END_ROD, x + ringX * sparkRadius, y + 1.2 + (double)wave * 0.08, z + ringZ * sparkRadius, 1, ringX * 0.04, 0.02, ringZ * 0.04, 0.09);
+                }
+            }
+        }
+        for (int slash = 0; slash < 14; ++slash) {
+            double angle = (Math.PI * 2.0 * (double)slash) / 14.0 + 0.18;
+            double dirX = Math.cos(angle);
+            double dirZ = Math.sin(angle);
+            double start = 1.25 + (double)(slash % 3) * 0.55;
+            for (int step = 0; step < 9; ++step) {
+                double dist = start + (double)step * 0.72;
+                double side = ((double)step - 4.0) * 0.045;
+                level.sendParticles(slash % 2 == 0 ? BF_SPARKS_RED_DUST : BF_SPARKS_BLACK_DUST, x + dirX * dist - dirZ * side, y + 1.0 + (double)step * 0.035, z + dirZ * dist + dirX * side, 1, 0.025, 0.025, 0.025, 0.015);
+            }
+        }
+        level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_RED.get()), x, y + 1.05, z, 60, 2.2, 0.95, 2.2, 0.026);
+        BlueRedPurpleNukeMod.applyBlackFlashFlowBlessingImpact(level, player, new Vec3(x, y, z));
+        player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SPEED, BF_SPARKS_BLESSING_BUFF_TICKS, 1, false, true, true));
+        player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, BF_SPARKS_BLESSING_BUFF_TICKS, 0, false, true, true));
+        player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_BOOST, BF_SPARKS_BLESSING_BUFF_TICKS, 0, false, true, true));
+    }
+
+    private static void applyBlackFlashFlowBlessingImpact(ServerLevel level, ServerPlayer player, Vec3 center) {
+        if (!BF_BLESSING_BREAK_BLOCKS || level == null || player == null || center == null) {
+            return;
+        }
+        if (!level.getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)) {
+            return;
+        }
+        BlockPos origin = BlueRedPurpleNukeMod.findBlackFlashBlessingOriginUnderFeet(level, player);
+        Vec3 groundCenter = new Vec3((double)origin.getX() + 0.5, (double)origin.getY() + 1.0, (double)origin.getZ() + 0.5);
+        BlueRedPurpleNukeMod.scheduleBlackFlashBlessingBlockWaves(level, player, origin, groundCenter);
+        center = groundCenter;
+        List<LivingEntity> targets = level.getEntitiesOfClass(LivingEntity.class, new AABB(center, center).inflate(BF_BLESSING_ENTITY_RADIUS), e -> e.isAlive() && e != player && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+        for (LivingEntity target : targets) {
+            Vec3 delta = target.position().add(0.0, (double)target.getBbHeight() * 0.5, 0.0).subtract(center);
+            double distance = Math.max(0.001, delta.length());
+            double falloff = 1.0 - Math.min(1.0, distance / BF_BLESSING_ENTITY_RADIUS);
+            Vec3 push = delta.normalize().scale(0.55 + falloff * 1.25);
+            target.setDeltaMovement(target.getDeltaMovement().add(push.x, 0.22 + falloff * 0.45, push.z));
+            target.hurtMarked = true;
+            target.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 35, 1, false, true, true));
+        }
+    }
+
+    private static BlockPos findBlackFlashBlessingOriginUnderFeet(ServerLevel level, ServerPlayer player) {
+        BlockPos feetBelow = player.blockPosition().below();
+        for (int yOff = 0; yOff >= -2; --yOff) {
+            BlockPos pos = feetBelow.offset(0, yOff, 0);
+            BlockState state = level.getBlockState(pos);
+            if (!state.isAir() && !state.getCollisionShape(level, pos).isEmpty()) {
+                return pos;
+            }
+        }
+        for (int yOff = 1; yOff >= -3; --yOff) {
+            BlockPos pos = feetBelow.offset(0, yOff, 0);
+            if (!level.getBlockState(pos).isAir()) {
+                return pos;
+            }
+        }
+        return feetBelow;
+    }
+
+    private static void scheduleBlackFlashBlessingBlockWaves(ServerLevel level, ServerPlayer player, BlockPos origin, Vec3 center) {
+        if (level == null || player == null || origin == null || center == null) {
+            return;
+        }
+        BlackFlashBlessingWaveSession session = new BlackFlashBlessingWaveSession(level.dimension(), player.getUUID(), origin.immutable(), origin.immutable(), center, level.getGameTime());
+        synchronized (BF_BLESSING_WAVE_SESSIONS) {
+            BF_BLESSING_WAVE_SESSIONS.add(session);
+        }
+    }
+
+    private static void tickBlackFlashBlessingWaveSessions() {
+        net.minecraft.server.MinecraftServer server = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+        if (server == null) {
+            return;
+        }
+        synchronized (BF_BLESSING_WAVE_SESSIONS) {
+            Iterator<BlackFlashBlessingWaveSession> iterator = BF_BLESSING_WAVE_SESSIONS.iterator();
+            while (iterator.hasNext()) {
+                BlackFlashBlessingWaveSession session = iterator.next();
+                ServerLevel level = server.getLevel(session.levelKey);
+                if (level == null) {
+                    iterator.remove();
+                    continue;
+                }
+                ServerPlayer player = server.getPlayerList().getPlayer(session.playerUuid);
+                if (player == null || !player.isAlive()) {
+                    iterator.remove();
+                    continue;
+                }
+                long age = level.getGameTime() - session.startTick;
+                while (session.nextWave < BF_BLESSING_BLOCK_BREAK_WAVE_RADII.length && age >= (long)BF_BLESSING_BLOCK_BREAK_WAVE_DELAYS[session.nextWave] && session.broken < BF_BLESSING_MAX_BLOCK_BREAKS) {
+                    int wave = session.nextWave++;
+                    int radius = BF_BLESSING_BLOCK_BREAK_WAVE_RADII[wave];
+                    int waveCap = Math.min(BF_BLESSING_BLOCK_BREAK_WAVE_CAPS[wave], BF_BLESSING_MAX_BLOCK_BREAKS - session.broken);
+                    int waveBroken = BlueRedPurpleNukeMod.breakBlackFlashBlessingWave(level, player, session.origin, session.center, wave, radius, waveCap, session.visited, session.protectedSupportBlock);
+                    session.broken += waveBroken;
+                    BlueRedPurpleNukeMod.spawnBlackFlashBlessingWaveEffects(level, session.center, session.origin, wave, radius, waveBroken);
+                }
+                if (session.nextWave >= BF_BLESSING_BLOCK_BREAK_WAVE_RADII.length || session.broken >= BF_BLESSING_MAX_BLOCK_BREAKS) {
+                    iterator.remove();
+                }
+            }
+        }
+    }
+
+    private static int breakBlackFlashBlessingWave(ServerLevel level, ServerPlayer player, BlockPos origin, Vec3 center, int wave, int radius, int maxBreaks, Set<BlockPos> visited, BlockPos protectedSupportBlock) {
+        int broken = 0;
+        int innerRadius = wave <= 0 ? 0 : BF_BLESSING_BLOCK_BREAK_WAVE_RADII[wave - 1] + 1;
+        int innerRadiusSq = innerRadius * innerRadius;
+        int outerRadiusSq = radius * radius;
+        List<BlockPos> candidates = new ArrayList<>();
+        Set<BlockPos> waveSeen = new HashSet<>();
+        for (int xOff = -radius; xOff <= radius; ++xOff) {
+            for (int zOff = -radius; zOff <= radius; ++zOff) {
+                int distSq = xOff * xOff + zOff * zOff;
+                if (distSq > outerRadiusSq || distSq < innerRadiusSq) {
+                    continue;
+                }
+                BlockPos column = origin.offset(xOff, 0, zOff);
+                BlockPos pos = BlueRedPurpleNukeMod.findBlackFlashBlessingGroundBreakPos(level, column);
+                if (pos == null || pos.equals(protectedSupportBlock) || visited.contains(pos) || !waveSeen.add(pos)) {
+                    continue;
+                }
+                candidates.add(pos.immutable());
+            }
+        }
+        candidates.sort(Comparator
+                .comparingDouble((BlockPos pos) -> {
+                    double dx = (double)pos.getX() + 0.5 - center.x;
+                    double dz = (double)pos.getZ() + 0.5 - center.z;
+                    return Math.atan2(dz, dx);
+                })
+                .thenComparingDouble(pos -> {
+                    double dx = (double)pos.getX() + 0.5 - center.x;
+                    double dz = (double)pos.getZ() + 0.5 - center.z;
+                    return dx * dx + dz * dz;
+                }));
+        int candidateCount = candidates.size();
+        int attempts = Math.min(candidateCount, Math.max(maxBreaks * 3, maxBreaks + 24));
+        for (int i = 0; i < attempts && broken < maxBreaks; ++i) {
+            int index = candidateCount <= attempts ? i : Mth.floor(((double)i + 0.5) * (double)candidateCount / (double)attempts);
+            if (index < 0 || index >= candidateCount) {
+                continue;
+            }
+            BlockPos pos = candidates.get(index);
+            if (!visited.add(pos)) {
+                continue;
+            }
+            BlockState state = level.getBlockState(pos);
+            if (!BlueRedPurpleNukeMod.canBlackFlashBlessingBreakBlock(level, pos, state)) {
+                continue;
+            }
+            BlueRedPurpleNukeMod.spawnBlackFlashBlessingBlockBreakParticles(level, center, pos, state, wave);
+            level.destroyBlock(pos, false, player);
+            ++broken;
+        }
+        return broken;
+    }
+
+    private static void spawnBlackFlashBlessingBlockBreakParticles(ServerLevel level, Vec3 center, BlockPos pos, BlockState state, int wave) {
+        double px = (double)pos.getX() + 0.5;
+        double py = (double)pos.getY() + 0.75;
+        double pz = (double)pos.getZ() + 0.5;
+        level.sendParticles(new BlockParticleOption(ParticleTypes.BLOCK, state), px, py, pz, 5 + wave * 3, 0.28 + wave * 0.08, 0.18 + wave * 0.05, 0.28 + wave * 0.08, 0.045 + wave * 0.012);
+        if (wave == 0) {
+            level.sendParticles(BF_SPARKS_BLACK_DUST, px, py + 0.18, pz, 2, 0.12, 0.08, 0.12, 0.018);
+        } else if (wave == 1) {
+            level.sendParticles(BF_SPARKS_RED_DUST, px, py + 0.24, pz, 3, 0.16, 0.1, 0.16, 0.028);
+            level.sendParticles(ParticleTypes.ELECTRIC_SPARK, px, py + 0.35, pz, 1, 0.08, 0.04, 0.08, 0.12);
+        } else {
+            Vec3 out = new Vec3(px - center.x, 0.0, pz - center.z);
+            if (out.lengthSqr() < 1.0E-6) out = new Vec3(0.0, 0.0, 1.0);
+            out = out.normalize();
+            level.sendParticles(BF_SPARKS_RED_DUST, px, py + 0.28, pz, 3, out.x * 0.08, 0.12, out.z * 0.08, 0.035);
+            level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_BLACK_FLASH_1.get()), px, py + 0.55, pz, 1, 0.08, 0.08, 0.08, 0.0);
+        }
+    }
+
+    private static void spawnBlackFlashBlessingWaveEffects(ServerLevel level, Vec3 center, BlockPos origin, int wave, int radius, int broken) {
+        BlueRedPurpleNukeMod.playBlackFlashBlessingWaveSound(level, origin, wave);
+        BlueRedPurpleNukeMod.spawnBlackFlashLightningWave(level, center, wave, radius);
+    }
+
+    private static void playBlackFlashBlessingWaveSound(ServerLevel level, BlockPos origin, int wave) {
+        float volume = 1.05f + (float)wave * 0.16f;
+        float pitch = 0.92f + (float)(wave % 3) * 0.06f;
+        SoundEvent stoneCrash = (SoundEvent)ForgeRegistries.SOUND_EVENTS.getValue(new ResourceLocation("jujutsucraft:stone_crash"));
+        SoundEvent glassCrash = (SoundEvent)ForgeRegistries.SOUND_EVENTS.getValue(new ResourceLocation("jujutsucraft:glass_crash"));
+        SoundEvent waterSplash = (SoundEvent)ForgeRegistries.SOUND_EVENTS.getValue(new ResourceLocation("jujutsucraft:water_splash"));
+        level.playSound(null, origin, stoneCrash != null ? stoneCrash : SoundEvents.STONE_BREAK, SoundSource.NEUTRAL, volume, pitch);
+        if (wave >= 1) {
+            level.playSound(null, origin, SoundEvents.ZOMBIE_BREAK_WOODEN_DOOR, SoundSource.NEUTRAL, volume * 0.82f, pitch * 0.94f);
+        }
+        if (wave >= 2) {
+            level.playSound(null, origin, glassCrash != null ? glassCrash : SoundEvents.GLASS_BREAK, SoundSource.NEUTRAL, volume * 0.72f, pitch * 1.08f);
+        }
+        if (wave >= 3) {
+            level.playSound(null, origin, waterSplash != null ? waterSplash : SoundEvents.GENERIC_SPLASH, SoundSource.NEUTRAL, volume * 0.58f, pitch * 0.86f);
+        }
+    }
+
+    private static void spawnBlackFlashLightningWave(ServerLevel level, Vec3 center, int wave, int radius) {
+        double y = center.y + 0.35 + (double)wave * 0.18;
+        int samples = Math.max(28, radius * (6 + wave));
+        double centerSpread = 0.7 + (double)wave * 0.22;
+        level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_BLACK_FLASH_1.get()), center.x, y + 0.95, center.z, 10 + wave * 5, centerSpread, 1.15, centerSpread, 0.0);
+        level.sendParticles(ParticleTypes.FLASH, center.x, y + 0.9, center.z, 2, 0.06, 0.06, 0.06, 0.0);
+        level.sendParticles(ParticleTypes.ELECTRIC_SPARK, center.x, y + 0.85, center.z, 18 + wave * 8, centerSpread, 0.55, centerSpread, 0.24);
+        for (int i = 0; i < samples; ++i) {
+            double angle = (Math.PI * 2.0 * (double)i) / (double)samples + (double)wave * 0.37;
+            double dx = Math.cos(angle);
+            double dz = Math.sin(angle);
+            double branch = radius * (0.78 + 0.22 * Math.sin((double)i * 1.71 + (double)wave));
+            double px = center.x + dx * branch;
+            double pz = center.z + dz * branch;
+            level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_BLACK_FLASH_1.get()), px, y + 0.55, pz, 2, 0.1, 0.22, 0.1, 0.0);
+            if (i % 2 == 0) level.sendParticles(ParticleTypes.ELECTRIC_SPARK, px, y + 0.65, pz, 2, dx * 0.1, 0.07, dz * 0.1, 0.18);
+            if (i % 3 == 0) level.sendParticles(BF_SPARKS_RED_DUST, px, y + 0.42, pz, 1, dx * 0.055, 0.08, dz * 0.055, 0.035);
+            if (i % 4 == 0) level.sendParticles(BF_SPARKS_BLACK_DUST, px, y + 0.28, pz, 1, dx * 0.055, 0.05, dz * 0.055, 0.024);
+            if (i % 9 == 0) {
+                double fork = Math.max(2.0, radius * (0.16 + (double)wave * 0.025));
+                level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_BLACK_FLASH_1.get()), px + dz * fork, y + 0.85, pz - dx * fork, 1, 0.08, 0.18, 0.08, 0.0);
+                level.sendParticles((ParticleOptions)((SimpleParticleType)JujutsucraftModParticleTypes.PARTICLE_BLACK_FLASH_1.get()), px - dz * fork, y + 0.85, pz + dx * fork, 1, 0.08, 0.18, 0.08, 0.0);
+            }
+        }
+    }
+
+    private static final class BlackFlashBlessingWaveSession {
+        private final ResourceKey<Level> levelKey;
+        private final UUID playerUuid;
+        private final BlockPos origin;
+        private final BlockPos protectedSupportBlock;
+        private final Vec3 center;
+        private final long startTick;
+        private final Set<BlockPos> visited = new HashSet<>();
+        private int nextWave;
+        private int broken;
+
+        private BlackFlashBlessingWaveSession(ResourceKey<Level> levelKey, UUID playerUuid, BlockPos origin, BlockPos protectedSupportBlock, Vec3 center, long startTick) {
+            this.levelKey = levelKey;
+            this.playerUuid = playerUuid;
+            this.origin = origin;
+            this.protectedSupportBlock = protectedSupportBlock;
+            this.center = center;
+            this.startTick = startTick;
+        }
+    }
+
+    private static BlockPos findBlackFlashBlessingGroundBreakPos(ServerLevel level, BlockPos column) {
+        for (int yOff = 1; yOff >= -2; --yOff) {
+            BlockPos pos = column.offset(0, yOff, 0);
+            BlockState state = level.getBlockState(pos);
+            if (BlueRedPurpleNukeMod.canBlackFlashBlessingBreakBlock(level, pos, state) && level.getBlockState(pos.above()).getCollisionShape(level, pos.above()).isEmpty()) {
+                return pos;
+            }
+        }
+        for (int yOff = 2; yOff >= -1; --yOff) {
+            BlockPos pos = column.offset(0, yOff, 0);
+            BlockState state = level.getBlockState(pos);
+            if (BlueRedPurpleNukeMod.canBlackFlashBlessingBreakBlock(level, pos, state)) {
+                return pos;
+            }
+        }
+        return null;
+    }
+
+    private static boolean canBlackFlashBlessingBreakBlock(ServerLevel level, BlockPos pos, BlockState state) {
+        if (state == null || state.isAir() || !state.getFluidState().isEmpty() || state.hasBlockEntity()) {
+            return false;
+        }
+        Block block = state.getBlock();
+        if (block == Blocks.BEDROCK || block == Blocks.BARRIER || block == Blocks.COMMAND_BLOCK || block == Blocks.CHAIN_COMMAND_BLOCK || block == Blocks.REPEATING_COMMAND_BLOCK || block == Blocks.STRUCTURE_BLOCK || block == Blocks.JIGSAW || block == Blocks.SPAWNER || block == Blocks.CHEST || block == Blocks.TRAPPED_CHEST || block == Blocks.ENDER_CHEST) {
+            return false;
+        }
+        float hardness = state.getDestroySpeed(level, pos);
+        return hardness >= 0.0f && hardness <= BF_BLESSING_MAX_BLOCK_HARDNESS;
+    }
+
+    private static void closeBlackFlashPendingWithFailure(ServerPlayer player, CompoundTag data, String reason) {
+        if (player == null || data == null) {
+            return;
+        }
+        String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
+        if (BF_STATE_RING_ACTIVE.equals(state) && data.getBoolean("addon_bf_charging")) {
+            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason={} nonce={} clientNeedle={} state={} age={}", new Object[]{reason, data.getLong("addon_bf_timing_nonce"), Float.NaN, state, BlueRedPurpleNukeMod.getBlackFlashTimingAge(player, data)});
+            BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, reason);
+        } else if (BF_STATE_WAITING_HIT.equals(state) && data.getBoolean("addon_bf_waiting_hit") && data.getBoolean("addon_bf_guaranteed")) {
+            long releaseTick = data.contains("addon_bf_release_tick") ? data.getLong("addon_bf_release_tick") : player.serverLevel().getGameTime();
+            LOGGER.warn("[BlackFlashTimingDiag] TIMEOUT_FAIL nonce={} age={} state={}", new Object[]{data.getLong("addon_bf_guarantee_nonce"), player.serverLevel().getGameTime() - releaseTick, state});
+            if (!data.getBoolean("addon_bf_expire_feedback_sent")) {
+                data.putBoolean("addon_bf_expire_feedback_sent", true);
+                ModNetworking.sendBlackFlashFeedback(player, false, false);
+            }
+        }
+    }
+
+    private static void sendBlackFlashFailureOnce(ServerPlayer player, CompoundTag data, String reason) {
+        LOGGER.warn("[BlackFlashReleaseDiag] fail_reason={} player={} nonce={} state={} charging={} waitingHit={} guaranteed={}", new Object[]{reason, player.getName().getString(), data.getLong("addon_bf_timing_nonce"), BlueRedPurpleNukeMod.getBlackFlashState(data), data.getBoolean("addon_bf_charging"), data.getBoolean("addon_bf_waiting_hit"), data.getBoolean("addon_bf_guaranteed")});
+        long nonce = data.getLong("addon_bf_timing_nonce");
+        long lastFailNonce = data.getLong("addon_bf_last_fail_feedback_nonce");
+        if (nonce != 0L && lastFailNonce == nonce) {
+            LOGGER.warn("[BlackFlashReleaseDiag] suppress duplicate failure feedback player={} nonce={} reason={}", new Object[]{player.getName().getString(), nonce, reason});
+            return;
+        }
+        data.putLong("addon_bf_last_fail_feedback_nonce", nonce);
+        ModNetworking.sendBlackFlashFeedback(player, false, false);
     }
 
     // ===== RED ORB SYSTEM =====
@@ -962,7 +2019,10 @@ public class BlueRedPurpleNukeMod {
             }
             double falloff = 1.0 - Math.min(1.0, distance / impactRadius);
             double finalDamage = Math.max(baseExplosionDamage * (0.8 + 0.2 * falloff), crouchRedMinimumDamage);
-            target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)finalDamage);
+            boolean hurt = target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)finalDamage);
+            if (hurt && owner instanceof ServerPlayer serverOwner) {
+                BlueRedPurpleNukeMod.tryConfirmBlackFlashGuaranteeHit(serverOwner, "normal_red_manual_explosion");
+            }
             Vec3 push = delta.lengthSqr() < 1.0E-6 ? new Vec3(0.0, 1.0, 0.0) : delta.normalize();
             target.setDeltaMovement(target.getDeltaMovement().add(push.x * impactKnockback, 0.6, push.z * impactKnockback));
             target.hurtMarked = true;
@@ -1159,7 +2219,10 @@ public class BlueRedPurpleNukeMod {
             double distance = Math.max(0.001, delta.length());
             double falloff = 1.0 - Math.min(1.0, distance / radius);
             if (falloff <= 0.0) continue;
-            target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)(scaledBaseDamage * (0.75 + 0.25 * falloff)));
+            boolean hurt = target.hurt(serverLevel.damageSources().explosion((Entity)redEntity, (Entity)owner), (float)(scaledBaseDamage * (0.75 + 0.25 * falloff)));
+            if (hurt && owner instanceof ServerPlayer serverOwner) {
+                BlueRedPurpleNukeMod.tryConfirmBlackFlashGuaranteeHit(serverOwner, "red_shockwave_manual_explosion");
+            }
             Vec3 push = delta.normalize().scale((1.5 + (double)chargeTier * 0.5) * (0.35 + falloff) * knockbackMultiplier);
             target.setDeltaMovement(target.getDeltaMovement().add(push.x, 0.35 + falloff * 0.25 * knockbackMultiplier, push.z));
         }
@@ -1268,9 +2331,236 @@ public class BlueRedPurpleNukeMod {
         return false;
     }
 
+    // ===== GOJO DOUBLE-SHIFT TELEPORT =====
+    private static boolean handleGojoDoubleShiftTeleport(ServerPlayer player) {
+        Level world = player.level();
+        if (!(world instanceof ServerLevel)) {
+            return false;
+        }
+        ServerLevel serverLevel = (ServerLevel)world;
+        CompoundTag data = player.getPersistentData();
+        long now = serverLevel.getGameTime();
+        int cd = data.getInt(GOJO_TP_CD);
+        if (cd > 0) {
+            data.putInt(GOJO_TP_CD, cd - 1);
+        }
+        if (data.getBoolean(GOJO_TP_PENDING)) {
+            data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, Math.max(data.getLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL), now + 1L));
+            if (now >= data.getLong(GOJO_TP_EXECUTE_TICK)) {
+                Vec3 source = player.position();
+                Vec3 target = new Vec3(data.getDouble(GOJO_TP_TARGET_X), data.getDouble(GOJO_TP_TARGET_Y), data.getDouble(GOJO_TP_TARGET_Z));
+                float yaw = data.getFloat(GOJO_TP_YAW);
+                float pitch = data.getFloat(GOJO_TP_PITCH);
+                data.putBoolean(GOJO_TP_PENDING, false);
+                BlueRedPurpleNukeMod.spawnGojoTeleportBurst(serverLevel, source.add(0.0, player.getBbHeight() * 0.5, 0.0), false);
+                player.teleportTo(serverLevel, target.x, target.y, target.z, yaw, pitch);
+                player.resetFallDistance();
+                BlueRedPurpleNukeMod.spawnGojoTeleportBurst(serverLevel, target.add(0.0, player.getBbHeight() * 0.5, 0.0), true);
+                serverLevel.playSound(null, BlockPos.containing((Position)target), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 1.25f, 1.35f);
+                data.putInt(GOJO_TP_CD, GOJO_TELEPORT_COOLDOWN_TICKS);
+            }
+            return true;
+        }
+        if (data.getLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL) >= now) {
+            return true;
+        }
+        return false;
+    }
+
+    public static void handleGojoShiftTapPacket(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        Level world = player.level();
+        if (!(world instanceof ServerLevel)) {
+            return;
+        }
+        ServerLevel serverLevel = (ServerLevel)world;
+        CompoundTag data = player.getPersistentData();
+        long now = serverLevel.getGameTime();
+        data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, Math.max(data.getLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL), now + 1L));
+        long lastShift = data.getLong(GOJO_TP_LAST_SHIFT_TICK);
+        data.putLong(GOJO_TP_LAST_SHIFT_TICK, now);
+        if (lastShift <= 0L || now - lastShift > (long)GOJO_TELEPORT_DOUBLE_SHIFT_WINDOW) {
+            return;
+        }
+        data.putLong(GOJO_TP_LAST_SHIFT_TICK, 0L);
+        BlueRedPurpleNukeMod.tryArmGojoTeleport(player, serverLevel, data, now);
+    }
+
+    private static boolean tryArmGojoTeleport(ServerPlayer player, ServerLevel serverLevel, CompoundTag data, long now) {
+        if (data.getBoolean(GOJO_TP_PENDING)) {
+            data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, now + (long)GOJO_TELEPORT_CRUSHER_SUPPRESS_TICKS);
+            return true;
+        }
+        if (data.getInt(GOJO_TP_CD) > 0) {
+            return true;
+        }
+        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+        double activeTechnique = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
+        if ((int)Math.round(activeTechnique) != 2 || (int)Math.round(vars.PlayerSelectCurseTechnique) != 5 || !data.getBoolean("infinity") || !player.hasEffect((MobEffect)JujutsucraftModMobEffects.SIX_EYES.get())) {
+            return false;
+        }
+        if (vars.PlayerCursePower < GOJO_TELEPORT_CE_COST) {
+            return true;
+        }
+        Vec3 target = BlueRedPurpleNukeMod.findGojoTeleportTarget(serverLevel, player);
+        if (target == null) {
+            return true;
+        }
+        double finalCE = vars.PlayerCursePower - GOJO_TELEPORT_CE_COST;
+        player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(cap -> {
+            cap.PlayerCursePower = finalCE;
+            cap.syncPlayerVariables((Entity)player);
+        });
+        data.putBoolean(GOJO_TP_PENDING, true);
+        data.putLong(GOJO_TP_EXECUTE_TICK, now + (long)GOJO_TELEPORT_DELAY_TICKS);
+        data.putDouble(GOJO_TP_TARGET_X, target.x);
+        data.putDouble(GOJO_TP_TARGET_Y, target.y);
+        data.putDouble(GOJO_TP_TARGET_Z, target.z);
+        data.putFloat(GOJO_TP_YAW, player.getYRot());
+        data.putFloat(GOJO_TP_PITCH, player.getXRot());
+        data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, now + (long)GOJO_TELEPORT_DELAY_TICKS + (long)GOJO_TELEPORT_CRUSHER_SUPPRESS_TICKS);
+        BlueRedPurpleNukeMod.resetInfinityCrusher(player);
+        BlueRedPurpleNukeMod.spawnGojoTeleportFrame(serverLevel, player, target, player.getYRot(), player.getXRot());
+        BlueRedPurpleNukeMod.spawnGojoTeleportCharge(serverLevel, player.position().add(0.0, player.getBbHeight() * 0.5, 0.0), target.add(0.0, player.getBbHeight() * 0.5, 0.0));
+        return true;
+    }
+
+    private static Vec3 findGojoTeleportTarget(ServerLevel serverLevel, ServerPlayer player) {
+        Vec3 eye = player.getEyePosition(1.0f);
+        Vec3 look = player.getLookAngle();
+        if (look.lengthSqr() < 1.0E-6) {
+            return null;
+        }
+        look = look.normalize();
+        Vec3 rayEnd = eye.add(look.scale(GOJO_TELEPORT_RANGE));
+        BlockHitResult hit = serverLevel.clip(new ClipContext(eye, rayEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, (Entity)player));
+        Vec3 desired = rayEnd;
+        if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
+            desired = hit.getLocation().subtract(look.scale(0.65));
+        }
+        BlockPos base = BlockPos.containing(desired.x, desired.y, desired.z);
+        for (int yOff = 1; yOff >= -3; --yOff) {
+            for (int radius = 0; radius <= 2; ++radius) {
+                for (int xOff = -radius; xOff <= radius; ++xOff) {
+                    for (int zOff = -radius; zOff <= radius; ++zOff) {
+                        if (Math.max(Math.abs(xOff), Math.abs(zOff)) != radius) {
+                            continue;
+                        }
+                        BlockPos feet = base.offset(xOff, yOff, zOff);
+                        if (BlueRedPurpleNukeMod.isSafeGojoTeleportStandPos(serverLevel, player, feet)) {
+                            return new Vec3((double)feet.getX() + 0.5, feet.getY(), (double)feet.getZ() + 0.5);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isSafeGojoTeleportStandPos(ServerLevel level, ServerPlayer player, BlockPos feet) {
+        BlockPos head = feet.above();
+        BlockPos below = feet.below();
+        if (!level.getBlockState(feet).getCollisionShape(level, feet).isEmpty() || !level.getBlockState(head).getCollisionShape(level, head).isEmpty()) {
+            return false;
+        }
+        if (level.getBlockState(below).getCollisionShape(level, below).isEmpty() && level.getFluidState(below).isEmpty()) {
+            return false;
+        }
+        AABB box = player.getDimensions(player.getPose()).makeBoundingBox((double)feet.getX() + 0.5, feet.getY(), (double)feet.getZ() + 0.5);
+        return level.noCollision(player, box);
+    }
+
+    private static void spawnGojoTeleportCharge(ServerLevel level, Vec3 source, Vec3 destination) {
+        level.playSound(null, BlockPos.containing((Position)source), SoundEvents.RESPAWN_ANCHOR_CHARGE, SoundSource.PLAYERS, 0.75f, 1.7f);
+        level.sendParticles((ParticleOptions)new DustParticleOptions(BLUE_AURA_COLOR, 1.25f), source.x, source.y, source.z, 32, 0.45, 0.7, 0.45, 0.0);
+        level.sendParticles((ParticleOptions)ParticleTypes.ELECTRIC_SPARK, source.x, source.y, source.z, 28, 0.55, 0.75, 0.55, 0.12);
+        level.sendParticles((ParticleOptions)ParticleTypes.REVERSE_PORTAL, destination.x, destination.y, destination.z, 34, 0.45, 0.75, 0.45, 0.08);
+        level.sendParticles((ParticleOptions)ParticleTypes.END_ROD, destination.x, destination.y, destination.z, 18, 0.35, 0.65, 0.35, 0.08);
+    }
+
+    private static void spawnGojoTeleportBurst(ServerLevel level, Vec3 pos, boolean arrival) {
+        level.sendParticles((ParticleOptions)new DustParticleOptions(BLUE_AURA_COLOR, arrival ? 1.6f : 1.1f), pos.x, pos.y, pos.z, arrival ? 70 : 45, 0.7, 0.9, 0.7, 0.0);
+        level.sendParticles((ParticleOptions)ParticleTypes.ELECTRIC_SPARK, pos.x, pos.y, pos.z, arrival ? 55 : 34, 0.65, 0.85, 0.65, 0.18);
+        level.sendParticles((ParticleOptions)ParticleTypes.REVERSE_PORTAL, pos.x, pos.y, pos.z, arrival ? 64 : 40, 0.75, 0.95, 0.75, 0.12);
+        level.sendParticles((ParticleOptions)ParticleTypes.END_ROD, pos.x, pos.y, pos.z, arrival ? 26 : 14, 0.55, 0.75, 0.55, 0.2);
+        if (arrival) {
+            level.sendParticles((ParticleOptions)ParticleTypes.FLASH, pos.x, pos.y, pos.z, 1, 0.0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    private static void spawnGojoTeleportFrame(ServerLevel level, ServerPlayer owner, Vec3 target, float yaw, float pitch) {
+        ResourceLocation projectionId = new ResourceLocation("jujutsucraft", "entity_projection_sorcery");
+        try {
+            EntityType<?> projectionType = ForgeRegistries.ENTITY_TYPES.getValue(projectionId);
+            if (projectionType == null) {
+                return;
+            }
+            Entity projection = projectionType.create(level);
+            if (projection == null) {
+                return;
+            }
+            projection.moveTo(target.x, target.y, target.z, yaw, pitch);
+            projection.setYRot(yaw);
+            projection.setXRot(pitch);
+            projection.setYHeadRot(yaw);
+            projection.setYBodyRot(yaw);
+            projection.setInvulnerable(true);
+            projection.setNoGravity(true);
+            projection.setGlowingTag(true);
+            projection.setCustomName(Component.literal("FRAME1"));
+            projection.setCustomNameVisible(false);
+            if (projection instanceof Mob mob) {
+                mob.setNoAi(true);
+            }
+            CompoundTag ownerData = owner.getPersistentData();
+            double nameRanged = ownerData.getDouble("NameRanged");
+            if (nameRanged == 0.0) {
+                nameRanged = 1.0 + owner.getRandom().nextDouble() * 1000000.0;
+                ownerData.putDouble("NameRanged", nameRanged);
+            }
+            CompoundTag frameData = projection.getPersistentData();
+            frameData.putDouble("NameRanged_ranged", nameRanged);
+            frameData.putDouble("cnt5", 1.0);
+            frameData.putDouble("x_pos", target.x);
+            frameData.putDouble("y_pos", target.y);
+            frameData.putDouble("z_pos", target.z);
+            frameData.putString("owner_name", owner.getScoreboardName());
+            frameData.putString("OWNER_UUID", owner.getUUID().toString());
+            frameData.putString("OwnerUUID", owner.getUUID().toString());
+            frameData.putString("owner_uuid", owner.getUUID().toString());
+            BlueRedPurpleNukeMod.configureProjectionSorceryVisual(projection);
+            level.addFreshEntity(projection);
+        }
+        catch (Exception ignored) {
+        }
+    }
+
+    private static void configureProjectionSorceryVisual(Entity projection) {
+        BlueRedPurpleNukeMod.invokeProjectionMethod(projection, "setTexture", new Class<?>[]{String.class}, new Object[]{"entity_projection_sorcery"});
+        if (!BlueRedPurpleNukeMod.invokeProjectionMethod(projection, "setDATA_cnt_skin", new Class<?>[]{double.class}, new Object[]{3.0})) {
+            BlueRedPurpleNukeMod.invokeProjectionMethod(projection, "setDATA_cnt_skin", new Class<?>[]{Double.TYPE}, new Object[]{3.0});
+        }
+    }
+
+    private static boolean invokeProjectionMethod(Entity projection, String methodName, Class<?>[] parameterTypes, Object[] args) {
+        try {
+            Method method = projection.getClass().getMethod(methodName, parameterTypes);
+            method.invoke(projection, args);
+            return true;
+        }
+        catch (Exception ignored) {
+            return false;
+        }
+    }
+
     // ===== INFINITY CRUSHER =====
     private static void handleInfinityCrusher(ServerPlayer player) {
         double ct;
+        if (player.getPersistentData().getLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL) >= player.serverLevel().getGameTime()) {
+            return;
+        }
         Level world = player.level();
         if (!(world instanceof ServerLevel)) {
             return;
@@ -2688,47 +3978,4 @@ public class BlueRedPurpleNukeMod {
             target.hurtMarked = true;
         }
     }
-    public static boolean isBlackFlashGuaranteeActive(net.minecraft.server.level.ServerPlayer player) {
-        if (player == null) {
-            return false;
-        }
-        CompoundTag data = player.getPersistentData();
-        if (!data.getBoolean("addon_bf_waiting_hit") || !data.getBoolean("addon_bf_guaranteed")) {
-            return false;
-        }
-        long releaseTick = data.getLong("addon_bf_release_tick");
-        return releaseTick <= 0L || player.level().getGameTime() - releaseTick <= 80L;
-    }
-
-    public static void confirmBlackFlashGuaranteeHit(net.minecraft.server.level.ServerPlayer player) {
-        if (player == null) {
-            return;
-        }
-        CompoundTag data = player.getPersistentData();
-        data.putBoolean("addon_bf_waiting_hit", false);
-        data.putBoolean("addon_bf_guaranteed", false);
-        data.putBoolean("addon_bf_released", false);
-        data.putBoolean("addon_bf_timing_resolved", true);
-        data.remove("addon_bf_guarantee_nonce");
-        data.remove("addon_bf_release_tick");
-        data.remove("addon_bf_release_needle");
-        ModNetworking.sendBlackFlashFeedback(player, true, true);
-        ModNetworking.sendBlackFlashSync(player);
-    }
-
-    public static void clearBlackFlashRuntimeState(net.minecraft.server.level.ServerPlayer player) {
-        if (player == null) {
-            return;
-        }
-        CompoundTag data = player.getPersistentData();
-        data.putBoolean("addon_bf_waiting_hit", false);
-        data.putBoolean("addon_bf_guaranteed", false);
-        data.putBoolean("addon_bf_released", false);
-        data.putBoolean("addon_bf_charging", false);
-        data.putBoolean("addon_bf_timing_resolved", false);
-        data.remove("addon_bf_guarantee_nonce");
-        data.remove("addon_bf_release_tick");
-        data.remove("addon_bf_release_needle");
-    }
 }
-

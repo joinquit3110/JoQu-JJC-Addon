@@ -45,10 +45,123 @@ public final class ClientPacketHandler {
      * @param mastery mastery used by this method.
      * @param charging charging used by this method.
      */
-    public static void updateBlackFlash(float bfPercent, boolean mastery, boolean charging) {
+    public static void updateBlackFlash(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown) {
+        Minecraft mc = Minecraft.getInstance();
+        long previousNonce = ClientBlackFlashCache.timingNonce;
+        boolean wasAwaitingReleaseAck = ClientBlackFlashCache.awaitingReleaseAck;
+        boolean sameLocalReleaseNonce = ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.localReleaseNonce == timingNonce;
+        boolean localReleasedThisSession = sameLocalReleaseNonce;
+        boolean newSession = charging && !localReleasedThisSession && (!ClientBlackFlashCache.charging || ClientBlackFlashCache.timingNonce != timingNonce);
         ClientBlackFlashCache.bfPercent = bfPercent;
         ClientBlackFlashCache.mastery = mastery;
-        ClientBlackFlashCache.charging = charging;
+        ClientBlackFlashCache.charging = charging && !localReleasedThisSession;
+        ClientBlackFlashCache.timingStartTick = timingStartTick;
+        ClientBlackFlashCache.timingPeriodTicks = Math.max(1.0f, timingPeriodTicks);
+        ClientBlackFlashCache.timingRedStart = timingRedStart;
+        ClientBlackFlashCache.timingRedSize = timingRedSize;
+        ClientBlackFlashCache.timingNonce = timingNonce;
+        ClientBlackFlashCache.flow = Math.max(0, Math.min(8, flow));
+        ClientBlackFlashCache.flowCooldown = Math.max(0, flowCooldown);
+        if (newSession || ClientBlackFlashCache.clientTimingStartTick == Long.MIN_VALUE) {
+            long clientNow = mc.level != null ? mc.level.getGameTime() : timingStartTick;
+            // Render from the authoritative server start tick. Using packet-arrival/clientNow as phase zero makes the HUD needle lag the server by network latency.
+            ClientBlackFlashCache.clientServerTickOffset = clientNow - timingStartTick;
+            ClientBlackFlashCache.clientTimingStartTick = timingStartTick;
+        }
+        if (newSession) {
+            ClientBlackFlashCache.awaitingReleaseAck = false;
+            ClientBlackFlashCache.localReleaseResolved = false;
+            ClientBlackFlashCache.localReleaseNonce = 0L;
+            ClientBlackFlashCache.localReleaseNeedle = 0.0f;
+        }
+        if (!charging) {
+            ClientBlackFlashCache.clientTimingStartTick = Long.MIN_VALUE;
+            ClientBlackFlashCache.timingStartTick = 0L;
+            ClientBlackFlashCache.timingRedStart = 0.0f;
+            ClientBlackFlashCache.timingRedSize = 0.0f;
+            if (sameLocalReleaseNonce || ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.localReleaseNonce != 0L) {
+                // A charging=false sync with the same nonce is the server acknowledgement that the release
+                // left the ring phase. Close the local RELEASED/ring state immediately; explicit feedback
+                // packets may then show TIMED, BLACK FLASH, or FAILED without leaving a pending timeout path.
+                System.out.println("[BlackFlashTimingDiag] CLIENT_RELEASE_ACK_SYNC nonce=" + ClientBlackFlashCache.localReleaseNonce + " previousNonce=" + previousNonce);
+                ClientBlackFlashCache.awaitingReleaseAck = false;
+                ClientBlackFlashCache.localReleaseResolved = false;
+                ClientBlackFlashCache.localReleaseNonce = 0L;
+                ClientBlackFlashCache.localReleaseNeedle = 0.0f;
+            } else {
+                ClientBlackFlashCache.awaitingReleaseAck = false;
+                ClientBlackFlashCache.localReleaseResolved = false;
+                ClientBlackFlashCache.localReleaseNonce = 0L;
+                ClientBlackFlashCache.localReleaseNeedle = 0.0f;
+            }
+        }
+    }
+
+    public static boolean markBlackFlashReleasedLocally(float needle, long timingNonce) {
+        if (timingNonce == 0L || ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.localReleaseNonce == timingNonce) {
+            return false;
+        }
+        ClientBlackFlashCache.localReleaseResolved = true;
+        ClientBlackFlashCache.localReleaseNonce = timingNonce;
+        ClientBlackFlashCache.localReleaseNeedle = frac(needle);
+        ClientBlackFlashCache.localReleaseStartMs = System.currentTimeMillis();
+        ClientBlackFlashCache.awaitingReleaseAck = true;
+        ClientBlackFlashCache.charging = false;
+        ClientBlackFlashCache.clientTimingStartTick = Long.MIN_VALUE;
+        System.out.println("[BlackFlashTimingDiag] LOCAL_RELEASE nonce=" + timingNonce + " needle=" + ClientBlackFlashCache.localReleaseNeedle);
+        showBlackFlashPendingFeedback();
+        return true;
+    }
+
+    public static void showBlackFlashPendingFeedback() {
+        applyBlackFlashFeedback(false, false, true);
+    }
+
+    public static void showBlackFlashFeedback(boolean success, boolean confirmedHit) {
+        ClientBlackFlashCache.awaitingReleaseAck = false;
+        applyBlackFlashFeedback(success, confirmedHit, false);
+    }
+
+    private static void applyBlackFlashFeedback(boolean success, boolean confirmedHit, boolean pending) {
+        long now = System.currentTimeMillis();
+        int feedbackType = pending ? 0 : (success ? (confirmedHit ? 3 : 2) : 1);
+        boolean duplicateBurst = ClientBlackFlashCache.lastFeedbackType == feedbackType && now - ClientBlackFlashCache.lastFeedbackUpdateMs < ClientBlackFlashCache.FEEDBACK_DEBOUNCE_MS;
+        boolean suppressWaitingTimedRefresh = feedbackType == 2 && ClientBlackFlashCache.lastFeedbackType == 2 && now - ClientBlackFlashCache.feedbackStartMs < ClientBlackFlashCache.TIMED_REFRESH_SUPPRESS_MS;
+        ClientBlackFlashCache.feedbackSuccess = success;
+        ClientBlackFlashCache.feedbackConfirmedHit = confirmedHit;
+        ClientBlackFlashCache.feedbackPending = pending;
+        ClientBlackFlashCache.lastFeedbackType = feedbackType;
+        ClientBlackFlashCache.lastFeedbackUpdateMs = now;
+        if (duplicateBurst || suppressWaitingTimedRefresh) {
+            return;
+        }
+        ClientBlackFlashCache.feedbackStartMs = now;
+        ClientBlackFlashCache.feedbackNonce++;
+    }
+
+    public static void failBlackFlashPendingFeedback() {
+        if (ClientBlackFlashCache.awaitingReleaseAck || ClientBlackFlashCache.localReleaseResolved) {
+            System.out.println("[BlackFlashTimingDiag] CLIENT_PENDING_TIMEOUT nonce=" + ClientBlackFlashCache.localReleaseNonce);
+            showBlackFlashFeedback(false, false);
+            ClientBlackFlashCache.awaitingReleaseAck = false;
+            ClientBlackFlashCache.localReleaseResolved = false;
+            ClientBlackFlashCache.localReleaseNonce = 0L;
+            ClientBlackFlashCache.localReleaseNeedle = 0.0f;
+        }
+    }
+
+    public static float getBlackFlashClientNeedle(float partialTick) {
+        if (ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.awaitingReleaseAck) {
+            return ClientBlackFlashCache.localReleaseNeedle;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        long gameTime = mc.level != null ? mc.level.getGameTime() : 0L;
+        long startTick = ClientBlackFlashCache.clientTimingStartTick != Long.MIN_VALUE ? ClientBlackFlashCache.clientTimingStartTick : ClientBlackFlashCache.timingStartTick;
+        return frac(((float)(gameTime - startTick) + partialTick) / Math.max(1.0f, ClientBlackFlashCache.timingPeriodTicks));
+    }
+
+    private static float frac(float value) {
+        return value - (float)Math.floor(value);
     }
 
     /**
@@ -90,6 +203,10 @@ public final class ClientPacketHandler {
     }
 
 
+    public static void spawnGojoTeleportGhost(double x, double y, double z, float yaw, int lifetime) {
+        // Gojo teleport ghost renderer is optional in this build; packet is intentionally a no-op when renderer is unavailable.
+    }
+ 
     /**
      * Lightweight client cache for the most recent technique and combat cooldown sync values.
      */
@@ -170,6 +287,36 @@ public final class ClientPacketHandler {
         public static boolean mastery = false;
         // Whether the Black Flash charge state is currently active for HUD effects.
         public static boolean charging = false;
+        // Server game tick when the current timing ring started.
+        public static long timingStartTick = 0L;
+        // Client game tick when the HUD received the current timing session, used as the rendered phase anchor.
+        public static long clientTimingStartTick = Long.MIN_VALUE;
+        // Difference between local client game time and the synced server timing start; render math uses this bridge but never packet-arrival time as phase zero.
+        public static long clientServerTickOffset = 0L;
+        // Server-authoritative needle lap duration for the current timing session.
+        public static float timingPeriodTicks = 18.0f;
+        // Randomized red target arc start, normalized to the 0..1 ring interval.
+        public static float timingRedStart = 0.0f;
+        // Randomized red target arc size, normalized to the 0..1 ring interval.
+        public static float timingRedSize = 0.0f;
+        // Monotonic session id from the server; release packets echo it to reject stale sessions.
+        public static long timingNonce = 0L;
+        public static final long FEEDBACK_DEBOUNCE_MS = 220L;
+        public static final long TIMED_REFRESH_SUPPRESS_MS = 1400L;
+        public static boolean feedbackSuccess = false;
+        public static boolean feedbackConfirmedHit = false;
+        public static boolean feedbackPending = false;
+        public static long feedbackStartMs = 0L;
+        public static int feedbackNonce = 0;
+        public static int lastFeedbackType = -1;
+        public static long lastFeedbackUpdateMs = 0L;
+        public static boolean localReleaseResolved = false;
+        public static long localReleaseNonce = 0L;
+        public static float localReleaseNeedle = 0.0f;
+        public static long localReleaseStartMs = 0L;
+        public static boolean awaitingReleaseAck = false;
+        public static int flow = 0;
+        public static int flowCooldown = 0;
 
         /**
          * Creates a new client black flash cache instance and initializes its addon state.

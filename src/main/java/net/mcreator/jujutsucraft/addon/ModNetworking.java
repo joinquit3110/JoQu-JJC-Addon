@@ -68,6 +68,9 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, OpenWheelPacket.class, OpenWheelPacket::encode, OpenWheelPacket::decode, OpenWheelPacket::handle);
         CHANNEL.registerMessage(packetId++, CooldownSyncPacket.class, CooldownSyncPacket::encode, CooldownSyncPacket::decode, CooldownSyncPacket::handle);
         CHANNEL.registerMessage(packetId++, BlackFlashSyncPacket.class, BlackFlashSyncPacket::encode, BlackFlashSyncPacket::decode, BlackFlashSyncPacket::handle);
+        CHANNEL.registerMessage(packetId++, BlackFlashReleasePacket.class, BlackFlashReleasePacket::encode, BlackFlashReleasePacket::decode, BlackFlashReleasePacket::handle);
+        CHANNEL.registerMessage(packetId++, BlackFlashFeedbackPacket.class, BlackFlashFeedbackPacket::encode, BlackFlashFeedbackPacket::decode, BlackFlashFeedbackPacket::handle);
+        CHANNEL.registerMessage(packetId++, GojoShiftTapPacket.class, GojoShiftTapPacket::encode, GojoShiftTapPacket::decode, GojoShiftTapPacket::handle);
         CHANNEL.registerMessage(packetId++, SelectSpiritPacket.class, SelectSpiritPacket::encode, SelectSpiritPacket::decode, SelectSpiritPacket::handle);
         CHANNEL.registerMessage(packetId++, SelectYutaCopyPacket.class, SelectYutaCopyPacket::encode, SelectYutaCopyPacket::decode, SelectYutaCopyPacket::handle);
         CHANNEL.registerMessage(packetId++, LimbSyncPacket.class, LimbSyncPacket::encode, LimbSyncPacket::decode, LimbSyncPacket::handle);
@@ -77,6 +80,7 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenPacket.class, DomainMasteryOpenPacket::encode, DomainMasteryOpenPacket::decode, DomainMasteryOpenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle);
+        CHANNEL.registerMessage(packetId++, GojoTeleportGhostPacket.class, GojoTeleportGhostPacket::encode, GojoTeleportGhostPacket::decode, GojoTeleportGhostPacket::handle);
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====
@@ -232,6 +236,13 @@ public class ModNetworking {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new CooldownSyncPacket(techRemaining, techMax, combatRemaining, combatMax));
     }
 
+    public static void sendGojoTeleportGhost(ServerPlayer player, double x, double y, double z, float yaw, int lifetime) {
+        if (player == null) {
+            return;
+        }
+        CHANNEL.send(PacketDistributor.TRACKING_ENTITY_AND_SELF.with(() -> player), (Object)new GojoTeleportGhostPacket(x, y, z, yaw, lifetime));
+    }
+ 
     // ===== WHEEL DISPLAY HELPERS =====
     private static int computeTechniqueColor(String displayName, boolean passive, boolean physical, double selectId) {
         String n = displayName == null ? "" : displayName.toLowerCase(Locale.ROOT);
@@ -778,7 +789,14 @@ public class ModNetworking {
         float pct = (float)data.getDouble("addon_bf_chance");
         boolean mastery = data.getBoolean("addon_bf_mastery");
         boolean charging = data.getBoolean("addon_bf_charging");
-        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashSyncPacket(pct, mastery, charging));
+        long timingStartTick = data.getLong("addon_bf_timing_start_tick");
+        float timingPeriodTicks = (float)data.getDouble("addon_bf_timing_period_ticks");
+        float timingRedStart = (float)data.getDouble("addon_bf_timing_red_start");
+        float timingRedSize = (float)data.getDouble("addon_bf_timing_red_size");
+        long timingNonce = data.getLong("addon_bf_timing_nonce");
+        int flow = data.getInt("addon_bf_flow");
+        int flowCooldown = data.getInt("addon_bf_flow_cooldown");
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashSyncPacket(pct, mastery, charging, timingStartTick, timingPeriodTicks, timingRedStart, timingRedSize, timingNonce, flow, flowCooldown));
     }
 
     /**
@@ -907,10 +925,16 @@ public class ModNetworking {
                 }
                 JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
                 if (vars.noChangeTechnique) {
-                    return;
+                    player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(cap -> {
+                        cap.noChangeTechnique = false;
+                        cap.syncPlayerVariables((Entity)player);
+                    });
+                    vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
                 }
                 int charId = ModNetworking.getActiveCharacterId(vars);
-                YutaCopyStore.cleanupVanillaPlayerCopy(player);
+                if (charId == 5 && YutaCopyStore.isYuta(player)) {
+                    YutaCopyStore.cleanupVanillaPlayerCopy(player);
+                }
                 double currentSelect = vars.PlayerSelectCurseTechnique;
                 if (ModNetworking.shouldRejectPlayerYutaSelection(player, charId, currentSelect)) {
                     currentSelect = 0.0D;
@@ -1071,53 +1095,74 @@ public class ModNetworking {
      * Client-bound packet that synchronizes Black Flash HUD values.
      */
     public static class BlackFlashSyncPacket {
-        // Black Flash percentage sent to the client.
         private final float bfPercent;
-        // Whether Black Flash mastery is unlocked in the sync packet.
         private final boolean mastery;
-        // Whether Black Flash charge state is active in the sync packet.
         private final boolean charging;
+        private final long timingStartTick;
+        private final float timingPeriodTicks;
+        private final float timingRedStart;
+        private final float timingRedSize;
+        private final long timingNonce;
+        private final int flow;
+        private final int flowCooldown;
 
-        /**
-         * Creates a new black flash sync packet instance and initializes its addon state.
-         * @param bfPercent bf percent used by this method.
-         * @param mastery mastery used by this method.
-         * @param charging charging used by this method.
-         */
-        public BlackFlashSyncPacket(float bfPercent, boolean mastery, boolean charging) {
+        public BlackFlashSyncPacket(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown) {
             this.bfPercent = bfPercent;
             this.mastery = mastery;
             this.charging = charging;
+            this.timingStartTick = timingStartTick;
+            this.timingPeriodTicks = timingPeriodTicks;
+            this.timingRedStart = timingRedStart;
+            this.timingRedSize = timingRedSize;
+            this.timingNonce = timingNonce;
+            this.flow = flow;
+            this.flowCooldown = flowCooldown;
         }
 
-        /**
-         * Writes this packet payload into the provided network buffer.
-         * @param pkt pkt used by this method.
-         * @param buf serialized data container used by this operation.
-         */
         public static void encode(BlackFlashSyncPacket pkt, FriendlyByteBuf buf) {
             buf.writeFloat(pkt.bfPercent);
             buf.writeBoolean(pkt.mastery);
             buf.writeBoolean(pkt.charging);
+            buf.writeLong(pkt.timingStartTick);
+            buf.writeFloat(pkt.timingPeriodTicks);
+            buf.writeFloat(pkt.timingRedStart);
+            buf.writeFloat(pkt.timingRedSize);
+            buf.writeLong(pkt.timingNonce);
+            buf.writeInt(pkt.flow);
+            buf.writeInt(pkt.flowCooldown);
         }
 
-        /**
-         * Reads this packet payload from the provided network buffer and rebuilds the packet instance.
-         * @param buf serialized data container used by this operation.
-         * @return the resulting decode value.
-         */
         public static BlackFlashSyncPacket decode(FriendlyByteBuf buf) {
-            return new BlackFlashSyncPacket(buf.readFloat(), buf.readBoolean(), buf.readBoolean());
+            return new BlackFlashSyncPacket(buf.readFloat(), buf.readBoolean(), buf.readBoolean(), buf.readLong(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readLong(), buf.readInt(), buf.readInt());
         }
 
-        /**
-         * Handles  for the addon system.
-         * @param pkt pkt used by this method.
-         * @param ctxSupplier context data supplied by the current callback or network pipeline.
-         */
         public static void handle(BlackFlashSyncPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
             NetworkEvent.Context ctx = ctxSupplier.get();
-            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.updateBlackFlash(pkt.bfPercent, pkt.mastery, pkt.charging)));
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.updateBlackFlash(pkt.bfPercent, pkt.mastery, pkt.charging, pkt.timingStartTick, pkt.timingPeriodTicks, pkt.timingRedStart, pkt.timingRedSize, pkt.timingNonce, pkt.flow, pkt.flowCooldown)));
+            ctx.setPacketHandled(true);
+        }
+    }
+
+    public static class GojoShiftTapPacket {
+        public GojoShiftTapPacket() {
+        }
+
+        public static void encode(GojoShiftTapPacket pkt, FriendlyByteBuf buf) {
+        }
+
+        public static GojoShiftTapPacket decode(FriendlyByteBuf buf) {
+            return new GojoShiftTapPacket();
+        }
+
+        public static void handle(GojoShiftTapPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> {
+                ServerPlayer player = ctx.getSender();
+                if (player == null) {
+                    return;
+                }
+                BlueRedPurpleNukeMod.handleGojoShiftTapPacket(player);
+            });
             ctx.setPacketHandled(true);
         }
     }
@@ -1659,6 +1704,40 @@ public class ModNetworking {
     }
 
 
+    public static class GojoTeleportGhostPacket {
+        private final double x;
+        private final double y;
+        private final double z;
+        private final float yaw;
+        private final int lifetime;
+
+        public GojoTeleportGhostPacket(double x, double y, double z, float yaw, int lifetime) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.yaw = yaw;
+            this.lifetime = Math.max(1, Math.min(60, lifetime));
+        }
+
+        public static void encode(GojoTeleportGhostPacket pkt, FriendlyByteBuf buf) {
+            buf.writeDouble(pkt.x);
+            buf.writeDouble(pkt.y);
+            buf.writeDouble(pkt.z);
+            buf.writeFloat(pkt.yaw);
+            buf.writeVarInt(pkt.lifetime);
+        }
+
+        public static GojoTeleportGhostPacket decode(FriendlyByteBuf buf) {
+            return new GojoTeleportGhostPacket(buf.readDouble(), buf.readDouble(), buf.readDouble(), buf.readFloat(), buf.readVarInt());
+        }
+
+        public static void handle(GojoTeleportGhostPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.spawnGojoTeleportGhost(pkt.x, pkt.y, pkt.z, pkt.yaw, pkt.lifetime)));
+            ctx.setPacketHandled(true);
+        }
+    }
+ 
     /**
      * Immutable snapshot of vanilla technique selection state used while the server probes wheel entries.
      */
@@ -1677,7 +1756,76 @@ public class ModNetworking {
      */
     private record SpiritData(int slot, String name, int count, int grade) {
     }
-    public static void sendBlackFlashFeedback(net.minecraft.server.level.ServerPlayer player, boolean success, boolean confirmedHit) { }
+
+    public record DomainClashOpponentPayload(float power, int form, int domainId, String name) {
+        public DomainClashOpponentPayload {
+            power = Math.max(0.0f, power);
+            name = name == null ? "" : name;
+        }
+    }
+
+    public static void sendBlackFlashRelease(float clientNeedle, long timingNonce) {
+        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, timingNonce));
+    }
+
+    public static void sendBlackFlashFeedback(net.minecraft.server.level.ServerPlayer player, boolean success, boolean confirmedHit) {
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashFeedbackPacket(success, confirmedHit));
+    }
+
+    public static class BlackFlashReleasePacket {
+        private final float clientNeedle;
+        private final long timingNonce;
+
+        public BlackFlashReleasePacket(float clientNeedle, long timingNonce) {
+            this.clientNeedle = clientNeedle;
+            this.timingNonce = timingNonce;
+        }
+
+        public static void encode(BlackFlashReleasePacket pkt, FriendlyByteBuf buf) {
+            buf.writeFloat(pkt.clientNeedle);
+            buf.writeLong(pkt.timingNonce);
+        }
+
+        public static BlackFlashReleasePacket decode(FriendlyByteBuf buf) {
+            return new BlackFlashReleasePacket(buf.readFloat(), buf.readLong());
+        }
+
+        public static void handle(BlackFlashReleasePacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> {
+                ServerPlayer player = ctx.getSender();
+                if (player != null) {
+                    BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, pkt.clientNeedle, pkt.timingNonce);
+                }
+            });
+            ctx.setPacketHandled(true);
+        }
+    }
+
+    public static class BlackFlashFeedbackPacket {
+        private final boolean success;
+        private final boolean confirmedHit;
+
+        public BlackFlashFeedbackPacket(boolean success, boolean confirmedHit) {
+            this.success = success;
+            this.confirmedHit = confirmedHit;
+        }
+
+        public static void encode(BlackFlashFeedbackPacket pkt, FriendlyByteBuf buf) {
+            buf.writeBoolean(pkt.success);
+            buf.writeBoolean(pkt.confirmedHit);
+        }
+
+        public static BlackFlashFeedbackPacket decode(FriendlyByteBuf buf) {
+            return new BlackFlashFeedbackPacket(buf.readBoolean(), buf.readBoolean());
+        }
+
+        public static void handle(BlackFlashFeedbackPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.showBlackFlashFeedback(pkt.success, pkt.confirmedHit)));
+            ctx.setPacketHandled(true);
+        }
+    }
 }
 
 

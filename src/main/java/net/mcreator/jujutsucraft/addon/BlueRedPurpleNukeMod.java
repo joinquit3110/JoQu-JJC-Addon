@@ -251,6 +251,23 @@ public class BlueRedPurpleNukeMod {
     // Maximum bonus added to normal Red explosion knockback from long flight.
     private static final double NORMAL_RED_DISTANCE_KNOCKBACK_BONUS = 0.4;
 
+
+    public static final int BF_FLOW_MAX = 8;
+    public static final float BF_TIMING_PERIOD_TICKS = 18.0f;
+
+    public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle, long clientNonce) {
+        if (player != null) {
+            ModNetworking.sendBlackFlashFeedback(player, true, false);
+            ModNetworking.sendBlackFlashSync(player);
+        }
+    }
+
+    public static void handleGojoShiftTapPacket(ServerPlayer player) {
+        if (player != null) {
+            ModNetworking.sendGojoTeleportGhost(player, player.getX(), player.getY(), player.getZ(), player.getYRot(), 8);
+        }
+    }
+
     /**
      * Initializes the addon mod, registers custom entities, subscribes Forge event listeners, and prepares the networking channel.
      */

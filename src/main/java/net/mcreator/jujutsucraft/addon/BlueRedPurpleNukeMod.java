@@ -256,16 +256,85 @@ public class BlueRedPurpleNukeMod {
     public static final float BF_TIMING_PERIOD_TICKS = 18.0f;
 
     public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle, long clientNonce) {
-        if (player != null) {
-            ModNetworking.sendBlackFlashFeedback(player, true, false);
-            ModNetworking.sendBlackFlashSync(player);
+        if (player == null) {
+            return;
         }
+        CompoundTag data = player.getPersistentData();
+        long serverNonce = data.getLong("addon_bf_timing_nonce");
+        boolean nonceMatches = clientNonce == 0L || serverNonce == 0L || clientNonce == serverNonce;
+        boolean canRelease = releasedFromCharge && data.getBoolean("addon_bf_charging") && nonceMatches;
+        if (!canRelease) {
+            ModNetworking.sendBlackFlashFeedback(player, false, false);
+            ModNetworking.sendBlackFlashSync(player);
+            return;
+        }
+        data.putBoolean("addon_bf_waiting_hit", true);
+        data.putBoolean("addon_bf_released", true);
+        data.putBoolean("addon_bf_timing_resolved", true);
+        data.putBoolean("addon_bf_guaranteed", true);
+        data.putBoolean("addon_bf_charging", false);
+        data.putLong("addon_bf_guarantee_nonce", clientNonce != 0L ? clientNonce : serverNonce);
+        data.putLong("addon_bf_release_tick", player.level().getGameTime());
+        data.putFloat("addon_bf_release_needle", clientNeedle);
+        player.displayClientMessage(Component.literal("§6Black Flash timing locked - land the hit!"), true);
+        ModNetworking.sendBlackFlashFeedback(player, true, false);
+        ModNetworking.sendBlackFlashSync(player);
     }
 
     public static void handleGojoShiftTapPacket(ServerPlayer player) {
-        if (player != null) {
-            ModNetworking.sendGojoTeleportGhost(player, player.getX(), player.getY(), player.getZ(), player.getYRot(), 8);
+        if (player == null || !(player.level() instanceof ServerLevel serverLevel)) {
+            return;
         }
+        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+        double activeTechnique = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
+        if ((int)Math.round(activeTechnique) != 2 || (int)Math.round(vars.PlayerSelectCurseTechnique) != 7) {
+            return;
+        }
+        Vec3 eyePos = player.getEyePosition(1.0f);
+        Vec3 lookVec = player.getLookAngle().normalize();
+        double cosThreshold = Math.cos(Math.toRadians(AIM_CONE_ANGLE));
+        LivingEntity target = null;
+        double bestScore = Double.MAX_VALUE;
+        List<LivingEntity> candidates = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(player.position(), player.position()).inflate(TELEPORT_RANGE), e -> e.isAlive() && e != player && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
+        for (LivingEntity candidate : candidates) {
+            Vec3 toEntity = candidate.position().add(0.0, (double)candidate.getBbHeight() * 0.5, 0.0).subtract(eyePos);
+            double dist = toEntity.length();
+            if (dist < 1.0 || dist > TELEPORT_RANGE) {
+                continue;
+            }
+            double dot = lookVec.dot(toEntity.normalize());
+            if (dot < cosThreshold) {
+                continue;
+            }
+            double score = dist + (1.0 - dot) * 10.0;
+            if (score < bestScore) {
+                bestScore = score;
+                target = candidate;
+            }
+        }
+        if (target == null) {
+            player.displayClientMessage(Component.literal("§7[Gojo] No teleport target in sight."), true);
+            return;
+        }
+        Vec3 oldPos = player.position();
+        Vec3 targetPos = target.position();
+        Vec3 dirToOwner = player.position().subtract(targetPos);
+        if (dirToOwner.lengthSqr() < 1.0E-6) {
+            dirToOwner = lookVec.reverse();
+        }
+        Vec3 behindPos = targetPos.subtract(dirToOwner.normalize().scale(BEHIND_DISTANCE));
+        behindPos = new Vec3(behindPos.x, target.getY(), behindPos.z);
+        double dx = target.getX() - behindPos.x;
+        double dz = target.getZ() - behindPos.z;
+        float newYaw = (float)(Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        double dy = target.getY() + (double)target.getBbHeight() * 0.5 - (behindPos.y + (double)player.getEyeHeight());
+        double horizDist = Math.sqrt(dx * dx + dz * dz);
+        float newPitch = (float)(-Math.toDegrees(Math.atan2(dy, horizDist)));
+        ModNetworking.sendGojoTeleportGhost(player, oldPos.x, oldPos.y, oldPos.z, player.getYRot(), 12);
+        player.teleportTo(serverLevel, behindPos.x, behindPos.y, behindPos.z, newYaw, newPitch);
+        serverLevel.sendParticles((ParticleOptions)ParticleTypes.REVERSE_PORTAL, oldPos.x, oldPos.y + 1.0, oldPos.z, 24, 0.4, 0.8, 0.4, 0.08);
+        serverLevel.sendParticles((ParticleOptions)ParticleTypes.REVERSE_PORTAL, behindPos.x, behindPos.y + 1.0, behindPos.z, 32, 0.5, 0.9, 0.5, 0.1);
+        serverLevel.playSound(null, BlockPos.containing((Position)behindPos), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 1.4f, 1.2f);
     }
 
     /**
@@ -2619,9 +2688,47 @@ public class BlueRedPurpleNukeMod {
             target.hurtMarked = true;
         }
     }
-    public static boolean isBlackFlashGuaranteeActive(net.minecraft.server.level.ServerPlayer player) { return false; }
-    public static void confirmBlackFlashGuaranteeHit(net.minecraft.server.level.ServerPlayer player) { }
+    public static boolean isBlackFlashGuaranteeActive(net.minecraft.server.level.ServerPlayer player) {
+        if (player == null) {
+            return false;
+        }
+        CompoundTag data = player.getPersistentData();
+        if (!data.getBoolean("addon_bf_waiting_hit") || !data.getBoolean("addon_bf_guaranteed")) {
+            return false;
+        }
+        long releaseTick = data.getLong("addon_bf_release_tick");
+        return releaseTick <= 0L || player.level().getGameTime() - releaseTick <= 80L;
+    }
 
-    public static void clearBlackFlashRuntimeState(net.minecraft.server.level.ServerPlayer player) { }
+    public static void confirmBlackFlashGuaranteeHit(net.minecraft.server.level.ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_timing_resolved", true);
+        data.remove("addon_bf_guarantee_nonce");
+        data.remove("addon_bf_release_tick");
+        data.remove("addon_bf_release_needle");
+        ModNetworking.sendBlackFlashFeedback(player, true, true);
+        ModNetworking.sendBlackFlashSync(player);
+    }
+
+    public static void clearBlackFlashRuntimeState(net.minecraft.server.level.ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        data.putBoolean("addon_bf_waiting_hit", false);
+        data.putBoolean("addon_bf_guaranteed", false);
+        data.putBoolean("addon_bf_released", false);
+        data.putBoolean("addon_bf_charging", false);
+        data.putBoolean("addon_bf_timing_resolved", false);
+        data.remove("addon_bf_guarantee_nonce");
+        data.remove("addon_bf_release_tick");
+        data.remove("addon_bf_release_needle");
+    }
 }
 

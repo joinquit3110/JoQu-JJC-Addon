@@ -42,6 +42,7 @@ public class ClientEvents {
     private static boolean wasKeyDown;
     // Previous frame state for the domain mastery key so the screen only opens on a fresh press.
     private static boolean wasDMKeyDown;
+    private static boolean wasShiftDown;
 
     @SubscribeEvent
     /**
@@ -66,6 +67,11 @@ public class ClientEvents {
             ClientEvents.tickMovementKey(mc.options.keyShift, window);
             ClientEvents.tickMovementKey(mc.options.keySprint, window);
         }
+        boolean shiftDown = mc.options.keyShift.isDown();
+        if (shiftDown && !wasShiftDown && mc.screen == null) {
+            ClientEvents.handleShiftTap(mc);
+        }
+        wasShiftDown = shiftDown;
     }
 
     /**
@@ -102,6 +108,26 @@ public class ClientEvents {
             ClientEvents.openDomainMastery(mc);
         }
         wasDMKeyDown = isDMDown;
+    }
+
+    private static void handleShiftTap(Minecraft mc) {
+        LocalPlayer player = mc.player;
+        if (player == null) {
+            return;
+        }
+        if (ClientPacketHandler.ClientBlackFlashCache.charging) {
+            float needle = ClientPacketHandler.getBlackFlashClientNeedle(0.0f);
+            long nonce = ClientPacketHandler.ClientBlackFlashCache.timingNonce;
+            if (ClientPacketHandler.markBlackFlashReleasedLocally(needle, nonce)) {
+                ModNetworking.sendBlackFlashRelease(needle, nonce);
+            }
+            return;
+        }
+        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+        double activeTechnique = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
+        if ((int)Math.round(activeTechnique) == 2 && (int)Math.round(vars.PlayerSelectCurseTechnique) == 7) {
+            ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.GojoShiftTapPacket());
+        }
     }
 
     /**

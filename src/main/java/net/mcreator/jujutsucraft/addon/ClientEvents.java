@@ -18,6 +18,7 @@ import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.EntityRenderersEvent;
 import net.minecraftforge.client.event.InputEvent;
@@ -222,6 +223,7 @@ public class ClientEvents {
          */
         public static void registerEntityRenderers(EntityRenderersEvent.RegisterRenderers event) {
             event.registerEntityRenderer((EntityType)LimbEntityRegistry.SEVERED_LIMB.get(), SeveredLimbRenderer::new);
+            event.registerEntityRenderer((EntityType)LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), net.minecraft.client.renderer.entity.VillagerRenderer::new);
         }
 
         @SubscribeEvent

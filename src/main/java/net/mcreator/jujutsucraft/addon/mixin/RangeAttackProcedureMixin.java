@@ -7,6 +7,7 @@ import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementProgress;
 import net.mcreator.jujutsucraft.addon.BlueRedPurpleNukeMod;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
 import net.mcreator.jujutsucraft.entity.RedEntity;
@@ -16,6 +17,7 @@ import net.mcreator.jujutsucraft.procedures.LogicAttackProcedure;
 import net.mcreator.jujutsucraft.procedures.LogicBetrayalProcedure;
 import net.mcreator.jujutsucraft.procedures.RangeAttackProcedure;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -53,6 +55,12 @@ public class RangeAttackProcedureMixin {
     private static final String KEY_CNT6_SUPPRESSED = "jjkbrp_cnt6_suppressed";
     // Persistent-data flag marking that the near-death cooldown reduction was already handled for the current Black Flash event.
     private static final String KEY_BF_ND_HANDLED = "jjkbrp_bf_nd_handled";
+    // Persistent-data flag indicating the addon temporarily boosted cnt6 to force OG Black Flash probability for one timed hit.
+    private static final String KEY_BF_FORCED_WINDOW = "jjkbrp_bf_forced_window";
+    // Persistent-data key storing the forced-window owner UUID so return detection can confirm the same timed hit even when the attacking entity is a projectile.
+    private static final String KEY_BF_FORCED_OWNER_UUID = "jjkbrp_bf_forced_owner_uuid";
+    // Persistent-data key storing the Zone duration before the forced call so confirmation can handle players already inside Zone.
+    private static final String KEY_BF_FORCED_PRE_ZONE_DUR = "jjkbrp_bf_forced_pre_zone_dur";
     // Persistent-data key storing the pre-scaled damage value so rank scaling can be safely reverted after each attack call.
     private static final String KEY_RANK_DAMAGE_BACKUP = "jjkbrp_rank_damage_backup";
     // Persistent-data flag marking that rank-based damage scaling was applied for the current attack execution.
@@ -186,7 +194,16 @@ public class RangeAttackProcedureMixin {
         if (!data.getBoolean(KEY_CNT6_SUPPRESSED)) {
             double liveCnt6 = data.getDouble("cnt6");
             double domainBonus = Math.max(0.0, data.getDouble("jjkbrp_domain_bf_bonus"));
-            if (bfCd > 0) {
+            ServerPlayer guaranteeOwner = RangeAttackProcedureMixin.jjkblueredpurple$resolveGuaranteedBlackFlashOwner(world, entity, data);
+            if (guaranteeOwner != null && BlueRedPurpleNukeMod.isBlackFlashGuaranteeActive(guaranteeOwner)) {
+                data.putDouble(KEY_CNT6_BACKUP, liveCnt6);
+                data.putDouble("cnt6", 99999.0);
+                data.putBoolean(KEY_CNT6_SUPPRESSED, true);
+                data.putBoolean(KEY_BF_FORCED_WINDOW, true);
+                data.putString(KEY_BF_FORCED_OWNER_UUID, guaranteeOwner.getStringUUID());
+                MobEffectInstance preZone = guaranteeOwner.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
+                data.putInt(KEY_BF_FORCED_PRE_ZONE_DUR, preZone != null ? preZone.getDuration() : 0);
+            } else if (bfCd > 0) {
                 data.putDouble(KEY_CNT6_BACKUP, liveCnt6);
                 data.putDouble("cnt6", 0.0);
                 data.putBoolean(KEY_CNT6_SUPPRESSED, true);
@@ -246,25 +263,44 @@ public class RangeAttackProcedureMixin {
         if (entity instanceof LivingEntity) {
             boolean bfJustProcced;
             LivingEntity le = (LivingEntity)entity;
-            MobEffectInstance zone = le.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
+            ServerPlayer forcedOwner = RangeAttackProcedureMixin.jjkblueredpurple$resolveForcedBlackFlashOwner(world, data);
+            LivingEntity procSource = forcedOwner != null ? forcedOwner : le;
+            MobEffectInstance zone = procSource.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
             int dur = zone != null ? zone.getDuration() : 0;
-            int lastDur = data.getInt(KEY_LAST_ZONE_DUR);
-            data.putInt(KEY_LAST_ZONE_DUR, dur);
-            // A fresh jump into the near-6000 Zone duration band is treated as the reliable Black Flash proc signal for this ranged path.
-            boolean bl = bfJustProcced = dur >= 5990 && dur > lastDur;
+            int lastDur = procSource.getPersistentData().getInt(KEY_LAST_ZONE_DUR);
+            procSource.getPersistentData().putInt(KEY_LAST_ZONE_DUR, dur);
+            boolean forcedWindow = data.getBoolean(KEY_BF_FORCED_WINDOW);
+            int forcedPreDur = data.getInt(KEY_BF_FORCED_PRE_ZONE_DUR);
+            // A normal proc is a fresh jump into the near-6000 Zone duration band. A forced timed hit can also be confirmed when the owner was already in Zone and OG refreshed/kept the high duration band.
+            boolean bl = bfJustProcced = dur >= 5990 && (dur > lastDur || forcedWindow && dur >= Math.max(5990, forcedPreDur - 2));
             if (bfJustProcced) {
-                int totalHits = data.getInt("addon_bf_total_hits");
+                ServerPlayer guaranteeOwner = forcedOwner != null ? forcedOwner : RangeAttackProcedureMixin.jjkblueredpurple$resolveGuaranteedBlackFlashOwner(world, entity, data);
+                CompoundTag counterData = procSource.getPersistentData();
+                int totalHits = counterData.getInt("addon_bf_total_hits");
+                int newTotalHits = totalHits + 1;
                 // Successful procs permanently increase the tracked Black Flash hit counter used by other addon systems.
-                data.putInt("addon_bf_total_hits", totalHits + 1);
-                int ndCd = data.getInt("jjkbrp_near_death_cd");
+                counterData.putInt("addon_bf_total_hits", newTotalHits);
+                ServerPlayer progressPlayer = forcedOwner != null ? forcedOwner : (le instanceof ServerPlayer ? (ServerPlayer)le : null);
+                RangeAttackProcedureMixin.jjkblueredpurple$notifyBlackFlashProgress(progressPlayer, newTotalHits);
+                int ndCd = counterData.getInt("jjkbrp_near_death_cd");
                 if (ndCd > 0) {
-                    data.putInt("jjkbrp_near_death_cd", Math.max(0, ndCd - 600));
+                    counterData.putInt("jjkbrp_near_death_cd", Math.max(0, ndCd - 600));
                 }
-                // Apply the short ranged Black Flash cooldown so the temporary proc boost cannot trigger again immediately.
-                data.putInt(KEY_BF_CD, 60);
-                data.putBoolean(KEY_BF_ND_HANDLED, true);
-                data.putBoolean("jjkbrp_bf_regen_boost", true);
+                // Apply the short ranged Black Flash cooldown only to random/addon-boosted procs. Timed guaranteed Black Flash must ignore this cooldown.
+                if (guaranteeOwner == null) {
+                    counterData.putInt(KEY_BF_CD, 60);
+                }
+                counterData.putBoolean(KEY_BF_ND_HANDLED, true);
+                counterData.putBoolean("jjkbrp_bf_regen_boost", true);
+                if (guaranteeOwner != null) {
+                    BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(guaranteeOwner);
+                } else if (le instanceof ServerPlayer serverPlayer) {
+                    net.mcreator.jujutsucraft.addon.ModNetworking.sendBlackFlashFeedback(serverPlayer, true, true);
+                }
             }
+            data.putBoolean(KEY_BF_FORCED_WINDOW, false);
+            data.remove(KEY_BF_FORCED_OWNER_UUID);
+            data.remove(KEY_BF_FORCED_PRE_ZONE_DUR);
         }
     }
 
@@ -410,8 +446,12 @@ public class RangeAttackProcedureMixin {
         long currentGameTime = serverLevel.getGameTime();
         List<LivingEntity> nearbyTargets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(x, y, z, x, y, z).inflate(range / 2.0), target -> target.isAlive() && target != entity);
         boolean foundTarget = false;
+        Player owner = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, data.getString("OWNER_UUID"));
         for (LivingEntity target : nearbyTargets) {
-            boolean betrayal = LogicBetrayalProcedure.execute(entity, target);
+            if (RangeAttackProcedureMixin.jjkbrp$isOwnedRikaFriendlyFire(owner, target)) {
+                continue;
+            }
+            boolean betrayal = RangeAttackProcedureMixin.jjkblueredpurple$executeLogicBetrayal(world, entity, target);
             if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
                 continue;
             }
@@ -426,7 +466,10 @@ public class RangeAttackProcedureMixin {
             return false;
         }
         for (LivingEntity target : nearbyTargets) {
-            boolean betrayal = LogicBetrayalProcedure.execute(entity, target);
+            if (RangeAttackProcedureMixin.jjkbrp$isOwnedRikaFriendlyFire(owner, target)) {
+                continue;
+            }
+            boolean betrayal = RangeAttackProcedureMixin.jjkblueredpurple$executeLogicBetrayal(world, entity, target);
             if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
                 continue;
             }
@@ -463,10 +506,14 @@ public class RangeAttackProcedureMixin {
             return target.hurt(source, amount);
         }
         CompoundTag attackerData = attacker.getPersistentData();
+        Player owner = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, attackerData.getString("OWNER_UUID"));
+        if (RangeAttackProcedureMixin.jjkbrp$isOwnedRikaFriendlyFire(owner, livingTarget)) {
+            return false;
+        }
         if (attackerData.getBoolean("DomainAttack")) {
             return target.hurt(source, amount);
         }
-        boolean betrayal = LogicBetrayalProcedure.execute(attacker, livingTarget);
+        boolean betrayal = RangeAttackProcedureMixin.jjkblueredpurple$executeLogicBetrayal(world, attacker, livingTarget);
         if (!LogicAttackProcedure.execute(world, attacker, livingTarget) && !betrayal) {
             return target.hurt(source, amount);
         }
@@ -481,6 +528,27 @@ public class RangeAttackProcedureMixin {
             targetData.putLong(KEY_RED_LAST_HIT_TICK, currentGameTime);
         }
         return hurt;
+    }
+
+    @Unique
+    private static boolean jjkbrp$isOwnedRikaFriendlyFire(Player owner, Entity target) {
+        return owner != null && target != null && YutaCopyStore.isOwnedRika(owner, target);
+    }
+
+    @Unique
+    private static boolean jjkblueredpurple$executeLogicBetrayal(LevelAccessor world, Entity attacker, Entity target) {
+        try {
+            return LogicBetrayalProcedure.execute(world, attacker, target);
+        } catch (NoSuchMethodError error) {
+            try {
+                java.lang.reflect.Method legacyExecute = LogicBetrayalProcedure.class.getMethod("execute", Entity.class, Entity.class);
+                Object result = legacyExecute.invoke(null, attacker, target);
+                return result instanceof Boolean && ((Boolean)result).booleanValue();
+            } catch (ReflectiveOperationException reflectionError) {
+                LOGGER.warn("[JJKBRP] LogicBetrayalProcedure legacy fallback failed; treating as non-betrayal", reflectionError);
+                return false;
+            }
+        }
     }
 
     /**
@@ -675,6 +743,64 @@ public class RangeAttackProcedureMixin {
     }
 
     /**
+     * Sends a red Close Call-style Black Flash mastery progress chat line to the player that actually performed the proc.
+     * @param player player instance involved in this operation.
+     * @param currentHits current Black Flash hit total after the successful proc.
+     */
+    @Unique
+    private static void jjkblueredpurple$notifyBlackFlashProgress(ServerPlayer player, int currentHits) {
+        if (player == null || player.level().isClientSide()) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        if (data.getBoolean("addon_bf_mastery") || RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jjkblueredpurple:black_flash_mastery")) {
+            return;
+        }
+        int threshold = RangeAttackProcedureMixin.jjkblueredpurple$getBlackFlashMasteryThreshold(player);
+        if (currentHits >= threshold) {
+            return;
+        }
+        int remaining = threshold - currentHits;
+        int milestone = (int)Math.floor((double)currentHits * 100.0 / (double)Math.max(1, threshold));
+        String bar = RangeAttackProcedureMixin.jjkblueredpurple$progressBar(currentHits, threshold, 24);
+        String title = "\u00a74\u26a1 \u00a70Black \u00a7cFlash";
+        String msg = milestone >= 90 ? title + " \u00a7c" + currentHits + "\u00a70/\u00a7c" + threshold + " \u00a70[" + bar + "\u00a70] \u00a7f— \u00a7a" + remaining + " more!"
+                : (milestone >= 75 ? title + " \u00a7c" + currentHits + "\u00a70/\u00a7c" + threshold + " \u00a70[" + bar + "\u00a70] \u00a7f— \u00a7eAlmost there!"
+                : title + " \u00a7c" + currentHits + "\u00a70/\u00a7c" + threshold + " \u00a70[" + bar + "\u00a70]");
+        player.displayClientMessage((Component)Component.literal((String)msg), false);
+    }
+
+    /**
+     * Builds a compact text progress bar matching the Close Call progression layout.
+     * @param current current progress value.
+     * @param max maximum progress value.
+     * @param width number of bar characters to render.
+     * @return formatted bar contents.
+     */
+    @Unique
+    private static String jjkblueredpurple$progressBar(int current, int max, int width) {
+        int filled = (int)Math.round((double)Math.max(0, current) * (double)width / (double)Math.max(1, max));
+        filled = Math.max(0, Math.min(width, filled));
+        StringBuilder sb = new StringBuilder(width * 3);
+        for (int i = 0; i < width; ++i) {
+            sb.append(i < filled ? "\u00a7c\u2588" : "\u00a78\u2591");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Resolves the current player's Black Flash mastery threshold, including Yuji's reduced requirement.
+     * @param player player instance involved in this operation.
+     * @return 200 for Yuji, otherwise 500.
+     */
+    @Unique
+    private static int jjkblueredpurple$getBlackFlashMasteryThreshold(ServerPlayer player) {
+        JujutsucraftModVariables.PlayerVariables vars = (JujutsucraftModVariables.PlayerVariables)player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+        double activeTech = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
+        return (int)Math.round(activeTech) == 21 ? 200 : 500;
+    }
+
+    /**
      * Checks whether the owner has completed a specific advancement.
      * @param player entity involved in the current mixin operation.
      * @param advancementId identifier used to resolve runtime state for this operation.
@@ -693,6 +819,43 @@ public class RangeAttackProcedureMixin {
         catch (Exception ignored) {
             return false;
         }
+    }
+
+    @Unique
+    private static ServerPlayer jjkblueredpurple$resolveForcedBlackFlashOwner(LevelAccessor world, CompoundTag data) {
+        if (!(world instanceof ServerLevel) || data == null || !data.getBoolean(KEY_BF_FORCED_WINDOW)) {
+            return null;
+        }
+        String ownerUuid = data.getString(KEY_BF_FORCED_OWNER_UUID);
+        if (ownerUuid == null || ownerUuid.isEmpty()) {
+            return null;
+        }
+        try {
+            return ((ServerLevel)world).getServer().getPlayerList().getPlayer(UUID.fromString(ownerUuid));
+        }
+        catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    @Unique
+    private static ServerPlayer jjkblueredpurple$resolveGuaranteedBlackFlashOwner(LevelAccessor world, Entity entity, CompoundTag data) {
+        if (!(world instanceof ServerLevel)) {
+            return null;
+        }
+        ServerPlayer player = null;
+        if (entity instanceof ServerPlayer serverPlayer) {
+            player = serverPlayer;
+        } else {
+            Player owner = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, data.getString("OWNER_UUID"));
+            if (owner instanceof ServerPlayer serverOwner) {
+                player = serverOwner;
+            }
+        }
+        if (player == null || !BlueRedPurpleNukeMod.isBlackFlashGuaranteeActive(player)) {
+            return null;
+        }
+        return player;
     }
 
     /**

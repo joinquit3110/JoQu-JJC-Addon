@@ -1,0 +1,183 @@
+package net.mcreator.jujutsucraft.addon;
+
+import java.util.Locale;
+import java.util.function.Supplier;
+
+/**
+ * Enumeration of the nine addon domain mastery properties. Each entry defines localization keys, per-level values, point costs, display formatting, and whether the property supports negative modification.
+ */
+public enum DomainMasteryProperties {
+    /** Domain property that drains cursed energy from affected victims over time. */
+    VICTIM_CE_DRAIN("jujutsucraft.domain.prop.ce_drain", "jujutsucraft.domain.prop.ce_drain.desc", 10, 1, () -> 1.2, " CE/0.5s"),
+    /** Domain property that increases the owner's Black Flash proc chance. */
+    BF_CHANCE_BOOST("jujutsucraft.domain.prop.bf_chance", "jujutsucraft.domain.prop.bf_chance.desc", 10, 1, () -> 0.5, "% BF"),
+    /** Domain property that increases reverse cursed technique healing while the domain is active. */
+    RCT_HEAL_BOOST("jujutsucraft.domain.prop.rct_heal", "jujutsucraft.domain.prop.rct_heal.desc", 10, 1, () -> 0.25, " HP/s"),
+    /** Domain property that applies or strengthens blindness inside the domain. */
+    BLIND_EFFECT("jujutsucraft.domain.prop.blind", "jujutsucraft.domain.prop.blind.desc", 5, 1, () -> 1.0, " lvl"),
+    /** Domain property that applies or strengthens slowing effects inside the domain. */
+    SLOW_EFFECT("jujutsucraft.domain.prop.slow", "jujutsucraft.domain.prop.slow.desc", 5, 1, () -> 1.0, " lvl"),
+    /** Domain property that extends how long the domain can remain active. */
+    DURATION_EXTEND("jujutsucraft.domain.prop.duration", "jujutsucraft.domain.prop.duration.desc", 10, 1, () -> 5.0, "s"),
+    /** Domain property that increases the effective range of the domain. */
+    RADIUS_BOOST("jujutsucraft.domain.prop.radius", "jujutsucraft.domain.prop.radius.desc", 10, 1, () -> 12.0, "%"),
+    /** Domain property that improves clash performance against competing domains. */
+    CLASH_POWER("jujutsucraft.domain.prop.clash_power", "jujutsucraft.domain.prop.clash_power.desc", 10, 1, () -> 1.0, ""),
+    /** Domain property that strengthens barrier resistance against pressure. */
+    BARRIER_REFINEMENT("jujutsucraft.domain.prop.barrier_ref", "jujutsucraft.domain.prop.barrier_ref.desc", 10, 1, () -> 4.0, "%");
+
+    // Translation key for the property name shown in UI and command output.
+    private final String nameKey;
+    // Translation key for the tooltip description shown in the mastery screen.
+    private final String descKey;
+    // Maximum level this property can reach through point investment.
+    private final int maxLevel;
+    // Property point cost required for each level invested in this property.
+    private final int pointCostPerLevel;
+    // Lazy supplier that returns the numeric value granted by each level.
+    private final Supplier<Double> valuePerLevelSupplier;
+    // Display suffix appended when formatting this property's numeric value.
+    private final String unit;
+
+    /**
+     * Creates a new domain mastery properties instance and initializes its addon state.
+     * @param nameKey name key used by this method.
+     * @param descKey desc key used by this method.
+     * @param maxLevel level value used by this operation.
+     * @param pointCostPerLevel level value used by this operation.
+     * @param valuePerLevelSupplier value per level supplier used by this method.
+     * @param unit unit used by this method.
+     */
+    private DomainMasteryProperties(String nameKey, String descKey, int maxLevel, int pointCostPerLevel, Supplier<Double> valuePerLevelSupplier, String unit) {
+        this.nameKey = nameKey;
+        this.descKey = descKey;
+        this.maxLevel = maxLevel;
+        this.pointCostPerLevel = pointCostPerLevel;
+        this.valuePerLevelSupplier = valuePerLevelSupplier;
+        this.unit = unit;
+    }
+
+    /**
+     * Returns name key for the current addon state.
+     * @return the resolved name key.
+     */
+    public String getNameKey() {
+        return this.nameKey;
+    }
+
+    /**
+     * Returns desc key for the current addon state.
+     * @return the resolved desc key.
+     */
+    public String getDescKey() {
+        return this.descKey;
+    }
+
+    /**
+     * Returns max level for the current addon state.
+     * @return the resolved max level.
+     */
+    public int getMaxLevel() {
+        return this.maxLevel;
+    }
+
+    /**
+     * Returns point cost for the current addon state.
+     * @return the resolved point cost.
+     */
+    public int getPointCost() {
+        return this.pointCostPerLevel;
+    }
+
+    /**
+     * Returns value per level for the current addon state.
+     * @return the resolved value per level.
+     */
+    public double getValuePerLevel() {
+        return this.valuePerLevelSupplier.get();
+    }
+
+    /**
+     * Returns unit for the current addon state.
+     * @return the resolved unit.
+     */
+    public String getUnit() {
+        return this.unit;
+    }
+
+    /**
+     * Formats level value for addon display output.
+     * @param level level value used by this operation.
+     * @return the resulting format level value value.
+     */
+    public String formatLevelValue(int level) {
+        double value = this.getValuePerLevel() * (double)level;
+        return switch (this) {
+            case DURATION_EXTEND -> String.format(Locale.ROOT, "%+.0fs", value);
+            case CLASH_POWER -> String.format(Locale.ROOT, "%+.1f flat", value);
+            case BARRIER_REFINEMENT -> String.format(Locale.ROOT, "%+.0f%%", value);
+            default -> String.format(Locale.ROOT, "%+.1f%s", value, this.getUnit());
+        };
+    }
+
+    /**
+     * Formats negative value for addon display output.
+     * @param negativePoints negative points used by this method.
+     * @return the resulting format negative value value.
+     */
+    public String formatNegativeValue(int negativePoints) {
+        int points = Math.max(0, negativePoints);
+        double value = this.getNegativeValuePerLevel() * (double)points;
+        return switch (this) {
+            case DURATION_EXTEND -> String.format(Locale.ROOT, "-%.0fs", value);
+            case CLASH_POWER -> String.format(Locale.ROOT, "-%.1f flat", value);
+            case RADIUS_BOOST -> String.format(Locale.ROOT, "-%.1f%%", value);
+            case BARRIER_REFINEMENT -> String.format(Locale.ROOT, "-%.0f%%", value);
+            default -> String.format(Locale.ROOT, "-%.1f%s", value, this.getUnit());
+        };
+    }
+
+    public double getNegativeValuePerLevel() {
+        return switch (this) {
+            case DURATION_EXTEND -> this.getValuePerLevel();
+            case CLASH_POWER -> 0.3;
+            case RADIUS_BOOST -> 8.0;
+            case BARRIER_REFINEMENT -> this.getValuePerLevel();
+            default -> this.getValuePerLevel();
+        };
+    }
+
+    /**
+     * Performs total point cost for this addon component.
+     * @return the resulting total point cost value.
+     */
+    public int totalPointCost() {
+        return this.maxLevel * this.pointCostPerLevel;
+    }
+
+    /**
+     * Checks whether supports negative modify is true for the current addon state.
+     * @return true when supports negative modify succeeds; otherwise false.
+     */
+    public boolean supportsNegativeModify() {
+        return this == DURATION_EXTEND || this == RADIUS_BOOST || this == CLASH_POWER || this == BARRIER_REFINEMENT;
+    }
+
+    /**
+     * Checks whether is locked is true for the current addon state.
+     * @param masteryLevel level value used by this operation.
+     * @return true when is locked succeeds; otherwise false.
+     */
+    public boolean isLocked(int masteryLevel) {
+        return masteryLevel < 1;
+    }
+
+    /**
+     * Performs unlock level for this addon component.
+     * @return the resulting unlock level value.
+     */
+    public int unlockLevel() {
+        return 1;
+    }
+}
+

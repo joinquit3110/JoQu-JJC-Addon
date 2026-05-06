@@ -84,8 +84,6 @@ extends Screen {
     private static final int C_DURATION = 16486972;
     // Accent color used for the radius property card.
     private static final int C_RADIUS = 1357990;
-    // Accent color used for the clash power property card.
-    private static final int C_CLASH = 16478597;
     // Accent color used for the incomplete form button.
     private static final int C_FORM_INC = 4674921;
     // Accent color used for the closed form button.
@@ -156,7 +154,7 @@ extends Screen {
     private boolean[] hoveredMinus = new boolean[DomainMasteryProperties.values().length];
     // Previously hovered control id so hover sounds only fire on transitions.
     private int lastHoveredControl = -1;
-    // Whether domain mastery changes are currently blocked by combat, active domains, or clashes.
+    // Whether domain mastery changes are currently blocked by combat or active domains.
     private boolean masteryMutationLocked = false;
     // Whether the cursor is currently over a control that is locked by mutation restrictions.
     private boolean hoveredMutationControl = false;
@@ -216,7 +214,7 @@ extends Screen {
     }
 
     /**
-     * Determines whether mastery changes should be blocked because the player is in combat, in a clash, or already using a domain.
+     * Determines whether mastery changes should be blocked because the player is in combat or already using a domain.
      */
     private void refreshMutationLockState() {
         boolean inCombat;
@@ -226,16 +224,12 @@ extends Screen {
         if (mc.player == null) {
             return;
         }
-        // Mutation locks intentionally mirror gameplay restrictions so players cannot reconfigure mastery in combat, during clashes, or while a domain is active.
+        // Mutation locks intentionally mirror gameplay restrictions so players cannot reconfigure mastery in combat or while a domain is active.
         boolean hasActiveDomain = mc.player.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) || mc.player.getPersistentData().getDouble("DomainExpansion") > 0.0;
-        boolean inDomainClash = !mc.player.getPersistentData().getString("jjkbrp_clash_opponent").isBlank();
         boolean bl = inCombat = mc.player.hasEffect((MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME_COMBAT.get()) || ClientPacketHandler.ClientCooldownCache.getRemaining(true) > 0;
         if (hasActiveDomain) {
             this.masteryMutationLocked = true;
             this.masteryMutationLockReason = "Cannot change Domain Mastery while Domain Expansion is active";
-        } else if (inDomainClash) {
-            this.masteryMutationLocked = true;
-            this.masteryMutationLockReason = "Cannot change Domain Mastery during a domain clash";
         } else if (inCombat) {
             this.masteryMutationLocked = true;
             this.masteryMutationLockReason = "Cannot change Domain Mastery while in combat";
@@ -459,7 +453,6 @@ extends Screen {
         int padT = Math.max(4, (int)(this.fontScale * 12.0f));
         int gapS = Math.max(2, (int)(this.fontScale * 22.0f));
         int barS = Math.max(3, (int)(this.fontScale * 9.0f));
-        int clashY = Math.max(20, (int)(this.fontScale * 65.0f));
         String title = "DOMAIN MASTERY";
         float glow = (float)(Math.sin((double)this.pulseTick * 0.8) * 0.5 + 0.5);
         int titleShadow = (int)(this.openAnim * (100.0f + glow * 100.0f)) << 24 | 0x369A1;
@@ -486,12 +479,6 @@ extends Screen {
         String ppText = "\u2726 " + pp + " PP";
         int ppCol = (int)(this.openAnim * 255.0f) << 24 | (pp > 0 ? 3462041 : 4937059);
         graphics.drawString(font, ppText, this.panelX + this.drawW - font.width(ppText) - padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), ppCol, false);
-        double clash = this.getClashBonus();
-        if (clash > 0.0) {
-            String cbText = "\u26a1 +" + (int)(clash * 100.0) + "% Clash";
-            int cbCol = (int)(this.openAnim * 255.0f) << 24 | 0xF97316;
-            this.drawFittedForegroundText(graphics, font, cbText, this.panelX + padS, this.panelY + clashY, cbCol, this.drawW - padS * 2, 1.0f, 0.72f);
-        }
         this.drawFormButtons(graphics, mx, my);
         this.drawFormHint(graphics);
     }
@@ -1249,7 +1236,7 @@ extends Screen {
             case 4 -> "Slow";
             case 5 -> "Duration";
             case 6 -> "Radius";
-            case 7 -> "Clash Power";
+            case 7 -> "Barrier Power";
             case 8 -> "Barrier Ref";
             default -> "???";
         };
@@ -1269,7 +1256,7 @@ extends Screen {
             case 4 -> "Slow targets";
             case 5 -> "Longer domain";
             case 6 -> "Wider domain";
-            case 7 -> "Stronger clash";
+            case 7 -> "Reinforce barrier";
             case 8 -> "Barrier resist";
             default -> "";
         };
@@ -1387,20 +1374,6 @@ extends Screen {
         catch (Exception e) {
             return 0.0;
         }
-    }
-
-    /**
-     * Returns clash bonus for the current addon state.
-     * @return the resolved clash bonus.
-     */
-    private double getClashBonus() {
-        return switch (this.getDomainMasteryLevel()) {
-            case 5 -> 0.2;
-            case 4 -> 0.15;
-            case 3 -> 0.1;
-            case 2 -> 0.05;
-            default -> 0.0;
-        };
     }
 
     /**

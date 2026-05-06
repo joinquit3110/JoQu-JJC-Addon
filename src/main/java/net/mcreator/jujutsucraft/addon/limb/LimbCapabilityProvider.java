@@ -41,7 +41,7 @@ implements ICapabilitySerializable<CompoundTag> {
     public static final Capability<LimbData> LIMB_DATA = CapabilityManager.get((CapabilityToken)new CapabilityToken<LimbData>(){});
     /** Backing data object that stores all limb state for one entity. */
     private final LimbData data = new LimbData();
-    /** Lazy wrapper exposed through the Forge capability API. */
+    /** Lazy capability handle exposed through the Forge capability API. */
     private final LazyOptional<LimbData> optional = LazyOptional.of(() -> this.data);
 
     /**

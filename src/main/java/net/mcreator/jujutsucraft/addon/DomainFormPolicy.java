@@ -59,18 +59,22 @@ public final class DomainFormPolicy {
         DomainFormPolicy.put(23, Archetype.SUMMON, false, 0.018, 13.5, 0.88, 1.08, 1.05, 0.35);
         DomainFormPolicy.put(35, Archetype.SUMMON, false, 0.016, 13.0, 0.88, 1.08, 1.05, 0.35);
         DomainFormPolicy.put(4, Archetype.AOE, true, 0.008, 15.0, 1.05, 1.3, 0.9, 0.65);
-        DomainFormPolicy.put(5, Archetype.AOE, true, 0.008, 14.5, 1.05, 1.3, 0.9, 0.65);
-        DomainFormPolicy.put(8, Archetype.AOE, true, 0.009, 14.5, 1.0, 1.25, 0.92, 0.6);
-        DomainFormPolicy.put(10, Archetype.AOE, true, 0.009, 14.0, 1.0, 1.2, 0.95, 0.6);
-        DomainFormPolicy.put(40, Archetype.AOE, false, 0.012, 13.5, 0.92, 1.15, 0.98, 0.55);
+        // Authentic Mutual Love uses copied shikigami / Jacob's Ladder entity summons as its domain-specific active path.
+        DomainFormPolicy.put(5, Archetype.SUMMON, true, 0.008, 14.5, 1.05, 1.3, 0.9, 0.65);
+        // Horizon and Choso domains drive their domain pressure through spawned ranged entities, so incomplete form should mask their active path.
+        DomainFormPolicy.put(8, Archetype.SUMMON, true, 0.009, 14.5, 1.0, 1.25, 0.92, 0.6);
+        DomainFormPolicy.put(10, Archetype.SUMMON, true, 0.009, 14.0, 1.0, 1.2, 0.95, 0.6);
+        // Takuma Ino domain also spawns a domain-specific Kaichi entity; keep its existing non-open tuning.
+        DomainFormPolicy.put(40, Archetype.SUMMON, false, 0.012, 13.5, 0.92, 1.15, 0.98, 0.55);
         DomainFormPolicy.put(7, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         DomainFormPolicy.put(9, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
-        DomainFormPolicy.put(11, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
+        // Meimei, Todo, and Graveyard domains are summon/control active paths rather than passive utility during incomplete form.
+        DomainFormPolicy.put(11, Archetype.SUMMON, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         DomainFormPolicy.put(13, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         DomainFormPolicy.put(14, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         DomainFormPolicy.put(19, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
-        DomainFormPolicy.put(20, Archetype.UTILITY, false, 0.02, 13.0, 0.9, 1.08, 1.05, 0.4);
-        DomainFormPolicy.put(25, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
+        DomainFormPolicy.put(20, Archetype.CONTROL, false, 0.02, 13.0, 0.9, 1.08, 1.05, 0.4);
+        DomainFormPolicy.put(25, Archetype.CONTROL, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         DomainFormPolicy.put(26, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         DomainFormPolicy.put(43, Archetype.UTILITY, false, 0.011, 13.0, 0.95, 1.1, 1.0, 0.5);
         for (int id = 1; id <= 50; ++id) {

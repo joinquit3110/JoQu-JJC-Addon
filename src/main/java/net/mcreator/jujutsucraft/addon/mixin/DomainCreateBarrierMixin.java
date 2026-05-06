@@ -94,7 +94,7 @@ public abstract class DomainCreateBarrierMixin {
             if (!useBaseOpenRangePath) {
                 openRangeMultiplier = 2.5;
             }
-            // Persist every startup multiplier into runtime NBT because downstream mixins read these keys during active ticks, clash handling, and cleanup.
+            // Persist every startup multiplier into runtime NBT because downstream mixins read these keys during active ticks and cleanup.
             DomainAddonUtils.clearIncompleteDomainData(nbt);
             nbt.putDouble("jjkbrp_incomplete_penalty_per_tick", policy.incompletePenaltyPerTick());
             nbt.putDouble("jjkbrp_open_range_multiplier", openRangeMultiplier);

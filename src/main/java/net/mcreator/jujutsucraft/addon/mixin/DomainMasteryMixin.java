@@ -8,8 +8,6 @@ import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
-import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
-import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
@@ -17,6 +15,8 @@ import net.mcreator.jujutsucraft.procedures.DomainActiveProcedure;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionOnEffectActiveTickProcedure;
 import net.mcreator.jujutsucraft.procedures.EffectCharactorProcedure;
 import net.mcreator.jujutsucraft.procedures.PlayAnimationProcedure;
+import net.minecraft.commands.CommandSource;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.particles.ParticleOptions;
@@ -37,6 +37,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.joml.Vector3f;
@@ -175,11 +176,14 @@ public abstract class DomainMasteryMixin {
     private static void jjkbrp$runDomainActiveProcedure(LevelAccessor world, double x, double y, double z, Entity entity) {
         // Re-stamp runtime form flags first because several older base procedure paths can partially clear the incomplete-domain markers.
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(entity);
-        // Keep the full active-domain pipeline for incomplete form. Only sure-hit routing is disabled.
+        // Keep non-hazardous incomplete active visuals/support, but suppress full-domain active procedures that are sure-hit carriers.
         boolean incomplete = entity instanceof LivingEntity
                 && DomainAddonUtils.isIncompleteDomainState((LivingEntity)entity);
         if (incomplete) {
             entity.getPersistentData().putBoolean("DomainAttack", false);
+            if (DomainMasteryMixin.jjkbrp$shouldSuppressIncompleteDomainActive((LivingEntity)entity)) {
+                return;
+            }
         }
         DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
         if (incomplete) {
@@ -277,11 +281,10 @@ public abstract class DomainMasteryMixin {
         if (world.isClientSide()) {
             return;
         }
-        // Phase 2: Update the centralized clash registry entry for this caster
-        // each active tick so dynamic state (radius, power, defeat) stays current.
-        if (DomainClashConstants.USE_REGISTRY) {
-            DomainMasteryMixin.jjkbrp$processDeferredClashRegistration(caster, world);
-            DomainClashRegistry.updateFromEntity(caster, world);
+        CompoundTag casterNbt = caster.getPersistentData();
+        int runtimeDomainId = DomainMasteryMixin.jjkbrp$resolveRuntimeDomainId(casterNbt);
+        if (DomainMasteryMixin.jjkbrp$shouldReplayDomainSpecificActive(runtimeDomainId, caster) && casterNbt.getBoolean("StartDomainAttack")) {
+            DomainActiveProcedure.execute((LevelAccessor)world, x, y, z, (Entity)caster);
         }
         if (caster instanceof Player) {
             Player masteryPlayer = (Player)caster;
@@ -347,16 +350,38 @@ public abstract class DomainMasteryMixin {
     }
 
     @Unique
-    private static void jjkbrp$processDeferredClashRegistration(LivingEntity caster, LevelAccessor world) {
-        if (caster == null || world == null) {
-            return;
+    private static int jjkbrp$resolveRuntimeDomainId(CompoundTag nbt) {
+        if (nbt == null) {
+            return 0;
         }
-        CompoundTag nbt = caster.getPersistentData();
-        if (!nbt.getBoolean("jjkbrp_pending_clash_registration") || !nbt.contains("x_pos_doma")) {
-            return;
+        int domainId = (int)Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("skill_domain"));
         }
-        DomainClashRegistry.registerDomain(caster, DomainAddonUtils.resolveDomainForm(caster), DomainAddonUtils.getDomainCenter((Entity)caster), DomainAddonUtils.getActualDomainRadius(world, nbt), world);
-        nbt.remove("jjkbrp_pending_clash_registration");
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("select"));
+        }
+        return domainId;
+    }
+
+    @Unique
+    private static boolean jjkbrp$shouldSuppressIncompleteDomainActive(LivingEntity caster) {
+        if (caster == null || !DomainAddonUtils.isIncompleteDomainState(caster)) {
+            return false;
+        }
+        int domainId = DomainMasteryMixin.jjkbrp$resolveRuntimeDomainId(caster.getPersistentData());
+        // Unlimited Void's active procedure applies BRAIN_DAMAGE / hard stun as its sure-hit carrier.
+        // Idle Death Gamble's active procedure owns title/slot spin and should not run from incomplete form as a full-domain replay.
+        return domainId == 2 || domainId == 29;
+    }
+
+    @Unique
+    private static boolean jjkbrp$shouldReplayDomainSpecificActive(int runtimeDomainId, LivingEntity caster) {
+        // OG routes reviewed domain-specific active effects through DomainActiveProcedure; only Idle Death Gamble needs the legacy replay hook.
+        if (runtimeDomainId != 29 || caster == null) {
+            return false;
+        }
+        return !DomainAddonUtils.isIncompleteDomainState(caster);
     }
 
     /**
@@ -375,17 +400,23 @@ public abstract class DomainMasteryMixin {
             return;
         }
         double radiusMul = nbt.getDouble("jjkbrp_radius_multiplier");
+        if (Math.abs(radiusMul) < 1.0E-4) {
+            radiusMul = 1.0;
+        }
+        long gameTime = world.getGameTime();
+        Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
+        double baseRadius = nbt.contains("jjkbrp_base_domain_radius") ? nbt.getDouble("jjkbrp_base_domain_radius") : 16.0;
+        double scaledRadius = Math.max(1.0, baseRadius * Math.max(0.5, radiusMul));
+        double range = scaledRadius * 2.0;
+        if (!nbt.getBoolean("Failed") && gameTime % 5L == 0L) {
+            DomainMasteryMixin.jjkbrp$sendMalevolentShrineSlashVFX(world, center, range);
+        }
         if (radiusMul < 1.15) {
             return;
         }
-        long gameTime = world.getGameTime();
         if (gameTime % 3L != 0L) {
             return;
         }
-        Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
-        double baseRadius = nbt.contains("jjkbrp_base_domain_radius") ? nbt.getDouble("jjkbrp_base_domain_radius") : 16.0;
-        double scaledRadius = baseRadius * radiusMul;
-        double range = scaledRadius * 2.0;
         int extraCount = (int)Math.round(Math.max(8.0, (radiusMul - 1.0) * 60.0));
         for (int i = 0; i < extraCount; ++i) {
             double ox = (Math.random() - 0.5) * range * 0.5;
@@ -402,6 +433,17 @@ public abstract class DomainMasteryMixin {
             double py = center.y + 0.5 + Math.random() * 3.0;
             DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.CRIT, px, py, pz, 2, 0.8, 0.4, 0.8, 0.05);
         }
+    }
+
+    @Unique
+    private static void jjkbrp$sendMalevolentShrineSlashVFX(ServerLevel world, Vec3 center, double range) {
+        if (world == null || center == null) {
+            return;
+        }
+        double spread = Math.max(1.0, range * 0.25);
+        int count = (int)Math.round(Math.max(16.0, Math.min(4.0 * range, 256.0)));
+        String command = "particle jujutsucraft:particle_slash_large " + center.x + " " + center.y + " " + center.z + " " + spread + " " + spread + " " + spread + " 0.01 " + count + " normal";
+        world.getServer().getCommands().performPrefixedCommand(new CommandSourceStack(CommandSource.NULL, center, Vec2.ZERO, world, 4, "", net.minecraft.network.chat.Component.literal(""), world.getServer(), null).withSuppressedOutput(), command);
     }
 
     // ===== CLEANUP ENTITY SUPPORT =====
@@ -1188,15 +1230,6 @@ public abstract class DomainMasteryMixin {
         double visualRange = DomainAddonUtils.getOpenDomainVisualRange((LevelAccessor)world, (Entity)player);
         // Keep self-cancel aligned with the actual open-domain shell so leaving the visible domain edge reliably cancels.
         double cancelRange = Math.max(6.0, shellRadius);
-        long nowTick = world.getGameTime();
-        if (nbt.contains("jjkbrp_last_clash_contact_tick") && (sinceContact = nowTick - nbt.getLong("jjkbrp_last_clash_contact_tick")) >= 0L && sinceContact <= 40L) {
-            return;
-        }
-        double clashHoldRange = Math.max(24.0, shellRadius * 1.5);
-        if (DomainMasteryMixin.jjkbrp$hasNearbyDomainOpponent(world, player, center, clashHoldRange)) {
-            nbt.putLong("jjkbrp_last_clash_contact_tick", nowTick);
-            return;
-        }
         double dx = player.getX() - cx;
         double horizontalDistSq = dx * dx + (dz = player.getZ() - cz) * dz;
         if (horizontalDistSq <= cancelRange * cancelRange) {

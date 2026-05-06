@@ -39,9 +39,6 @@ public class DomainAddonUtils {
     /** Persistent data key storing a generic domain expansion state value. */
     private static final String TAG_DOMAIN_EXPANSION = "DomainExpansion";
 
-    /** Persistent data key storing the current clash opponent identifier. */
-    private static final String TAG_CLASH_OPPONENT = "jjkbrp_clash_opponent";
-
     /** Persistent data key storing the last recorded combat tick for addon combat-tag tracking. */
     private static final String TAG_LAST_COMBAT_TICK = "addon_bf_last_combat_tick";
 
@@ -79,6 +76,8 @@ public class DomainAddonUtils {
      *
      * @param caster the entity whose temporary BF boost should be removed
      */
+    public static void cleanupDomainRuntimeState(LivingEntity caster) { cleanupBFBoost(caster); if (caster != null) clearIncompleteDomainData(caster.getPersistentData()); }
+
     public static void cleanupBFBoost(LivingEntity caster) {
         if (caster == null) {
             return;
@@ -462,23 +461,6 @@ public class DomainAddonUtils {
     }
 
     /**
-     * Checks whether an entity is currently participating in a domain clash.
-     *
-     * @param entity the entity to inspect
-     * @return {@code true} if a non-blank clash opponent marker is stored
-     */
-    public static boolean isInDomainClash(LivingEntity entity) {
-        if (entity == null) {
-            return false;
-        }
-        CompoundTag data = entity.getPersistentData();
-        if (!data.contains(TAG_CLASH_OPPONENT)) {
-            return false;
-        }
-        return !data.getString(TAG_CLASH_OPPONENT).isBlank();
-    }
-
-    /**
      * Checks whether an entity is combat-tagged and therefore should be prevented from some actions.
      *
      * <p>The check supports both the original combat cooldown effect and the addon-managed persistent
@@ -502,10 +484,10 @@ public class DomainAddonUtils {
      * Checks whether domain mastery mutation should currently be blocked for an entity.
      *
      * @param entity the entity to inspect
-     * @return {@code true} when active domain, clash, or combat state locks mastery changes
+     * @return {@code true} when active domain or combat state locks mastery changes
      */
     public static boolean isDomainMasteryMutationLocked(LivingEntity entity) {
-        return DomainAddonUtils.hasActiveDomainExpansion(entity) || DomainAddonUtils.isInDomainClash(entity) || DomainAddonUtils.isCombatTagged(entity);
+        return DomainAddonUtils.hasActiveDomainExpansion(entity) || DomainAddonUtils.isCombatTagged(entity);
     }
 
     /**
@@ -517,9 +499,6 @@ public class DomainAddonUtils {
     public static String getDomainMasteryMutationLockReason(LivingEntity entity) {
         if (DomainAddonUtils.hasActiveDomainExpansion(entity)) {
             return "Cannot change Domain Mastery while Domain Expansion is active";
-        }
-        if (DomainAddonUtils.isInDomainClash(entity)) {
-            return "Cannot change Domain Mastery during a domain clash";
         }
         if (DomainAddonUtils.isCombatTagged(entity)) {
             return "Cannot change Domain Mastery while in combat";
@@ -897,7 +876,7 @@ public class DomainAddonUtils {
      * Resolves the domain form of a living entity as a type-safe {@link DomainForm} enum.
      *
      * <p>This is the canonical centralized implementation that replaces the
-     * scattered {@code jjkbrp$resolveDomainForm()} copies in the clash mixins.
+     * scattered {@code jjkbrp$resolveDomainForm()} copies in domain mixins.
      * It inspects persistent data, capability state, and runtime flags in the
      * same priority order as the original mixin implementations.</p>
      *
@@ -917,139 +896,6 @@ public class DomainAddonUtils {
      */
     public static int resolveDomainFormInt(LivingEntity entity) {
         return resolveDomainForm(entity).getId();
-    }
-
-    /**
-     * Computes the effective clash range for a given entity and its persistent data.
-     *
-     * <p>Open domains use a much larger range multiplier than closed/incomplete ones.
-     * This method consolidates the three duplicate {@code jjkbrp$baseClashRange()}
-     * implementations that existed in the clash mixins.</p>
-     *
-     * @param world  the level accessor for radius lookup
-     * @param entity the entity whose clash range should be computed
-     * @param nbt    the entity's persistent data
-     * @return the computed base clash range in blocks
-     */
-    public static double baseClashRange(LevelAccessor world, LivingEntity entity, CompoundTag nbt) {
-        double radius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
-        boolean isOpen = DomainAddonUtils.isOpenDomainState(entity);
-        return radius * (isOpen
-                ? DomainClashConstants.OPEN_CLASH_RANGE_MULTIPLIER
-                : DomainClashConstants.CLOSED_CLASH_RANGE_MULTIPLIER);
-    }
-
-    /**
-     * Checks whether two domain casters are spatially close enough to be
-     * considered within the base clash window.
-     *
-     * <p>This consolidates the three duplicate {@code jjkbrp$isWithinBaseClashWindow()}
-     * implementations.  The check uses both body-center and domain-center distances,
-     * taking the minimum, and compares against a threshold derived from the
-     * combined clash ranges of both participants.</p>
-     *
-     * @param world     the level accessor for radius lookups
-     * @param source    the first participant
-     * @param sourceNbt the first participant's persistent data
-     * @param target    the second participant
-     * @param targetNbt the second participant's persistent data
-     * @return {@code true} if the two participants are within clash range
-     */
-    public static boolean isWithinBaseClashWindow(
-            LevelAccessor world,
-            LivingEntity source, CompoundTag sourceNbt,
-            LivingEntity target, CompoundTag targetNbt
-    ) {
-        if (source == null || target == null) {
-            return false;
-        }
-        Vec3 sourceCenter = DomainAddonUtils.getDomainCenter((Entity) source);
-        Vec3 targetBody = new Vec3(
-                target.getX(),
-                target.getY() + (double) target.getBbHeight() * 0.5,
-                target.getZ());
-        Vec3 targetCenter = DomainAddonUtils.getDomainCenter((Entity) target);
-
-        double dx = sourceCenter.x - targetBody.x;
-        double dy = sourceCenter.y - targetBody.y;
-        double dz = sourceCenter.z - targetBody.z;
-        double distToBodySq = dx * dx + dy * dy + dz * dz;
-
-        double cdx = sourceCenter.x - targetCenter.x;
-        double cdy = sourceCenter.y - targetCenter.y;
-        double cdz = sourceCenter.z - targetCenter.z;
-        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
-
-        double distanceSq = Math.min(distToBodySq, distToCenterSq);
-
-        double sourceRange = DomainAddonUtils.baseClashRange(world, source, sourceNbt);
-        double targetRange = DomainAddonUtils.baseClashRange(world, target, targetNbt);
-        double combinedRange = Math.max(sourceRange, targetRange);
-
-        if (combinedRange <= 0.0) {
-            return false;
-        }
-        double threshold = Math.max(
-                DomainClashConstants.CLASH_WINDOW_MINIMUM_THRESHOLD,
-                combinedRange * DomainClashConstants.CLASH_WINDOW_THRESHOLD_FACTOR);
-        return distanceSq < threshold * threshold;
-    }
-
-    /**
-     * Creates a {@link DomainParticipantSnapshot} from a live entity's current state.
-     *
-     * <p>This snapshot captures the entity's form, center, radius, power, and
-     * other clash-relevant properties at the moment of the call.  It is designed
-     * to be called from Phase 2's registry registration path, but is exposed now
-     * so that it can be tested independently.</p>
-     *
-     * @param entity    the living entity to snapshot
-     * @param world     the level accessor for radius/power lookups
-     * @param startTick the game time to record as the domain start tick
-     * @return a new snapshot, or {@code null} if the entity is {@code null}
-     */
-    public static DomainParticipantSnapshot createParticipantSnapshot(
-            LivingEntity entity, LevelAccessor world, long startTick
-    ) {
-        if (entity == null) {
-            return null;
-        }
-        CompoundTag nbt = entity.getPersistentData();
-        DomainForm form = resolveDomainForm(entity);
-        Vec3 center = getDomainCenter((Entity) entity);
-        double radius = getActualDomainRadius(world, nbt);
-        double effectivePower = nbt.contains("jjkbrp_effective_power")
-                ? nbt.getDouble("jjkbrp_effective_power")
-                : DomainClashConstants.DEFAULT_OPPONENT_POWER;
-
-        int domainId = (int) Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
-        if (domainId == 0) {
-            domainId = (int) Math.round(nbt.getDouble("skill_domain"));
-        }
-        if (domainId == 0) {
-            domainId = (int) Math.round(nbt.getDouble("select"));
-        }
-
-        double barrierRefinement = nbt.contains("jjkbrp_barrier_refinement")
-                ? nbt.getDouble("jjkbrp_barrier_refinement")
-                : DomainClashConstants.NPC_DEFAULT_BARRIER_REFINEMENT;
-
-        double sureHitMultiplier = nbt.contains("jjkbrp_open_surehit_multiplier")
-                ? nbt.getDouble("jjkbrp_open_surehit_multiplier")
-                : 1.0;
-
-        boolean defeated = nbt.getBoolean("Failed") || nbt.getBoolean("DomainDefeated");
-
-        // Use the form at cast time if stored; otherwise use the current resolved form.
-        DomainForm formAtCast = nbt.contains("jjkbrp_domain_form_cast_locked")
-                ? DomainForm.fromId(nbt.getInt("jjkbrp_domain_form_cast_locked"))
-                : form;
-
-        return new DomainParticipantSnapshot(
-                entity.getUUID(), form, formAtCast, center, radius,
-                effectivePower, startTick, domainId, barrierRefinement,
-                sureHitMultiplier, defeated
-        );
     }
 
     public static String resolveDomainName(int domainId) {

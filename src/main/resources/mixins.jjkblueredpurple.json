@@ -16,17 +16,20 @@
     "DomainBarrierMixin",
     "DomainBarrierRestoreGuardMixin",
     "DomainCreateBarrierMixin",
-    "DomainClashPenaltyMixin",
     "DomainCastCostMixin",
-    "DomainClashXpMixin",
     "RangeAttackBlackFlashChanceMixin",
     "DomainActiveTickRadiusMixin",
     "DomainCleanupEntityRangeMixin",
     "DomainCleanupEntitySpawnMixin",
     "DomainEffectStartDurationMixin",
     "DomainExpireBarrierFixMixin",
-    "DomainOpenClashCancelMixin",
-    "DomainStartupRadiusMixin"
+    "DomainStartupRadiusMixin",
+    "AuthenticMutualLoveActiveMixin",
+    "CopiedCursedTechniqueRightclickedProcedureMixin",
+    "EffectCharactorProcedureMixin",
+    "CursedTechniqueOkkotsuProcedureMixin",
+    "DomainEntityCollidesInTheBlockProcedureMixin",
+    "EntityItemRightClickedOnEntityProcedureMixin"
   ],
   "injectors": {
     "defaultRequire": 1

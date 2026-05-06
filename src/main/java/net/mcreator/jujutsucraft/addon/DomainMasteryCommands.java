@@ -138,7 +138,7 @@ public class DomainMasteryCommands {
             break;
         }
         if (prop == null) {
-            ((CommandSourceStack)ctx.getSource()).sendFailure((Component)DomainMasteryCommands.text("\u00d7 Unknown property: " + propName + "  \u2502  Valid: ce_drain, bf_chance, rct_heal, blind, slow, duration, radius, clash_power", ChatFormatting.RED));
+            ((CommandSourceStack)ctx.getSource()).sendFailure((Component)DomainMasteryCommands.text("\u00d7 Unknown property: " + propName + "  \u2502  Valid: ce_drain, bf_chance, rct_heal, blind, slow, duration, radius, barrier_power", ChatFormatting.RED));
             return 0;
         }
         DomainMasteryProperties target = prop;
@@ -168,7 +168,7 @@ public class DomainMasteryCommands {
             break;
         }
         if (prop == null || !prop.supportsNegativeModify()) {
-            ((CommandSourceStack)ctx.getSource()).sendFailure((Component)DomainMasteryCommands.text("\u00d7 Negative property must be duration, radius, or clash_power", ChatFormatting.RED));
+            ((CommandSourceStack)ctx.getSource()).sendFailure((Component)DomainMasteryCommands.text("\u00d7 Negative property must be duration, radius, or barrier_power", ChatFormatting.RED));
             return 0;
         }
         DomainMasteryProperties target = prop;
@@ -227,7 +227,7 @@ public class DomainMasteryCommands {
             ((CommandSourceStack)ctx.getSource()).sendSuccess(() -> DomainMasteryCommands.white("  Form: " + formNames[formIdx] + "  \u2502  Property Points: " + data.getDomainPropertyPoints()), false);
             String negativeInfo = data.hasNegativeModify() ? data.getNegativeProperty() + " " + data.getNegativeLevel() : "None";
             ((CommandSourceStack)ctx.getSource()).sendSuccess(() -> DomainMasteryCommands.white("  Negative Modify: " + negativeInfo), false);
-            ((CommandSourceStack)ctx.getSource()).sendSuccess(() -> DomainMasteryCommands.white("  Clash Bonus: " + String.format("%+.1f", data.getClashPowerBonus())), false);
+            ((CommandSourceStack)ctx.getSource()).sendSuccess(() -> DomainMasteryCommands.white("  Barrier Bonus: " + String.format("%+.1f", data.getBarrierPowerBonus())), false);
             ((CommandSourceStack)ctx.getSource()).sendSuccess(() -> Component.empty(), false);
             ((CommandSourceStack)ctx.getSource()).sendSuccess(() -> DomainMasteryCommands.dim("  Properties:"), false);
             for (DomainMasteryProperties p : DomainMasteryProperties.values()) {

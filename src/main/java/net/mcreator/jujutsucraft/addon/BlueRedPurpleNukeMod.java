@@ -13,8 +13,8 @@ import net.mcreator.jujutsucraft.addon.DomainMasteryCommands;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
-import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
-import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
+import net.mcreator.jujutsucraft.addon.ModItems;
+import net.mcreator.jujutsucraft.addon.yuta.YutaFakePlayerCommands;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
 import net.mcreator.jujutsucraft.entity.RedEntity;
@@ -73,6 +73,7 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -80,6 +81,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.ForgeRegistries;
+import net.minecraft.world.entity.npc.Villager;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 
@@ -255,6 +257,8 @@ public class BlueRedPurpleNukeMod {
     public BlueRedPurpleNukeMod() {
         IEventBus modBus = FMLJavaModLoadingContext.get().getModEventBus();
         LimbEntityRegistry.ENTITIES.register(modBus);
+        ModItems.ITEMS.register(modBus);
+        modBus.addListener(BlueRedPurpleNukeMod::registerEntityAttributes);
         MinecraftForge.EVENT_BUS.register((Object)this);
         ModNetworking.register();
     }
@@ -263,6 +267,11 @@ public class BlueRedPurpleNukeMod {
     // ===== FORGE EVENT REGISTRATION =====
     public void onRegisterCommands(RegisterCommandsEvent event) {
         DomainMasteryCommands.register((CommandDispatcher<CommandSourceStack>)event.getDispatcher());
+        YutaFakePlayerCommands.register((CommandDispatcher<CommandSourceStack>)event.getDispatcher());
+    }
+
+    public static void registerEntityAttributes(EntityAttributeCreationEvent event) {
+        event.put(LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), Villager.createAttributes().build());
     }
 
     @SubscribeEvent
@@ -276,45 +285,9 @@ public class BlueRedPurpleNukeMod {
             ServerPlayer player2 = (ServerPlayer)player;
             BlueRedPurpleNukeMod.resetInfinityCrusher(player2);
         }
+        DomainAddonUtils.cleanupDomainRuntimeState((LivingEntity)player);
     }
 
-    // ===== DOMAIN CLASH REGISTRY TICK =====
-
-    @SubscribeEvent
-    /**
-     * Drives the centralized domain clash registry once per server tick.
-     * This flushes pending registrations, creates pairwise clash sessions,
-     * and writes legacy NBT bridge keys.
-     */
-    public void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
-        }
-        if (!DomainClashConstants.USE_REGISTRY) {
-            return;
-        }
-        // Use the overworld as the reference ServerLevel for entity lookups.
-        // The registry is global server state but needs one ServerLevel for
-        // entity resolution.  Overworld is always loaded.
-        net.minecraft.server.MinecraftServer server = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
-        if (server == null) {
-            return;
-        }
-        ServerLevel overworld = server.overworld();
-        if (overworld == null) {
-            return;
-        }
-        DomainClashRegistry.tick(overworld.getGameTime(), overworld);
-    }
-
-    @SubscribeEvent
-    /**
-     * Clears the domain clash registry when the server stops to prevent
-     * stale state from leaking into subsequent sessions.
-     */
-    public void onServerStopping(net.minecraftforge.event.server.ServerStoppingEvent event) {
-        DomainClashRegistry.clear();
-    }
 
     @SubscribeEvent
     // ===== ENTITY TICK HANDLERS =====
@@ -364,6 +337,9 @@ public class BlueRedPurpleNukeMod {
         BlueRedPurpleNukeMod.handleInfinityCrusher(player2);
         BlueRedPurpleNukeMod.handleBlackFlashCharge(player2);
         BlueRedPurpleNukeMod.handleDomainBFBoostCleanup(player2);
+        if (!player2.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) && DomainAddonUtils.hasActiveDomainExpansion(player2)) {
+            DomainAddonUtils.cleanupDomainRuntimeState((LivingEntity)player2);
+        }
     }
 
     // ===== BLACK FLASH SUPPORT =====
@@ -2626,5 +2602,9 @@ public class BlueRedPurpleNukeMod {
             target.hurtMarked = true;
         }
     }
+    public static boolean isBlackFlashGuaranteeActive(net.minecraft.server.level.ServerPlayer player) { return false; }
+    public static void confirmBlackFlashGuaranteeHit(net.minecraft.server.level.ServerPlayer player) { }
+
+    public static void clearBlackFlashRuntimeState(net.minecraft.server.level.ServerPlayer player) { }
 }
 

@@ -116,7 +116,15 @@ extends Screen {
      * @return true when is spirit entry succeeds; otherwise false.
      */
     private boolean isSpiritEntry(ModNetworking.WheelTechniqueEntry entry) {
-        return entry.selectId() >= 100.0;
+        return entry.selectId() >= 100.0 && entry.selectId() < 10000.0;
+    }
+
+    private boolean isYutaSureHitEntry(ModNetworking.WheelTechniqueEntry entry) {
+        return entry.selectId() == (double)ModNetworking.YUTA_SUREHIT_CLEAR_ENTRY_ID || entry.selectId() >= (double)ModNetworking.YUTA_SUREHIT_ENTRY_BASE;
+    }
+
+    private boolean isYutaCopyEntry(ModNetworking.WheelTechniqueEntry entry) {
+        return entry.selectId() >= (double)ModNetworking.YUTA_COPY_ENTRY_BASE && entry.selectId() < (double)ModNetworking.YUTA_SUREHIT_ENTRY_BASE;
     }
 
     /**
@@ -395,7 +403,14 @@ extends Screen {
         Object title;
         if (this.isMultiPage()) {
             String[] pageTitles = new String[]{"Techniques", "Cursed Spirits (Lower)", "Cursed Spirits (Upper)"};
-            title = this.currentPage < pageTitles.length ? pageTitles[this.currentPage] : "Cursed Spirits (Page " + (this.currentPage + 1) + ")";
+            List<ModNetworking.WheelTechniqueEntry> pageEntries = this.currentTechniques();
+            if (!pageEntries.isEmpty() && this.isYutaSureHitEntry(pageEntries.get(0))) {
+                title = "Yuta Sure-Hit";
+            } else if (!pageEntries.isEmpty() && this.isYutaCopyEntry(pageEntries.get(0))) {
+                title = "Rika Copies";
+            } else {
+                title = this.currentPage < pageTitles.length ? pageTitles[this.currentPage] : "Cursed Spirits (Page " + (this.currentPage + 1) + ")";
+            }
             title = "\u272a " + (String)title + " \u272a";
         } else {
             title = "\u272a Select Technique \u272a";
@@ -760,7 +775,11 @@ extends Screen {
         this.confirmFlash = 1.0f;
         this.spawnConfirmParticles(tech);
         this.playConfirmSound(tech);
-        if (this.isSpiritEntry(tech)) {
+        if (this.isYutaSureHitEntry(tech)) {
+            ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.SelectYutaCopyPacket(tech.selectId(), false));
+        } else if (this.isYutaCopyEntry(tech)) {
+            ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.SelectYutaCopyPacket(tech.selectId(), true));
+        } else if (this.isSpiritEntry(tech)) {
             int spiritSlot = (int)Math.round(tech.selectId()) - 100;
             ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.SelectSpiritPacket(spiritSlot));
             Minecraft mc = Minecraft.getInstance();

@@ -7,8 +7,6 @@ import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
-import net.mcreator.jujutsucraft.addon.util.DomainClashConstants;
-import net.mcreator.jujutsucraft.addon.util.DomainClashRegistry;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModEntities;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
@@ -19,6 +17,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.TickTask;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
@@ -128,14 +129,18 @@ public class DomainExpireBarrierFixMixin {
         }
         boolean hadOpenForm = nbt.getBoolean("jjkbrp_open_form_active");
         double finalRestoreRadius = DomainExpireBarrierFixMixin.jjkbrp$resolveEffectiveRadius((LevelAccessor)sl, nbt);
+        boolean hasCasterAnchor = nbt.contains("jjkbrp_caster_x_at_cast") && nbt.contains("jjkbrp_caster_y_at_cast") && nbt.contains("jjkbrp_caster_z_at_cast");
+        double casterAnchorX = hasCasterAnchor ? nbt.getDouble("jjkbrp_caster_x_at_cast") : caster.getX();
+        double casterAnchorY = hasCasterAnchor ? nbt.getDouble("jjkbrp_caster_y_at_cast") : caster.getY();
+        double casterAnchorZ = hasCasterAnchor ? nbt.getDouble("jjkbrp_caster_z_at_cast") : caster.getZ();
         if (nbt.contains("x_pos_doma")) {
             cx = nbt.getDouble("x_pos_doma");
             cy = nbt.getDouble("y_pos_doma");
             cz = nbt.getDouble("z_pos_doma");
         } else {
-            cx = caster.getX();
-            cy = caster.getY();
-            cz = caster.getZ();
+            cx = casterAnchorX;
+            cy = casterAnchorY;
+            cz = casterAnchorZ;
         }
         List<DomainExpansionEntityEntity> entities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(cx - 1.5, cy - 1.5, cz - 1.5, cx + 1.5, cy + 1.5, cz + 1.5), e -> true);
         if (entities.isEmpty()) {
@@ -185,7 +190,7 @@ public class DomainExpireBarrierFixMixin {
             LivingEntity le = (LivingEntity)entity;
             DomainAddonUtils.cleanupBFBoost(le);
         }
-        // Remove all runtime-only open, incomplete, and clash keys so the next domain cast starts from a clean persistent-data state.
+        // Remove all runtime-only open and incomplete keys so the next domain cast starts from a clean persistent-data state.
         nbt.remove("jjkbrp_open_darkness_stage");
         nbt.remove("jjkbrp_open_darkness_start");
         nbt.remove("jjkbrp_open_domain_cx");
@@ -215,26 +220,10 @@ public class DomainExpireBarrierFixMixin {
         nbt.remove("jjkbrp_domain_cast_cost_delta");
         nbt.remove("jjkbrp_domain_mastery_level");
         nbt.remove("jjkbrp_domain_form");
-        // Phase 2: Unregister from the centralized clash registry so sessions
-        // resolve and NBT bridge keys stop being repopulated.
-        if (DomainClashConstants.USE_REGISTRY) {
-            DomainClashRegistry.unregisterDomain(caster.getUUID());
-        }
-        // Delay the final clash cleanup slightly so outcome messages and other post-expiry systems can still read the result state.
-        DomainExpireBarrierFixMixin.jjkbrp$scheduleDelayedClashCleanup(sl, caster.getUUID());
         nbt.remove("jjkbrp_caster_x_at_cast");
         nbt.remove("jjkbrp_caster_y_at_cast");
         nbt.remove("jjkbrp_caster_z_at_cast");
-        nbt.remove("jjkbrp_barrier_under_attack");
-        nbt.remove("jjkbrp_open_attacker_uuid");
-        nbt.remove("jjkbrp_barrier_erosion_total");
         nbt.remove("jjkbrp_barrier_refinement");
-        nbt.remove("jjkbrp_is_eroding_barrier");
-        nbt.remove("jjkbrp_erosion_target_uuid");
-        nbt.remove("jjkbrp_incomplete_wrap_active");
-        nbt.remove("jjkbrp_incomplete_wrap_target_uuid");
-        nbt.remove("jjkbrp_wrapped_by_incomplete");
-        nbt.remove("jjkbrp_incomplete_wrapper_uuid");
         if (forceClosedCleanup) {
             DomainExpireBarrierFixMixin.jjkbrp$scheduleForceClosedCleanupFlagClear(sl, caster.getUUID(), 80);
         } else {
@@ -255,9 +244,9 @@ public class DomainExpireBarrierFixMixin {
             if (!nbt.contains("x_pos_doma")) {
                 sweepRadius = Math.max(sweepRadius, 16.0);
             }
-            DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, 4);
-            DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, 20);
-            DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, 60);
+            DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, 4);
+            DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, 20);
+            DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, 60);
         }
         if (nbt.getBoolean("jjkbrp_adopted_barrier")) {
             double acx = nbt.getDouble("jjkbrp_adopted_cx");
@@ -266,9 +255,9 @@ public class DomainExpireBarrierFixMixin {
             double aRadius = nbt.getDouble("jjkbrp_adopted_radius");
             if (aRadius > 0) {
                 String adoptedOwnerUuid = nbt.getString("jjkbrp_adopted_owner_uuid");
-                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, 4);
-                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, 20);
-                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, 60);
+                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, 4);
+                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, 20);
+                DomainExpireBarrierFixMixin.jjkbrp$scheduleAdoptedBarrierRestoreSweep(sl, acx, acy, acz, aRadius, adoptedOwnerUuid, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, 60);
             }
             nbt.remove("jjkbrp_adopted_barrier");
             nbt.remove("jjkbrp_adopted_cx");
@@ -300,29 +289,6 @@ public class DomainExpireBarrierFixMixin {
         nbt.remove("jjkbrp_preserve_domain_runtime");
         nbt.remove("jjkbrp_was_failed");
         nbt.remove("jjkbrp_was_domain_defeated");
-    }
-
-    /**
-     * Schedules delayed removal of clash-result markers after players have had time to receive the outcome state.
-     * @param world world access used by the current mixin callback.
-     * @param entityId identifier used to resolve runtime state for this operation.
-     */
-    private static void jjkbrp$scheduleDelayedClashCleanup(ServerLevel world, UUID entityId) {
-        world.getServer().tell(new TickTask(world.getServer().getTickCount() + 40, () -> {
-            Entity resolved = world.getEntity(entityId);
-            if (!(resolved instanceof LivingEntity)) {
-                return;
-            }
-            LivingEntity living = (LivingEntity)resolved;
-            CompoundTag data = living.getPersistentData();
-            data.remove("jjkbrp_clash_result_tick");
-            data.remove("jjkbrp_clash_pending_tick");
-            data.remove("jjkbrp_last_clash_contact_tick");
-            data.remove("jjkbrp_last_clash_opponent_uuid");
-            data.remove("jjkbrp_was_failed");
-            data.remove("jjkbrp_was_domain_defeated");
-            data.remove("jjkbrp_preserve_domain_runtime");
-        }));
     }
 
     private static void jjkbrp$scheduleForceClosedCleanupFlagClear(ServerLevel world, UUID entityId, int delayTicks) {
@@ -367,12 +333,12 @@ public class DomainExpireBarrierFixMixin {
      * @param effectiveRadius distance value used by this runtime calculation.
      * @param delayTicks tick-based timing value used by this helper.
      */
-    private static void jjkbrp$scheduleFinalRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, int delayTicks) {
-        world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> DomainExpireBarrierFixMixin.jjkbrp$runFinalRestoreSweep(world, x, y, z, effectiveRadius)));
+    private static void jjkbrp$scheduleFinalRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, double casterX, double casterY, double casterZ, boolean hasCasterAnchor, int delayTicks) {
+        world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> DomainExpireBarrierFixMixin.jjkbrp$runFinalRestoreSweep(world, x, y, z, effectiveRadius, casterX, casterY, casterZ, hasCasterAnchor)));
     }
 
-    private static void jjkbrp$scheduleAdoptedBarrierRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, String ownerUuid, int delayTicks) {
-        world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> DomainExpireBarrierFixMixin.jjkbrp$runAdoptedBarrierRestoreSweep(world, x, y, z, effectiveRadius, ownerUuid)));
+    private static void jjkbrp$scheduleAdoptedBarrierRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, String ownerUuid, double casterX, double casterY, double casterZ, boolean hasCasterAnchor, int delayTicks) {
+        world.getServer().tell(new TickTask(world.getServer().getTickCount() + delayTicks, () -> DomainExpireBarrierFixMixin.jjkbrp$runAdoptedBarrierRestoreSweep(world, x, y, z, effectiveRadius, ownerUuid, casterX, casterY, casterZ, hasCasterAnchor)));
     }
 
     /**
@@ -383,13 +349,13 @@ public class DomainExpireBarrierFixMixin {
      * @param z world coordinate value used by this callback.
      * @param effectiveRadius distance value used by this runtime calculation.
      */
-    private static void jjkbrp$runFinalRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius) {
+    private static void jjkbrp$runFinalRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, double casterX, double casterY, double casterZ, boolean hasCasterAnchor) {
         int centerX = (int)Math.round(x);
         int centerY = (int)Math.round(y);
         int centerZ = (int)Math.round(z);
-        int sweepRadius = (int)Math.ceil(effectiveRadius + 2.0);
-        int verticalExtra = 8;
-        double restoreRadius = effectiveRadius + 1.5;
+        int sweepRadius = (int)Math.ceil(effectiveRadius + 4.0);
+        int verticalExtra = 12;
+        double restoreRadius = effectiveRadius + 3.0;
         double restoreRadiusSq = restoreRadius * restoreRadius;
         for (int blockX = centerX - sweepRadius; blockX <= centerX + sweepRadius; ++blockX) {
             double dx = blockX - centerX;
@@ -406,19 +372,23 @@ public class DomainExpireBarrierFixMixin {
                     horizontalDistSq = dxSq + dz * dz;
                     boolean inRadius = distanceSq <= restoreRadiusSq || (horizontalDistSq <= restoreRadiusSq && blockY >= centerY && blockY <= centerY + verticalExtra);
                     if (!inRadius || !world.getBlockState(currentPos = BlockPos.containing((double)blockX, (double)blockY, (double)blockZ)).is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier"))) || DomainExpireBarrierFixMixin.jjkbrp$isProtectedByOtherLiveDomain(world, x, y, z, blockX, blockY, blockZ)) continue;
-                    JujutsuBarrierUpdateTickProcedure.execute((LevelAccessor)world, (double)blockX, (double)blockY, (double)blockZ);
+                    DomainExpireBarrierFixMixin.jjkbrp$restoreBarrierBlock(world, currentPos);
                 }
             }
         }
+        DomainExpireBarrierFixMixin.jjkbrp$runFocusedCenterFloorRestoreSweep(world, centerX, centerY, centerZ, effectiveRadius, x, y, z);
+        if (hasCasterAnchor) {
+            DomainExpireBarrierFixMixin.jjkbrp$runFocusedCasterFootprintRestoreSweep(world, casterX, casterY, casterZ, x, y, z);
+        }
     }
 
-    private static void jjkbrp$runAdoptedBarrierRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, String ownerUuid) {
+    private static void jjkbrp$runAdoptedBarrierRestoreSweep(ServerLevel world, double x, double y, double z, double effectiveRadius, String ownerUuid, double casterX, double casterY, double casterZ, boolean hasCasterAnchor) {
         int centerX = (int)Math.round(x);
         int centerY = (int)Math.round(y);
         int centerZ = (int)Math.round(z);
-        int sweepRadius = (int)Math.ceil(effectiveRadius + 2.0);
-        int verticalExtra = 8;
-        double restoreRadius = effectiveRadius + 1.5;
+        int sweepRadius = (int)Math.ceil(effectiveRadius + 4.0);
+        int verticalExtra = 12;
+        double restoreRadius = effectiveRadius + 3.0;
         double restoreRadiusSq = restoreRadius * restoreRadius;
         for (int blockX = centerX - sweepRadius; blockX <= centerX + sweepRadius; ++blockX) {
             double dx = blockX - centerX;
@@ -435,9 +405,65 @@ public class DomainExpireBarrierFixMixin {
                     boolean inRadius = distanceSq <= restoreRadiusSq || (horizontalDistSq <= restoreRadiusSq && blockY >= centerY && blockY <= centerY + verticalExtra);
                     if (!inRadius || !world.getBlockState(currentPos = BlockPos.containing((double)blockX, (double)blockY, (double)blockZ)).is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier")))) continue;
                     if (!DomainExpireBarrierFixMixin.jjkbrp$isAdoptedBarrierBlock(world, currentPos, ownerUuid) && DomainExpireBarrierFixMixin.jjkbrp$isProtectedByOtherLiveDomain(world, x, y, z, blockX, blockY, blockZ)) continue;
-                    JujutsuBarrierUpdateTickProcedure.execute((LevelAccessor)world, (double)blockX, (double)blockY, (double)blockZ);
+                    DomainExpireBarrierFixMixin.jjkbrp$restoreBarrierBlock(world, currentPos);
                 }
             }
+        }
+        DomainExpireBarrierFixMixin.jjkbrp$runFocusedCenterFloorRestoreSweep(world, centerX, centerY, centerZ, effectiveRadius, x, y, z);
+        if (hasCasterAnchor) {
+            DomainExpireBarrierFixMixin.jjkbrp$runFocusedCasterFootprintRestoreSweep(world, casterX, casterY, casterZ, x, y, z);
+        }
+    }
+
+    private static void jjkbrp$runFocusedCenterFloorRestoreSweep(ServerLevel world, int centerX, int centerY, int centerZ, double effectiveRadius, double ownerX, double ownerY, double ownerZ) {
+        int focusedRadius = Math.max(3, Math.min(8, (int)Math.ceil(effectiveRadius * 0.25)));
+        for (int blockX = centerX - focusedRadius; blockX <= centerX + focusedRadius; ++blockX) {
+            for (int blockY = centerY - 2; blockY <= centerY; ++blockY) {
+                for (int blockZ = centerZ - focusedRadius; blockZ <= centerZ + focusedRadius; ++blockZ) {
+                    BlockPos currentPos = BlockPos.containing((double)blockX, (double)blockY, (double)blockZ);
+                    if (!world.getBlockState(currentPos).is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier")))) {
+                        continue;
+                    }
+                    if (DomainExpireBarrierFixMixin.jjkbrp$isProtectedByOtherLiveDomain(world, ownerX, ownerY, ownerZ, blockX, blockY, blockZ)) {
+                        continue;
+                    }
+                    DomainExpireBarrierFixMixin.jjkbrp$restoreBarrierBlock(world, currentPos);
+                }
+            }
+        }
+    }
+
+    private static void jjkbrp$runFocusedCasterFootprintRestoreSweep(ServerLevel world, double casterX, double casterY, double casterZ, double ownerX, double ownerY, double ownerZ) {
+        int casterBlockX = (int)Math.floor(casterX);
+        int casterFloorY = (int)Math.floor(casterY) - 1;
+        int casterBlockZ = (int)Math.floor(casterZ);
+        for (int blockX = casterBlockX - 2; blockX <= casterBlockX + 2; ++blockX) {
+            for (int blockY = casterFloorY - 1; blockY <= casterFloorY; ++blockY) {
+                for (int blockZ = casterBlockZ - 2; blockZ <= casterBlockZ + 2; ++blockZ) {
+                    BlockPos currentPos = BlockPos.containing((double)blockX, (double)blockY, (double)blockZ);
+                    if (!world.getBlockState(currentPos).is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier")))) {
+                        continue;
+                    }
+                    if (DomainExpireBarrierFixMixin.jjkbrp$isProtectedByOtherLiveDomain(world, ownerX, ownerY, ownerZ, blockX, blockY, blockZ)) {
+                        continue;
+                    }
+                    DomainExpireBarrierFixMixin.jjkbrp$restoreBarrierBlock(world, currentPos);
+                }
+            }
+        }
+    }
+
+    private static void jjkbrp$restoreBarrierBlock(ServerLevel world, BlockPos pos) {
+        BlockState before = world.getBlockState(pos);
+        if (!before.is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier")))) {
+            return;
+        }
+        BlockEntity be = world.getBlockEntity(pos);
+        String oldBlock = be != null ? be.getPersistentData().getString("old_block") : "";
+        JujutsuBarrierUpdateTickProcedure.execute((LevelAccessor)world, (double)pos.getX(), (double)pos.getY(), (double)pos.getZ());
+        BlockState after = world.getBlockState(pos);
+        if (after.is(BlockTags.create((ResourceLocation)new ResourceLocation("jujutsucraft:barrier"))) && (oldBlock == null || oldBlock.isEmpty())) {
+            world.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
         }
     }
 

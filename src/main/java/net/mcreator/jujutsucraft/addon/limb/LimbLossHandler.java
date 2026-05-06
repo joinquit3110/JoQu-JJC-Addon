@@ -15,6 +15,8 @@ import net.mcreator.jujutsucraft.addon.limb.LimbState;
 import net.mcreator.jujutsucraft.addon.limb.LimbSyncPacket;
 import net.mcreator.jujutsucraft.addon.limb.LimbType;
 import net.mcreator.jujutsucraft.addon.limb.SeveredLimbEntity;
+import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
+import net.mcreator.jujutsucraft.addon.yuta.YutaFakePlayerEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.network.chat.Component;
@@ -61,6 +63,10 @@ public class LimbLossHandler {
     public static void onLivingDamage(LivingDamageEvent event) {
         LivingEntity entity = event.getEntity();
         if (entity.level().isClientSide) {
+            return;
+        }
+        if (entity instanceof YutaFakePlayerEntity fake) {
+            LimbLossHandler.handleFakePlayerHit(fake, event.getSource());
             return;
         }
         if (!(entity instanceof Player)) {
@@ -123,6 +129,21 @@ public class LimbLossHandler {
             LOGGER.info("[Limb] Severing {} from {}", (Object)toSever, (Object)entity.getName().getString());
             LimbLossHandler.severLimb(entity, data, toSever, event.getSource());
         });
+    }
+
+    private static void handleFakePlayerHit(YutaFakePlayerEntity fake, DamageSource source) {
+        double technique = fake.getPersistentData().getDouble("PlayerCurseTechnique");
+        boolean rctMode = fake.getPersistentData().getBoolean(YutaFakePlayerEntity.KEY_RCT);
+        int nextHit = fake.getPersistentData().getInt(YutaFakePlayerEntity.KEY_HIT_COUNT) + 1;
+        fake.getPersistentData().putInt(YutaFakePlayerEntity.KEY_HIT_COUNT, nextHit);
+        if (rctMode && nextHit % 2 == 0) {
+            YutaCopyStore.onLimbRegrown(fake, LimbType.RIGHT_ARM.getSerializedName());
+            LOGGER.info("[Yuta Fake] RCT regrew test limb for {}", (Object)fake.getName().getString());
+            return;
+        }
+        YutaCopyStore.spawnLimbCopyItem(fake, LimbType.RIGHT_ARM.getSerializedName(), technique, 0.0D, true, false);
+        fake.getPersistentData().putBoolean("jjkaddon_fake_source", true);
+        LOGGER.info("[Yuta Fake] Dropped test limb CT {} for {}", (Object)((int)Math.round(technique)), (Object)fake.getName().getString());
     }
 
     // ===== LIMB SELECTION =====
@@ -221,6 +242,7 @@ public class LimbLossHandler {
             LimbParticles.spawnBloodSpray(entity, type, dir);
         }
         LimbLossHandler.spawnSeveredLimbEntity(entity, type);
+        YutaCopyStore.spawnLimbCopyItem(entity, type.getSerializedName());
         LimbGameplayHandler.applyLimbDebuffs(entity, data);
         LimbSyncPacket.sendToTrackingPlayers(entity, data);
         if (entity instanceof ServerPlayer) {
@@ -336,6 +358,7 @@ public class LimbLossHandler {
             if (progress >= 1.0f) {
                 data.setState(type, LimbState.INTACT);
                 data.setRegenProgress(type, 0.0f);
+                YutaCopyStore.onLimbRegrown(entity, type.getSerializedName());
                 LimbSounds.playRegenCompleteSound(entity);
                 LimbParticles.spawnRegenCompleteBurst(entity, type);
                 changed = true;

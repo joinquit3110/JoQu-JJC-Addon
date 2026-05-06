@@ -1,0 +1,31 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved"
+
+[[mods]]
+modId="jjkblueredpurple"
+version="${mod_version}"
+displayName="Nguyen Hung's Infinity Addon"
+authors="Nguyen Hung"
+description='''Nguyen Hung's Infinity Addon for JujutsuCraft - Blue linger + Red teleport-behind + Purple Nuke combo'''
+
+[[dependencies.jjkblueredpurple]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.jjkblueredpurple]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.jjkblueredpurple]]
+modId="jujutsucraft"
+mandatory=true
+versionRange="[49,)"
+ordering="AFTER"
+side="BOTH"

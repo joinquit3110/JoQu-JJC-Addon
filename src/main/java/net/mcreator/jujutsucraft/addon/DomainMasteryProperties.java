@@ -21,9 +21,9 @@ public enum DomainMasteryProperties {
     DURATION_EXTEND("jujutsucraft.domain.prop.duration", "jujutsucraft.domain.prop.duration.desc", 10, 1, () -> 5.0, "s"),
     /** Domain property that increases the effective range of the domain. */
     RADIUS_BOOST("jujutsucraft.domain.prop.radius", "jujutsucraft.domain.prop.radius.desc", 10, 1, () -> 12.0, "%"),
-    /** Domain property that improves clash performance against competing domains. */
-    CLASH_POWER("jujutsucraft.domain.prop.clash_power", "jujutsucraft.domain.prop.clash_power.desc", 10, 1, () -> 0.6, ""),
-    /** Domain property that strengthens barrier resistance against erosion and pressure. */
+    /** Domain property that reinforces domain barrier output. */
+    BARRIER_POWER("jujutsucraft.domain.prop.barrier_power", "jujutsucraft.domain.prop.barrier_power.desc", 10, 1, () -> 0.6, ""),
+    /** Domain property that strengthens barrier resistance. */
     BARRIER_REFINEMENT("jujutsucraft.domain.prop.barrier_ref", "jujutsucraft.domain.prop.barrier_ref.desc", 10, 1, () -> 4.0, "%");
 
     // Translation key for the property name shown in UI and command output.
@@ -113,7 +113,7 @@ public enum DomainMasteryProperties {
     public String formatLevelValue(int level) {
         return switch (this) {
             case DURATION_EXTEND -> String.format(Locale.ROOT, "%+ds", level * 5);
-            case CLASH_POWER -> String.format(Locale.ROOT, "%+.1f", (double)level * 0.6);
+            case BARRIER_POWER -> String.format(Locale.ROOT, "%+.1f", (double)level * 0.6);
             case BARRIER_REFINEMENT -> String.format(Locale.ROOT, "%+.0f%%", (double)level * 4.0);
             default -> String.format(Locale.ROOT, "%+.1f%s", this.getValuePerLevel() * (double)level, this.getUnit());
         };
@@ -128,7 +128,7 @@ public enum DomainMasteryProperties {
         int points = Math.max(0, negativePoints);
         return switch (this) {
             case DURATION_EXTEND -> String.format(Locale.ROOT, "-%ds", points * 5);
-            case CLASH_POWER -> String.format(Locale.ROOT, "-%.1f", (double)points * 0.3);
+            case BARRIER_POWER -> String.format(Locale.ROOT, "-%.1f", (double)points * 0.3);
             case RADIUS_BOOST -> String.format(Locale.ROOT, "-%.1f%%", (double)points * 8.0);
             case BARRIER_REFINEMENT -> String.format(Locale.ROOT, "-%.0f%%", (double)points * 4.0);
             default -> String.format(Locale.ROOT, "-%.1f%s", this.getValuePerLevel() * (double)points, this.getUnit());
@@ -148,7 +148,7 @@ public enum DomainMasteryProperties {
      * @return true when supports negative modify succeeds; otherwise false.
      */
     public boolean supportsNegativeModify() {
-        return this == DURATION_EXTEND || this == RADIUS_BOOST || this == CLASH_POWER || this == BARRIER_REFINEMENT;
+        return this == DURATION_EXTEND || this == RADIUS_BOOST || this == BARRIER_POWER || this == BARRIER_REFINEMENT;
     }
 
     /**

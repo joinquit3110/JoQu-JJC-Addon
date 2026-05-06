@@ -25,7 +25,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value={DomainExpansionBattleProcedure.class}, remap=false)
 public abstract class DomainExpansionBattleMixin {
     /**
-     * Injects at battle start to normalize cleanup entities and snapshot the current runtime form before clash logic runs.
+     * Injects at battle start to normalize cleanup entities and snapshot the current runtime form.
      * @param world world access used by the current mixin callback.
      * @param x world coordinate value used by this callback.
      * @param y world coordinate value used by this callback.
@@ -35,7 +35,7 @@ public abstract class DomainExpansionBattleMixin {
      */
     // Injects at method head so the addon can validate, cache, or override state before the original procedure runs.
     @Inject(method={"execute"}, at={@At(value="HEAD")}, remap=false)
-    private static void jjkbrp$markClashStart(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
+    private static void jjkbrp$markDomainBattleStart(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         if (!(entity instanceof Player)) {
             return;
         }

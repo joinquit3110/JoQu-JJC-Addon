@@ -1,0 +1,1286 @@
+package net.mcreator.jujutsucraft.addon.util;
+
+import com.mojang.logging.LogUtils;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.UUID;
+import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
+import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
+import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
+import net.minecraft.core.particles.ParticleOptions;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.slf4j.Logger;
+
+/**
+ * Central utility class for domain-related runtime state in the addon.
+ *
+ * <p>This class acts as the source of truth for domain calculations and state checks used by
+ * multiple systems, including radius resolution, center lookup, owner resolution for spawned
+ * projectiles or orb entities, domain activity checks, combat lock rules, effect duration hacks,
+ * and long-distance particle dispatch.</p>
+ */
+public class DomainAddonUtils {
+    /** Base fallback radius used when no runtime or persisted domain radius can be resolved. */
+    private static final double DEFAULT_DOMAIN_RADIUS = 22.0;
+
+    /** Grace window, in ticks, for considering a player combat-tagged after the last combat event. */
+    private static final int DOMAIN_MASTERY_COMBAT_TAG_GRACE_TICKS = 100;
+
+    /** Persistent data key storing a generic domain expansion state value. */
+    private static final String TAG_DOMAIN_EXPANSION = "DomainExpansion";
+
+    /** Persistent data key storing the current clash opponent identifier. */
+    private static final String TAG_CLASH_OPPONENT = "jjkbrp_clash_opponent";
+
+    /** Persistent data key storing the last recorded combat tick for addon combat-tag tracking. */
+    private static final String TAG_LAST_COMBAT_TICK = "addon_bf_last_combat_tick";
+
+    /** Persistent data key used to mark the temporary BF bonus granted during a domain flow. */
+    private static final String TAG_DOMAIN_BF_BONUS = "jjkbrp_domain_bf_bonus";
+
+    /** Persistent data key storing a projectile or helper entity owner's UUID. */
+    private static final String TAG_OWNER_UUID = "OWNER_UUID";
+
+    /** Persistent data key storing a numeric owner marker used by the original mod. */
+    private static final String TAG_NAME_RANGED = "NameRanged";
+
+    /** Persistent data key storing the ranged-name marker copied onto spawned entities. */
+    private static final String TAG_NAME_RANGED_RANGED = "NameRanged_ranged";
+
+    /** Search radius used when resolving an owner from the NameRanged marker instead of UUID. */
+    private static final double OWNER_NAME_RANGED_SEARCH_RADIUS = 256.0;
+
+    /**
+     * Cached reflective handle for the long-distance particle overload on {@link ServerLevel}.
+     *
+     * <p>This method is not always available in every mapping/runtime combination, so it is
+     * resolved once and reused.</p>
+     */
+    private static final Method LONG_DISTANCE_PARTICLE_METHOD = DomainAddonUtils.resolveLongDistanceParticleMethod();
+
+    /** Shared logger used for domain diagnostics, especially owner-resolution tracing. */
+    private static final Logger LOGGER = LogUtils.getLogger();
+
+    /**
+     * Removes temporary BF boost bookkeeping created during domain logic.
+     *
+     * <p>This cleans both the addon marker and the mirrored {@code cnt6} value adjustment so the
+     * caster's persistent state returns to its pre-domain baseline.</p>
+     *
+     * @param caster the entity whose temporary BF boost should be removed
+     */
+    public static void cleanupBFBoost(LivingEntity caster) {
+        if (caster == null) {
+            return;
+        }
+        CompoundTag nbt = caster.getPersistentData();
+
+        // Remove the high-level marker first so other systems stop treating the bonus as active.
+        nbt.remove(TAG_DOMAIN_BF_BONUS);
+        if (nbt.contains("jjkbrp_bf_cnt6_boost")) {
+            double boost = nbt.getDouble("jjkbrp_bf_cnt6_boost");
+            if (boost > 0.0) {
+                // Clamp to zero to avoid underflow if the stored boost exceeds the current cnt6 value.
+                nbt.putDouble("cnt6", Math.max(0.0, nbt.getDouble("cnt6") - boost));
+            }
+            // Remove the temporary boost snapshot after applying the rollback.
+            nbt.remove("jjkbrp_bf_cnt6_boost");
+        }
+    }
+
+    /**
+     * Removes addon incomplete-domain transient data.
+     *
+     * <p>The long {@code jjkbrp_incomplete_runtime_*} and {@code jjkbrp_ig2_*}
+     * lists are legacy cleanup-only keys from pre-OG-build experiments. Current
+     * runtime must not produce them; they remain here only to clear old worlds.</p>
+     *
+     * @param nbt the persistent tag to clean
+     */
+    public static void clearIncompleteDomainData(CompoundTag nbt) {
+        if (nbt == null) {
+            return;
+        }
+        nbt.remove("jjkbrp_incomplete_surface_multiplier");
+        nbt.remove("jjkbrp_incomplete_form_active");
+        nbt.remove("jjkbrp_incomplete_session_active");
+        nbt.remove("jjkbrp_incomplete_cancelled");
+        nbt.remove("jjkbrp_incomplete_runtime_id");
+        nbt.remove("jjkbrp_incomplete_runtime_version");
+        nbt.remove("jjkbrp_incomplete_runtime_center_x");
+        nbt.remove("jjkbrp_incomplete_runtime_center_y");
+        nbt.remove("jjkbrp_incomplete_runtime_center_z");
+        nbt.remove("jjkbrp_incomplete_runtime_radius");
+        nbt.remove("jjkbrp_incomplete_runtime_frontier");
+        nbt.remove("jjkbrp_incomplete_runtime_next_frontier");
+        nbt.remove("jjkbrp_incomplete_runtime_visited");
+        nbt.remove("jjkbrp_incomplete_runtime_perimeter_index");
+        nbt.remove("jjkbrp_incomplete_runtime_perimeter_passes");
+        nbt.remove("jjkbrp_incomplete_runtime_next_floor_advance_tick");
+        nbt.remove("jjkbrp_incomplete_runtime_floor_plan");
+        nbt.remove("jjkbrp_incomplete_runtime_floor_plan_index");
+        nbt.remove("jjkbrp_incomplete_runtime_active_shell");
+        nbt.remove("jjkbrp_incomplete_runtime_next_shell_advance_tick");
+        nbt.remove("jjkbrp_incomplete_runtime_last_tick");
+        nbt.remove("jjkbrp_incomplete_runtime_blocked_edges");
+        nbt.remove("jjkbrp_incomplete_runtime_revisits");
+        nbt.remove("jjkbrp_incomplete_runtime_walls");
+        nbt.remove("jjkbrp_incomplete_runtime_complete");
+        nbt.remove("jjkbrp_ig2_version");
+        nbt.remove("jjkbrp_ig2_runtime_id");
+        nbt.remove("jjkbrp_ig2_center_x");
+        nbt.remove("jjkbrp_ig2_center_y");
+        nbt.remove("jjkbrp_ig2_center_z");
+        nbt.remove("jjkbrp_ig2_seed_floor_y");
+        nbt.remove("jjkbrp_ig2_radius");
+        nbt.remove("jjkbrp_ig2_stage");
+        nbt.remove("jjkbrp_ig2_last_tick");
+        nbt.remove("jjkbrp_ig2_frontier");
+        nbt.remove("jjkbrp_ig2_visited");
+        nbt.remove("jjkbrp_ig2_blocked_edges");
+        nbt.remove("jjkbrp_ig2_walls");
+        nbt.remove("jjkbrp_ig2_dome_state");
+        nbt.remove("jjkbrp_ig2_dome_cursor");
+        nbt.remove("jjkbrp_ig2_roof_frontier");
+        nbt.remove("jjkbrp_ig2_roof_visited");
+        nbt.remove("jjkbrp_ig2_roof_seeded");
+    }
+
+    /**
+     * Resolves the actual domain radius used by gameplay systems.
+     *
+     * <p>The method first prefers persisted per-entity runtime values, then falls back to the map
+     * variable radius maintained by the original mod, and finally to the addon default radius if
+     * all other lookups fail.</p>
+     *
+     * @param world the world context used for map-variable fallback lookup
+     * @param nbt the entity persistent data containing possible radius overrides
+     * @return the resolved radius, always clamped to at least {@code 1.0}
+     */
+    public static double getActualDomainRadius(LevelAccessor world, CompoundTag nbt) {
+        if (nbt != null) {
+            if (nbt.contains("jjkbrp_actual_domain_radius")) {
+                return Math.max(1.0, nbt.getDouble("jjkbrp_actual_domain_radius"));
+            }
+            if (nbt.contains("jjkbrp_base_domain_radius")) {
+                double resolved = DomainRadiusUtils.computeEffectiveRadius(nbt.getDouble("jjkbrp_base_domain_radius"), nbt.getDouble("jjkbrp_radius_multiplier"));
+                nbt.putDouble("jjkbrp_actual_domain_radius", resolved);
+                return resolved;
+            }
+        }
+        try {
+            // Fall back to the original global map variable when no entity-specific value exists.
+            return Math.max(1.0, JujutsucraftModVariables.MapVariables.get((LevelAccessor)world).DomainExpansionRadius);
+        }
+        catch (Exception ignored) {
+            // Final safety fallback for missing map data or unexpected runtime failures.
+            return DEFAULT_DOMAIN_RADIUS;
+        }
+    }
+
+    /** Copies the caster radius snapshot onto the OG cleanup marker before caster runtime keys can be overwritten. */
+    public static void copyDomainRadiusSnapshotToCleanupMarker(LevelAccessor world, LivingEntity caster) {
+        if (world == null || world.isClientSide() || caster == null) {
+            return;
+        }
+        CompoundTag casterNbt = caster.getPersistentData();
+        if (!casterNbt.contains("jjkbrp_actual_domain_radius") && !casterNbt.contains("jjkbrp_base_domain_radius")) {
+            return;
+        }
+        Vec3 center = getDomainCenter(caster);
+        DomainExpansionEntityEntity marker = world.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(center, center).inflate(0.25), candidate -> true)
+                .stream()
+                .min(java.util.Comparator.comparingDouble(candidate -> candidate.distanceToSqr(center.x, center.y, center.z)))
+                .orElse(null);
+        if (marker == null) {
+            return;
+        }
+        CompoundTag markerNbt = marker.getPersistentData();
+        if (casterNbt.contains("jjkbrp_base_domain_radius")) {
+            markerNbt.putDouble("jjkbrp_base_domain_radius", casterNbt.getDouble("jjkbrp_base_domain_radius"));
+        }
+        if (casterNbt.contains("jjkbrp_radius_multiplier")) {
+            markerNbt.putDouble("jjkbrp_radius_multiplier", casterNbt.getDouble("jjkbrp_radius_multiplier"));
+        }
+        markerNbt.putDouble("jjkbrp_actual_domain_radius", DomainRadiusUtils.resolveActualRadius(world, casterNbt));
+    }
+
+    /** Clears all addon-owned transient domain/clash state after OG cleanup has observed the original footprint. */
+    public static void cleanupDomainRuntimeState(LivingEntity caster) {
+        if (caster == null) {
+            return;
+        }
+        cleanupBFBoost(caster);
+        CompoundTag nbt = caster.getPersistentData();
+        clearIncompleteDomainData(nbt);
+        nbt.remove("jjkbrp_domain_form_effective");
+        nbt.remove("jjkbrp_domain_form_cast_locked");
+        nbt.remove("jjkbrp_open_form_active");
+        nbt.remove("jjkbrp_open_range_multiplier");
+        nbt.remove("jjkbrp_open_surehit_multiplier");
+        nbt.remove("jjkbrp_open_ce_drain_multiplier");
+        nbt.remove("jjkbrp_open_duration_multiplier");
+        nbt.remove("jjkbrp_open_base_range_path");
+        nbt.remove("jjkbrp_open_denied_incompatible");
+        nbt.remove("jjkbrp_open_denied_no_adv");
+        nbt.remove("jjkbrp_open_domain_cx");
+        nbt.remove("jjkbrp_open_domain_cy");
+        nbt.remove("jjkbrp_open_domain_cz");
+        nbt.remove("jjkbrp_open_darkness_stage");
+        nbt.remove("jjkbrp_open_darkness_start");
+        nbt.remove("jjkbrp_open_cancelled");
+        nbt.remove("jjkbrp_open_center_locked");
+        nbt.remove("jjkbrp_open_cast_game_time");
+        nbt.remove("jjkbrp_opening_vfx_fired");
+        nbt.remove("jjkbrp_opening_prefire_fired");
+        nbt.remove("jjkbrp_base_domain_radius");
+        nbt.remove("jjkbrp_radius_multiplier");
+        nbt.remove("jjkbrp_actual_domain_radius");
+        nbt.remove("jjkbrp_effective_power");
+        nbt.remove("jjkbrp_barrier_clash_active");
+        nbt.remove("jjkbrp_open_clash_active");
+        nbt.remove("jjkbrp_barrier_clash_opponent_uuid");
+        nbt.remove("jjkbrp_open_clash_opponent_uuid");
+        nbt.remove("jjkbrp_clash_pair");
+        nbt.remove("jjkbrp_clash_start_tick");
+        nbt.remove("jjkbrp_clash_duration_ticks");
+        nbt.remove("jjkbrp_clash_remaining_ticks");
+        nbt.remove("jjkbrp_clash_form_self");
+        nbt.remove("jjkbrp_clash_form_opp");
+        nbt.remove("jjkbrp_clash_power_self");
+        nbt.remove("jjkbrp_clash_power_opp");
+        nbt.remove("jjkbrp_last_clash_contact_tick");
+        nbt.remove("jjkbrp_last_clash_opponent_uuid");
+        nbt.remove("jjkbrp_last_clash_opponent_uuid_priority");
+        nbt.remove("jjkbrp_clash_opponent");
+        nbt.remove("jjkbrp_clash_opponent_priority");
+        nbt.remove("jjkbrp_clash_pending_tick");
+        nbt.remove("jjkbrp_clash_result_tick");
+        nbt.remove("jjkbrp_clash_result");
+        nbt.remove("jjkbrp_clash_resolved_until");
+        nbt.remove("jjkbrp_pending_clash_registration");
+        nbt.remove("jjkbrp_pending_loser");
+        nbt.remove("jjkbrp_clash_pending_loss");
+        nbt.remove("jjkbrp_clash_pending_loser");
+        nbt.remove("jjkbrp_unified_clash_active");
+        nbt.remove("jjkbrp_unified_clash_opponent_uuid");
+        nbt.remove("jjkbrp_unified_clash_pressure");
+        nbt.remove("jjkbrp_in_domain_clash");
+        nbt.remove("jjkbrp_last_resolved_clash_pair");
+        nbt.remove("jjkbrp_last_resolved_clash_opponent_uuid");
+        nbt.remove("jjkbrp_last_notified_clash_session");
+        nbt.remove("jjkbrp_last_notified_clash_pair");
+        nbt.remove("jjkbrp_last_notified_clash_until");
+        nbt.remove("jjkbrp_clash_winner_session_suppress_until");
+        int barrierCount = nbt.contains("jjkbrp_barrier_clash_opponent_count") ? nbt.getInt("jjkbrp_barrier_clash_opponent_count") : 0;
+        nbt.remove("jjkbrp_barrier_clash_opponent_count");
+        for (int i = 0; i < barrierCount; ++i) {
+            nbt.remove("jjkbrp_barrier_clash_opponent_uuid_" + i);
+        }
+        int openCount = nbt.contains("jjkbrp_open_clash_opponent_count") ? nbt.getInt("jjkbrp_open_clash_opponent_count") : 0;
+        nbt.remove("jjkbrp_open_clash_opponent_count");
+        for (int i = 0; i < openCount; ++i) {
+            nbt.remove("jjkbrp_open_clash_opponent_uuid_" + i);
+        }
+        nbt.remove("jjkbrp_domain_just_opened");
+        nbt.remove("jjkbrp_domain_grace_ticks");
+        nbt.remove("jjkbrp_half_charge_announced");
+        nbt.remove("jjkbrp_caster_x_at_cast");
+        nbt.remove("jjkbrp_caster_y_at_cast");
+        nbt.remove("jjkbrp_caster_z_at_cast");
+        nbt.remove("jjkbrp_domain_archetype");
+        nbt.remove("jjkbrp_barrier_refinement");
+        nbt.remove("jjkbrp_expected_domain_duration");
+        nbt.remove("jjkbrp_duration_extended");
+        nbt.remove("jjkbrp_temp_clash_strength_applied");
+        nbt.remove("jjkbrp_temp_clash_strength_had_effect");
+        nbt.remove("jjkbrp_temp_clash_strength_duration");
+        nbt.remove("jjkbrp_temp_clash_strength_amplifier");
+        nbt.remove("jjkbrp_temp_clash_strength_ambient");
+        nbt.remove("jjkbrp_temp_clash_strength_visible");
+        nbt.remove("jjkbrp_temp_clash_strength_icon");
+        nbt.remove("jjkbrp_temp_clash_total_damage_applied");
+        nbt.remove("jjkbrp_temp_clash_total_damage_present");
+        nbt.remove("jjkbrp_temp_clash_total_damage_original");
+        nbt.remove("jjkbrp_temp_clash_total_damage_staged");
+        nbt.remove("jjkbrp_domain_cast_cost_base");
+        nbt.remove("jjkbrp_domain_cast_cost_multiplier");
+        nbt.remove("jjkbrp_domain_cast_cost_delta");
+        nbt.remove("jjkbrp_domain_cast_cost_effective");
+        nbt.remove("jjkbrp_domain_cast_cost_preview");
+        nbt.remove("jjkbrp_pending_incomplete_cd_tune");
+    }
+
+    /**
+     * Resolves the center point for a domain tied to the given entity.
+     *
+     * <p>Closed domains use the original {@code x_pos_doma/y_pos_doma/z_pos_doma} keys. Open
+     * domains can also store a separate center, which is checked as a secondary fallback. If no
+     * saved center exists, the entity's current position is returned.</p>
+     *
+     * @param entity the entity whose domain center should be resolved
+     * @return the saved domain center, {@link Vec3#ZERO} for null input, or the entity position
+     */
+    public static Vec3 getDomainCenter(Entity entity) {
+        if (entity == null) {
+            return Vec3.ZERO;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        if (nbt.contains("x_pos_doma")) {
+            return new Vec3(nbt.getDouble("x_pos_doma"), nbt.getDouble("y_pos_doma"), nbt.getDouble("z_pos_doma"));
+        }
+        if (nbt.contains("jjkbrp_open_domain_cx")) {
+            return new Vec3(nbt.getDouble("jjkbrp_open_domain_cx"), nbt.getDouble("jjkbrp_open_domain_cy"), nbt.getDouble("jjkbrp_open_domain_cz"));
+        }
+        return entity.position();
+    }
+
+    /**
+     * Resolves the center point specifically for open-domain state.
+     *
+     * <p>If no open-domain center exists yet, this falls back to the generic domain center helper so
+     * callers still get a meaningful position.</p>
+     *
+     * @param entity the entity whose open-domain center should be resolved
+     * @return the open-domain center, generic domain center fallback, or {@link Vec3#ZERO}
+     */
+    public static Vec3 getOpenDomainCenter(Entity entity) {
+        if (entity == null) {
+            return Vec3.ZERO;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        if (nbt.contains("jjkbrp_open_domain_cx")) {
+            return new Vec3(nbt.getDouble("jjkbrp_open_domain_cx"), nbt.getDouble("jjkbrp_open_domain_cy"), nbt.getDouble("jjkbrp_open_domain_cz"));
+        }
+        return DomainAddonUtils.getDomainCenter(entity);
+    }
+
+    /**
+     * Determines whether an entity is currently in an open-domain state.
+     *
+     * <p>The addon checks several persisted markers because different parts of the original mod and
+     * addon pipeline can expose the same state in different formats. Addon form flags are authoritative;
+     * the original effect amplifier is only a legacy fallback when no addon form was written.</p>
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} if the entity is treated as using an open domain form
+     */
+    public static boolean isOpenDomainState(LivingEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        CompoundTag data = entity.getPersistentData();
+        if (data.getBoolean("jjkbrp_open_form_active")) {
+            return true;
+        }
+        if (data.contains("jjkbrp_domain_form_cast_locked") && data.getInt("jjkbrp_domain_form_cast_locked") == 2) {
+            return true;
+        }
+        if (data.contains("jjkbrp_domain_form_effective") && data.getInt("jjkbrp_domain_form_effective") == 2) {
+            return true;
+        }
+        MobEffect domainEffect = (MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get();
+        MobEffectInstance effect = entity.getEffect(domainEffect);
+
+        // Only use the OG amplifier as a legacy fallback when no addon form marker exists.
+        return effect != null && effect.getAmplifier() > 0;
+    }
+
+    /**
+     * Determines whether an entity is currently in an incomplete-domain state.
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} if the entity is treated as using the incomplete domain form
+     */
+    public static boolean isIncompleteDomainState(LivingEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        CompoundTag data = entity.getPersistentData();
+        if (data.contains("jjkbrp_domain_form_cast_locked")
+                && data.getInt("jjkbrp_domain_form_cast_locked") == 0) {
+            return true;
+        }
+        if (data.getBoolean("jjkbrp_incomplete_form_active")) {
+            return true;
+        }
+        return data.contains("jjkbrp_domain_form_effective")
+                && data.getInt("jjkbrp_domain_form_effective") == 0;
+    }
+
+    /**
+     * Determines whether the entity has a standard closed domain active.
+     *
+     * <p>A closed domain is defined here as having the domain expansion effect while not being
+     * classified as open or incomplete by the other specialized helpers.</p>
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} if the entity is in the closed domain state
+     */
+    public static boolean isClosedDomainActive(LivingEntity entity) {
+        return entity != null && entity.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) && !DomainAddonUtils.isOpenDomainState(entity) && !DomainAddonUtils.isIncompleteDomainState(entity);
+    }
+
+    /**
+     * Resolves a broader OG-like domain runtime candidate state for clash scanning.
+     *
+     * <p>This intentionally accepts active effect, startup/pending counters, and OG teardown/loss
+     * flags while a domain center or domain id is still present, so NPC clash windows are not missed.</p>
+     */
+    public static boolean hasOgLikeDomainClashRuntime(LivingEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        boolean hasCenterOrDomainId = nbt.contains("x_pos_doma")
+                || nbt.contains("jjkbrp_open_domain_cx")
+                || nbt.getDouble("skill_domain") > 0.0
+                || nbt.getDouble("jjkbrp_domain_id_runtime") != 0.0;
+        boolean activeEffect = entity.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get());
+        boolean activeSelectOrSkill = nbt.getDouble("select") != 0.0 || nbt.getDouble("skill_domain") > 0.0;
+        boolean activeCover = hasCenterOrDomainId && nbt.getBoolean("Cover");
+        boolean activeCounters = hasCenterOrDomainId && (nbt.getDouble("cnt1") > 0.0
+                || nbt.getDouble("cnt2") != 0.0
+                || nbt.getDouble("cnt3") > 0.0
+                || nbt.getDouble("cnt5") > 0.0);
+        boolean defeatedOnly = nbt.getBoolean("Failed")
+                || nbt.getBoolean("DomainDefeated")
+                || nbt.getBoolean("jjkbrp_was_failed")
+                || nbt.getBoolean("jjkbrp_was_domain_defeated");
+
+        if (nbt.getLong("jjkbrp_clash_resolved_until") > entity.level().getGameTime()) {
+            return false;
+        }
+        if (defeatedOnly && !activeEffect && !activeSelectOrSkill && !activeCover && !activeCounters) {
+            return false;
+        }
+        if (activeEffect || activeSelectOrSkill || activeCover) {
+            return true;
+        }
+        return activeCounters && !defeatedOnly;
+    }
+
+    /** Resolves the OG-preferred center for active or pending domain clash state. */
+    public static Vec3 getOgLikeDomainCenter(Entity entity) {
+        if (entity == null) {
+            return Vec3.ZERO;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        if (nbt.contains("x_pos_doma")) {
+            return new Vec3(nbt.getDouble("x_pos_doma"), nbt.getDouble("y_pos_doma"), nbt.getDouble("z_pos_doma"));
+        }
+        if (nbt.contains("jjkbrp_open_domain_cx")) {
+            return new Vec3(nbt.getDouble("jjkbrp_open_domain_cx"), nbt.getDouble("jjkbrp_open_domain_cy"), nbt.getDouble("jjkbrp_open_domain_cz"));
+        }
+        return entity.position();
+    }
+
+    /** Resolves form using addon flags first, then legacy OG effect amplifier/cnt2 fallback. */
+    public static DomainForm resolveOgLikeDomainForm(LivingEntity entity) {
+        if (entity == null) {
+            return DomainForm.CLOSED;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        if (nbt.contains("jjkbrp_domain_form_cast_locked")) {
+            return DomainForm.fromId(nbt.getInt("jjkbrp_domain_form_cast_locked"));
+        }
+        if (nbt.contains("jjkbrp_domain_form_effective")) {
+            return DomainForm.fromId(nbt.getInt("jjkbrp_domain_form_effective"));
+        }
+        if (nbt.getBoolean("jjkbrp_incomplete_form_active")) {
+            return DomainForm.INCOMPLETE;
+        }
+        if (nbt.getBoolean("jjkbrp_open_form_active")) {
+            return DomainForm.OPEN;
+        }
+        MobEffect domainEffect = (MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get();
+        MobEffectInstance effect = entity.getEffect(domainEffect);
+        if (effect != null) {
+            return effect.getAmplifier() < 0 ? DomainForm.INCOMPLETE : (effect.getAmplifier() > 0 ? DomainForm.OPEN : DomainForm.CLOSED);
+        }
+        if (nbt.getDouble("select") != 0.0 || nbt.getDouble("skill_domain") > 0.0) {
+            double cnt2 = nbt.getDouble("cnt2");
+            if (cnt2 < 0.0) {
+                return DomainForm.INCOMPLETE;
+            }
+            if (cnt2 > 0.0) {
+                return DomainForm.OPEN;
+            }
+            return DomainForm.CLOSED;
+        }
+        return DomainAddonUtils.resolveDomainForm(entity);
+    }
+
+    /** Resolves the OG/addon domain id for scanner-created entries. */
+    public static int resolveOgLikeDomainId(LivingEntity entity) {
+        if (entity == null) {
+            return 0;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        int domainId = (int)Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId == 0) {
+            domainId = (int)Math.round(nbt.getDouble("skill_domain"));
+        }
+        if (domainId == 0) {
+            domainId = (int)Math.round(nbt.getDouble("select"));
+        }
+        return domainId;
+    }
+
+    /**
+     * Resolves the owner of a projectile or helper entity using its current level.
+     *
+     * @param projectileOrOrb the entity carrying owner-identification data
+     * @return the resolved living owner, or {@code null} if no owner can be found
+     */
+    public static LivingEntity resolveOwnerEntity(Entity projectileOrOrb) {
+        if (projectileOrOrb == null) {
+            return null;
+        }
+        return DomainAddonUtils.resolveOwnerEntity((LevelAccessor)projectileOrOrb.level(), projectileOrOrb);
+    }
+
+    /**
+     * Resolves the owner of a projectile or helper entity from persisted metadata.
+     *
+     * <p>The method first tries the authoritative UUID path, then falls back to the less reliable
+     * {@code NameRanged_ranged} marker used by some original mod projectiles. Diagnostic logging is
+     * rate-limited by {@link #shouldLogOwnerResolution(Entity)}.</p>
+     *
+     * @param world the world that should contain the owner
+     * @param projectileOrOrb the entity carrying owner-identification data
+     * @return the resolved living owner, or {@code null} if no owner can be found
+     */
+    public static LivingEntity resolveOwnerEntity(LevelAccessor world, Entity projectileOrOrb) {
+        LivingEntity owner;
+        LivingEntity owner2;
+        if (projectileOrOrb == null || !(world instanceof ServerLevel)) {
+            return null;
+        }
+        ServerLevel serverLevel = (ServerLevel)world;
+        CompoundTag data = projectileOrOrb.getPersistentData();
+        String ownerUUID = data.getString(TAG_OWNER_UUID);
+        if (!ownerUUID.isBlank() && (owner2 = DomainAddonUtils.resolveOwnerByUuid(serverLevel, ownerUUID)) != null) {
+            if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb)) {
+                LOGGER.debug("[GojoDomainDiag] Resolved owner via OWNER_UUID entity={} owner={} ownerUuid={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), owner2.getName().getString(), ownerUUID});
+            }
+            return owner2;
+        }
+        double ownerNameRanged = data.getDouble(TAG_NAME_RANGED_RANGED);
+        if (ownerNameRanged != 0.0 && (owner = DomainAddonUtils.resolveOwnerByNameRanged(serverLevel, projectileOrOrb, ownerNameRanged)) != null) {
+            if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb)) {
+                LOGGER.debug("[GojoDomainDiag] Resolved owner via NameRanged_ranged entity={} owner={} nameRanged_ranged={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), owner.getName().getString(), ownerNameRanged});
+            }
+            return owner;
+        }
+        if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb) && (!ownerUUID.isBlank() || ownerNameRanged != 0.0)) {
+            LOGGER.debug("[GojoDomainDiag] Failed to resolve owner entity={} ownerUuidPresent={} nameRanged_ranged={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), !ownerUUID.isBlank(), ownerNameRanged});
+        }
+        return null;
+    }
+
+    /**
+     * Checks whether the resolved owner of a projectile or orb currently has any domain state active.
+     *
+     * @param projectileOrOrb the spawned helper entity to inspect
+     * @return {@code true} if the resolved owner is in open, incomplete, or closed domain state
+     */
+    public static boolean isOwnerInDomain(Entity projectileOrOrb) {
+        boolean ownerDomainActive;
+        if (projectileOrOrb == null) {
+            return false;
+        }
+        LivingEntity owner = DomainAddonUtils.resolveOwnerEntity(projectileOrOrb);
+        if (owner == null) {
+            return false;
+        }
+        boolean ownerOpen = DomainAddonUtils.isOpenDomainState(owner);
+        boolean ownerIncomplete = DomainAddonUtils.isIncompleteDomainState(owner);
+        boolean ownerClosed = DomainAddonUtils.isClosedDomainActive(owner);
+
+        // Any recognized domain form counts as active owner-domain participation.
+        boolean bl = ownerDomainActive = ownerOpen || ownerIncomplete || ownerClosed;
+        if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb)) {
+            LOGGER.debug("[GojoDomainDiag] Owner domain state entity={} owner={} open={} incomplete={} closed={} active={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), owner.getName().getString(), ownerOpen, ownerIncomplete, ownerClosed, ownerDomainActive});
+        }
+        return ownerDomainActive;
+    }
+
+    /**
+     * Resolves a living owner directly from a UUID string.
+     *
+     * <p>This supports both generic entities and online players, because some owner lookups may be
+     * backed by the entity registry while others are most reliably retrieved from the player list.</p>
+     *
+     * @param serverLevel the server level used for lookup
+     * @param ownerUUID the UUID string stored on the spawned entity
+     * @return the resolved living owner, or {@code null} if parsing or lookup fails
+     */
+    private static LivingEntity resolveOwnerByUuid(ServerLevel serverLevel, String ownerUUID) {
+        try {
+            UUID uuid = UUID.fromString(ownerUUID);
+            Entity ownerEntity = serverLevel.getEntity(uuid);
+            if (ownerEntity instanceof LivingEntity) {
+                LivingEntity livingOwner = (LivingEntity)ownerEntity;
+                return livingOwner;
+            }
+            return serverLevel.getServer().getPlayerList().getPlayer(uuid);
+        }
+        catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Resolves a living owner from the legacy {@code NameRanged} numeric marker.
+     *
+     * <p>Players are checked first because they are the most common source. If no player matches,
+     * nearby living entities are scanned within a large search area around the projectile.</p>
+     *
+     * @param serverLevel the server level used for lookup
+     * @param projectileOrOrb the entity carrying the marker value
+     * @param ownerNameRanged the numeric owner marker to match
+     * @return the resolved living owner, or {@code null} if no candidate matches
+     */
+    private static LivingEntity resolveOwnerByNameRanged(ServerLevel serverLevel, Entity projectileOrOrb, double ownerNameRanged) {
+        for (ServerPlayer player : serverLevel.players()) {
+            if (Double.compare(player.getPersistentData().getDouble(TAG_NAME_RANGED), ownerNameRanged) != 0) continue;
+            return player;
+        }
+        AABB searchBox = projectileOrOrb.getBoundingBox().inflate(256.0);
+        for (LivingEntity candidate : serverLevel.getEntitiesOfClass(LivingEntity.class, searchBox, entity -> entity.isAlive() && entity != projectileOrOrb)) {
+            if (Double.compare(candidate.getPersistentData().getDouble(TAG_NAME_RANGED), ownerNameRanged) != 0) continue;
+            return candidate;
+        }
+        return null;
+    }
+
+    /**
+     * Determines whether diagnostic owner-resolution logging should run this tick.
+     *
+     * @param projectileOrOrb the entity being inspected
+     * @return {@code true} every 20 ticks for non-null entities, otherwise {@code false}
+     */
+    private static boolean shouldLogOwnerResolution(Entity projectileOrOrb) {
+        // Log once per second to avoid spamming server output while still preserving diagnostics.
+        return projectileOrOrb != null && projectileOrOrb.tickCount % 20 == 0;
+    }
+
+    /**
+     * Checks whether an entity currently has an active domain expansion state.
+     *
+     * <p>This method accepts both the formal mob effect and the persistent-data based runtime flags
+     * used during domain build-up or transitional states.</p>
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} if any supported domain expansion marker is active
+     */
+    public static boolean hasActiveDomainExpansion(LivingEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        CompoundTag data = entity.getPersistentData();
+        if (entity.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())) {
+            return true;
+        }
+        if (data.getDouble(TAG_DOMAIN_EXPANSION) > 0.0) {
+            return true;
+        }
+        return DomainAddonUtils.isDomainBuildOrActive(entity);
+    }
+
+    /**
+     * Checks whether an entity is currently participating in a domain clash.
+     *
+     * <p>The authoritative signal is the registry-managed active clash flags. The
+     * legacy single-opponent key remains a compatibility bridge only and is not
+     * treated as the primary source of truth here.</p>
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} if registry-managed clash state is currently active
+     */
+    public static boolean isInDomainClash(LivingEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        return DomainClashRegistry.isInClash(entity.getUUID());
+    }
+
+    /**
+     * Checks whether an entity is combat-tagged and therefore should be prevented from some actions.
+     *
+     * <p>The check supports both the original combat cooldown effect and the addon-managed persistent
+     * timestamp fallback.</p>
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} if the entity is still considered in combat
+     */
+    public static boolean isCombatTagged(LivingEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        if (entity.hasEffect((MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME_COMBAT.get())) {
+            return true;
+        }
+        long lastCombatTick = entity.getPersistentData().getLong(TAG_LAST_COMBAT_TICK);
+        return lastCombatTick > 0L && (long)entity.tickCount - lastCombatTick < 100L;
+    }
+
+    /**
+     * Checks whether domain mastery mutation should currently be blocked for an entity.
+     *
+     * @param entity the entity to inspect
+     * @return {@code true} when active domain, clash, or combat state locks mastery changes
+     */
+    public static boolean isDomainMasteryMutationLocked(LivingEntity entity) {
+        return DomainAddonUtils.hasActiveDomainExpansion(entity) || DomainAddonUtils.isInDomainClash(entity) || DomainAddonUtils.isCombatTagged(entity);
+    }
+
+    /**
+     * Produces a user-facing explanation for why domain mastery mutation is blocked.
+     *
+     * @param entity the entity to inspect
+     * @return the most specific lock reason currently applicable to the entity
+     */
+    public static String getDomainMasteryMutationLockReason(LivingEntity entity) {
+        if (DomainAddonUtils.hasActiveDomainExpansion(entity)) {
+            return "Cannot change Domain Mastery while Domain Expansion is active";
+        }
+        if (DomainAddonUtils.isInDomainClash(entity)) {
+            return "Cannot change Domain Mastery during a domain clash";
+        }
+        if (DomainAddonUtils.isCombatTagged(entity)) {
+            return "Cannot change Domain Mastery while in combat";
+        }
+        return "Domain Mastery changes are currently locked";
+    }
+
+    /**
+     * Checks whether a player's domain is currently building or already active.
+     *
+     * <p>This version matches the original player-centric data flow and requires a stored domain
+     * center plus startup-state counters to be present.</p>
+     *
+     * @param player the player to inspect
+     * @return {@code true} if the domain build sequence or active state is recognized
+     */
+    public static boolean isDomainBuildOrActive(Player player) {
+        boolean hasStartupState;
+        if (player == null) {
+            return false;
+        }
+        CompoundTag nbt = player.getPersistentData();
+        // Check for domain center: closed domains use x_pos_doma, open domains use jjkbrp_open_domain_cx
+        boolean hasDomainCenter = nbt.contains("x_pos_doma") || nbt.contains("jjkbrp_open_domain_cx");
+        if (!hasDomainCenter) {
+            return false;
+        }
+        if (player.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())) {
+            return true;
+        }
+
+        // Startup markers indicate that the player has progressed into the domain construction flow.
+        boolean bl = hasStartupState = nbt.getDouble("select") != 0.0 || nbt.getDouble("skill") != 0.0 || nbt.getDouble("skill_domain") != 0.0;
+        if (!hasStartupState) {
+            return false;
+        }
+
+        // cnt3/cnt1 are original mod timing counters used to confirm that building is underway.
+        return nbt.getDouble("cnt3") >= 20.0 && nbt.getDouble("cnt1") > 0.0;
+    }
+
+    /**
+     * Checks whether a living entity's domain is currently building or already active.
+     *
+     * <p>This overload is slightly broader than the player version because non-player casters can use
+     * the addon runtime domain id marker during the startup process.</p>
+     *
+     * @param caster the living caster to inspect
+     * @return {@code true} if the domain build sequence or active state is recognized
+     */
+    public static boolean isDomainBuildOrActive(LivingEntity caster) {
+        boolean hasStartupState;
+        if (caster == null) {
+            return false;
+        }
+        CompoundTag nbt = caster.getPersistentData();
+        // Check for domain center: closed domains use x_pos_doma, open domains use jjkbrp_open_domain_cx
+        boolean hasDomainCenter = nbt.contains("x_pos_doma") || nbt.contains("jjkbrp_open_domain_cx");
+        if (!hasDomainCenter) {
+            return false;
+        }
+        if (caster.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())) {
+            return true;
+        }
+
+        // Runtime domain id support lets addon-driven casters participate in the same detection flow.
+        boolean bl = hasStartupState = nbt.getDouble("select") != 0.0 || nbt.getDouble("skill") != 0.0 || nbt.getDouble("skill_domain") != 0.0 || nbt.getDouble("jjkbrp_domain_id_runtime") != 0.0;
+        if (!hasStartupState) {
+            return false;
+        }
+        return nbt.getDouble("cnt3") >= 20.0 && nbt.getDouble("cnt1") > 0.0;
+    }
+
+    /**
+     * Checks whether a player domain is building or active using only caster runtime state.
+     *
+     * @param world optional server world context
+     * @param player the player whose domain state should be checked
+     * @return {@code true} if the domain is active or building
+     */
+    public static boolean isDomainBuildOrActive(ServerLevel world, Player player) {
+        if (!DomainAddonUtils.isDomainBuildOrActive(player)) {
+            return false;
+        }
+        if (world == null) {
+            return true;
+        }
+
+        // No addon lifecycle entity normalization is performed here; runtime flags are authoritative.
+        return true;
+    }
+
+    /**
+     * Checks whether a living caster domain is building or active using only caster runtime state.
+     *
+     * @param world optional server world context
+     * @param caster the caster whose domain state should be checked
+     * @return {@code true} if the domain is active or building
+     */
+    public static boolean isDomainBuildOrActive(ServerLevel world, LivingEntity caster) {
+        if (!DomainAddonUtils.isDomainBuildOrActive(caster)) {
+            return false;
+        }
+        if (world == null) {
+            return true;
+        }
+        return true;
+    }
+
+    /**
+     * Finds the closest player whose domain center matches a given location and is still active.
+     *
+     * @param world the world to search
+     * @param center the target center to compare against
+     * @param maxDistanceSqr the maximum allowed squared distance from the target center
+     * @return the closest matching player, or {@code null} if no live match is found
+     */
+    public static Player findMatchingLiveDomainPlayer(ServerLevel world, Vec3 center, double maxDistanceSqr) {
+        if (world == null || center == null) {
+            return null;
+        }
+        Player closest = null;
+        double closestDistance = Double.MAX_VALUE;
+        for (Player player : world.players()) {
+            double distance;
+            if (!DomainAddonUtils.isDomainBuildOrActive(player) || (distance = DomainAddonUtils.getDomainCenter((Entity)player).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
+            closest = player;
+            closestDistance = distance;
+        }
+        return closest;
+    }
+
+    /**
+     * Finds the closest living caster whose domain center matches a given location and is still active.
+     *
+     * @param world the world to search
+     * @param center the target center to compare against
+     * @param maxDistanceSqr the maximum allowed squared distance from the target center
+     * @return the closest matching living caster, or {@code null} if no live match is found
+     */
+    public static LivingEntity findMatchingLiveDomainCaster(ServerLevel world, Vec3 center, double maxDistanceSqr) {
+        if (world == null || center == null) {
+            return null;
+        }
+        LivingEntity closest = null;
+        double closestDistance = Double.MAX_VALUE;
+
+        // Always scan players globally because scaled closed domains can let the caster roam far from center.
+        for (Player player : world.players()) {
+            double distance;
+            if (!DomainAddonUtils.isDomainBuildOrActive(player) || (distance = DomainAddonUtils.getDomainCenter((Entity)player).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
+            closest = player;
+            closestDistance = distance;
+        }
+
+        double searchRadius = Math.max(96.0, Math.sqrt(Math.max(0.0, maxDistanceSqr)) + 128.0);
+        for (LivingEntity caster : world.getEntitiesOfClass(LivingEntity.class, new AABB(center.x - searchRadius, center.y - searchRadius, center.z - searchRadius, center.x + searchRadius, center.y + searchRadius, center.z + searchRadius), e -> !(e instanceof Player))) {
+            double distance;
+            if (!DomainAddonUtils.isDomainBuildOrActive(caster) || (distance = DomainAddonUtils.getDomainCenter((Entity)caster).distanceToSqr(center)) > maxDistanceSqr || distance >= closestDistance) continue;
+            closest = caster;
+            closestDistance = distance;
+        }
+        return closest;
+    }
+
+    /**
+     * Resolves the gameplay range used by open domains.
+     *
+     * <p>Open domains intentionally extend beyond the shell radius, so this helper applies the saved
+     * range multiplier with a minimum value to keep behavior stable.</p>
+     *
+     * @param world the world context used for radius lookup
+     * @param entity the entity whose open-domain range should be resolved
+     * @return the effective open-domain gameplay range
+     */
+    public static double getOpenDomainRange(LevelAccessor world, Entity entity) {
+        if (entity == null) {
+            return 40.0;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        double baseRadius = DomainAddonUtils.getActualDomainRadius(world, nbt);
+
+        // Open-domain gameplay range is much larger than the shell itself by design.
+        double multiplier = Math.max(2.5, nbt.getDouble("jjkbrp_open_range_multiplier"));
+        return baseRadius * multiplier;
+    }
+
+    /**
+     * Resolves the visual effect range used by open-domain particles and other VFX.
+     *
+     * @param world the world context used for radius lookup
+     * @param entity the entity whose open-domain visual range should be resolved
+     * @return the effective visual range for open-domain rendering helpers
+     */
+    public static double getOpenDomainVisualRange(LevelAccessor world, Entity entity) {
+        if (entity == null) {
+            return 48.0;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        double baseRadius = DomainAddonUtils.getActualDomainRadius(world, nbt);
+        double multiplier = Math.max(2.5, nbt.getDouble("jjkbrp_open_range_multiplier"));
+
+        // Visual range is intentionally compressed relative to the full gameplay range for VFX balance.
+        double visualMultiplier = Math.max(3.0, Math.min(4.5, multiplier * 0.25));
+        return baseRadius * visualMultiplier;
+    }
+
+    /**
+     * Resolves the shell radius used for open-domain sphere visuals.
+     *
+     * @param world the world context used for radius lookup
+     * @param entity the entity whose open-domain shell radius should be resolved
+     * @return the shell radius, clamped to a minimum of {@code 8.0}
+     */
+    public static double getOpenDomainShellRadius(LevelAccessor world, Entity entity) {
+        if (entity == null) {
+            return DEFAULT_DOMAIN_RADIUS;
+        }
+        double baseRadius = DomainAddonUtils.getActualDomainRadius(world, entity.getPersistentData());
+        return Math.max(8.0, baseRadius);
+    }
+
+    /**
+     * Uses reflection to forcibly update a mob effect instance duration.
+     *
+     * <p>This exists because mapped names can differ between environments. The method tries several
+     * field names and finally scans integer fields heuristically to find the duration slot without
+     * touching likely amplifier fields.</p>
+     *
+     * @param instance the effect instance to mutate
+     * @param newDuration the new duration in ticks
+     * @return {@code true} if a suitable field was found and updated
+     */
+    public static boolean setEffectDuration(MobEffectInstance instance, int newDuration) {
+        if (instance == null || newDuration <= 0) {
+            return false;
+        }
+        try {
+            // Preferred obfuscated duration field in Mojang-mapped 1.20.x.
+            Field durationField = MobEffectInstance.class.getDeclaredField("f_19512_");
+            durationField.setAccessible(true);
+            durationField.setInt(instance, newDuration);
+            return true;
+        }
+        catch (NoSuchFieldException e1) {
+            try {
+                // Preferred direct field name in more standard mappings.
+                Field durationField = MobEffectInstance.class.getDeclaredField("duration");
+                durationField.setAccessible(true);
+                durationField.setInt(instance, newDuration);
+                return true;
+            }
+            catch (Exception e2) {
+                for (Field field : MobEffectInstance.class.getDeclaredFields()) {
+                    if (field.getType() != Integer.TYPE) continue;
+                    try {
+                        int value;
+                        field.setAccessible(true);
+                        String name = field.getName().toLowerCase();
+
+                        // Skip obvious amplifier fields and suspiciously tiny values that are unlikely
+                        // to represent the main effect duration.
+                        if (name.contains("amplifier") || name.contains("amp") || name.equals("duration") || (value = field.getInt(instance)) < 20) continue;
+                        field.setInt(instance, newDuration);
+                        return true;
+                    }
+                    catch (Exception exception) {
+                        // Intentionally ignored because this is a best-effort reflective fallback.
+                    }
+                }
+            }
+        }
+        catch (Exception exception) {
+            // Intentionally ignored because unsupported mappings should simply report failure.
+        }
+        return false;
+    }
+
+    /**
+     * Sends particles to players beyond the standard short-range packet behavior when possible.
+     *
+     * <p>If the reflective long-distance overload exists, particles are sent per viewer with the
+     * force flag enabled. Otherwise, the method falls back to the normal world broadcast.</p>
+     *
+     * @param world the server world sending the particles
+     * @param particle the particle type to send
+     * @param x the x-coordinate of the particle origin
+     * @param y the y-coordinate of the particle origin
+     * @param z the z-coordinate of the particle origin
+     * @param count the number of particles to spawn
+     * @param offsetX the x spread offset
+     * @param offsetY the y spread offset
+     * @param offsetZ the z spread offset
+     * @param speed the particle speed parameter
+     */
+    public static void sendLongDistanceParticles(ServerLevel world, ParticleOptions particle, double x, double y, double z, int count, double offsetX, double offsetY, double offsetZ, double speed) {
+        if (count <= 0) {
+            return;
+        }
+        if (LONG_DISTANCE_PARTICLE_METHOD != null) {
+            boolean sent = true;
+            for (ServerPlayer viewer : world.players()) {
+                try {
+                    // Send directly to each viewer with the long-distance flag enabled.
+                    LONG_DISTANCE_PARTICLE_METHOD.invoke((Object)world, viewer, particle, true, x, y, z, count, offsetX, offsetY, offsetZ, speed);
+                }
+                catch (Exception ignored) {
+                    // Any reflective failure drops back to the vanilla sendParticles behavior.
+                    sent = false;
+                    break;
+                }
+            }
+            if (sent) {
+                return;
+            }
+        }
+        world.sendParticles(particle, x, y, z, count, offsetX, offsetY, offsetZ, speed);
+    }
+
+    /**
+     * Resolves the reflective long-distance particle overload on {@link ServerLevel}.
+     *
+     * @return the method handle if available, otherwise {@code null}
+     */
+    private static Method resolveLongDistanceParticleMethod() {
+        try {
+            return ServerLevel.class.getMethod("sendParticles", ServerPlayer.class, ParticleOptions.class, Boolean.TYPE, Double.TYPE, Double.TYPE, Double.TYPE, Integer.TYPE, Double.TYPE, Double.TYPE, Double.TYPE, Double.TYPE);
+        }
+        catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    // ==================== Phase 1 Foundation Helpers ====================
+
+    /**
+     * Resolves the domain form of a living entity as a type-safe {@link DomainForm} enum.
+     *
+     * <p>This is the canonical centralized implementation that replaces the
+     * scattered {@code jjkbrp$resolveDomainForm()} copies in the clash mixins.
+     * It inspects persistent data, capability state, and runtime flags in the
+     * same priority order as the original mixin implementations.</p>
+     *
+     * @param entity the entity to inspect; may be {@code null}
+     * @return the resolved {@link DomainForm}, defaulting to {@link DomainForm#CLOSED}
+     */
+    public static DomainForm resolveDomainForm(LivingEntity entity) {
+        return DomainForm.resolve(entity);
+    }
+
+    /**
+     * Resolves the domain form as a raw integer, matching the encoding stored
+     * in {@code jjkbrp_domain_form_cast_locked} and {@code jjkbrp_domain_form_effective}.
+     *
+     * @param entity the entity to inspect; may be {@code null}
+     * @return {@code 0} (incomplete), {@code 1} (closed), or {@code 2} (open)
+     */
+    public static int resolveDomainFormInt(LivingEntity entity) {
+        return resolveDomainForm(entity).getId();
+    }
+
+    /**
+     * Computes the effective clash range for a given entity and its persistent data.
+     *
+     * <p>Open domains use a much larger range multiplier than closed/incomplete ones.
+     * This method consolidates the three duplicate {@code jjkbrp$baseClashRange()}
+     * implementations that existed in the clash mixins.</p>
+     *
+     * @param world  the level accessor for radius lookup
+     * @param entity the entity whose clash range should be computed
+     * @param nbt    the entity's persistent data
+     * @return the computed base clash range in blocks
+     */
+    public static double baseClashRange(LevelAccessor world, LivingEntity entity, CompoundTag nbt) {
+        double radius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(world, nbt));
+        boolean isOpen = DomainAddonUtils.isOpenDomainState(entity);
+        return radius * (isOpen
+                ? DomainClashConstants.OPEN_CLASH_RANGE_MULTIPLIER
+                : DomainClashConstants.CLOSED_CLASH_RANGE_MULTIPLIER);
+    }
+
+    /**
+     * Checks whether two domain casters are spatially close enough to be
+     * considered within the base clash window.
+     *
+     * <p>This consolidates the three duplicate {@code jjkbrp$isWithinBaseClashWindow()}
+     * implementations.  The check uses both body-center and domain-center distances,
+     * taking the minimum, and compares against a threshold derived from the
+     * combined clash ranges of both participants.</p>
+     *
+     * @param world     the level accessor for radius lookups
+     * @param source    the first participant
+     * @param sourceNbt the first participant's persistent data
+     * @param target    the second participant
+     * @param targetNbt the second participant's persistent data
+     * @return {@code true} if the two participants are within clash range
+     */
+    public static boolean isWithinBaseClashWindow(
+            LevelAccessor world,
+            LivingEntity source, CompoundTag sourceNbt,
+            LivingEntity target, CompoundTag targetNbt
+    ) {
+        if (source == null || target == null) {
+            return false;
+        }
+        Vec3 sourceCenter = DomainAddonUtils.getDomainCenter((Entity) source);
+        Vec3 targetBody = new Vec3(
+                target.getX(),
+                target.getY() + (double) target.getBbHeight() * 0.5,
+                target.getZ());
+        Vec3 targetCenter = DomainAddonUtils.getDomainCenter((Entity) target);
+
+        double dx = sourceCenter.x - targetBody.x;
+        double dy = sourceCenter.y - targetBody.y;
+        double dz = sourceCenter.z - targetBody.z;
+        double distToBodySq = dx * dx + dy * dy + dz * dz;
+
+        double cdx = sourceCenter.x - targetCenter.x;
+        double cdy = sourceCenter.y - targetCenter.y;
+        double cdz = sourceCenter.z - targetCenter.z;
+        double distToCenterSq = cdx * cdx + cdy * cdy + cdz * cdz;
+
+        double distanceSq = Math.min(distToBodySq, distToCenterSq);
+
+        double sourceRange = DomainAddonUtils.baseClashRange(world, source, sourceNbt);
+        double targetRange = DomainAddonUtils.baseClashRange(world, target, targetNbt);
+        double combinedRange = Math.max(sourceRange, targetRange);
+
+        if (combinedRange <= 0.0) {
+            return false;
+        }
+        double threshold = Math.max(
+                DomainClashConstants.CLASH_WINDOW_MINIMUM_THRESHOLD,
+                combinedRange * DomainClashConstants.CLASH_WINDOW_THRESHOLD_FACTOR);
+        return distanceSq < threshold * threshold;
+    }
+
+    /**
+     * Creates a {@link DomainParticipantSnapshot} from a live entity's current state.
+     *
+     * <p>This snapshot captures the entity's form, center, radius, power, and
+     * other clash-relevant properties at the moment of the call.  It is designed
+     * to be called from Phase 2's registry registration path, but is exposed now
+     * so that it can be tested independently.</p>
+     *
+     * @param entity    the living entity to snapshot
+     * @param world     the level accessor for radius/power lookups
+     * @param startTick the game time to record as the domain start tick
+     * @return a new snapshot, or {@code null} if the entity is {@code null}
+     */
+    public static DomainParticipantSnapshot createParticipantSnapshot(
+            LivingEntity entity, LevelAccessor world, long startTick
+    ) {
+        if (entity == null) {
+            return null;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        DomainForm form = resolveDomainForm(entity);
+        Vec3 center = getDomainCenter((Entity) entity);
+        double radius = getActualDomainRadius(world, nbt);
+        double effectivePower = nbt.contains("jjkbrp_effective_power")
+                ? nbt.getDouble("jjkbrp_effective_power")
+                : DomainClashConstants.DEFAULT_OPPONENT_POWER;
+
+        int domainId = (int) Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId == 0) {
+            domainId = (int) Math.round(nbt.getDouble("skill_domain"));
+        }
+        if (domainId == 0) {
+            domainId = (int) Math.round(nbt.getDouble("select"));
+        }
+
+        double barrierRefinement = nbt.contains("jjkbrp_barrier_refinement")
+                ? nbt.getDouble("jjkbrp_barrier_refinement")
+                : DomainClashConstants.NPC_DEFAULT_BARRIER_REFINEMENT;
+
+        double sureHitMultiplier = nbt.contains("jjkbrp_open_surehit_multiplier")
+                ? nbt.getDouble("jjkbrp_open_surehit_multiplier")
+                : 1.0;
+
+        boolean defeated = nbt.getBoolean("Failed") || nbt.getBoolean("DomainDefeated");
+
+        // Use the form at cast time if stored; otherwise use the current resolved form.
+        DomainForm formAtCast = nbt.contains("jjkbrp_domain_form_cast_locked")
+                ? DomainForm.fromId(nbt.getInt("jjkbrp_domain_form_cast_locked"))
+                : form;
+
+        return new DomainParticipantSnapshot(
+                entity.getUUID(), form, formAtCast, center, radius,
+                effectivePower, startTick, domainId, barrierRefinement,
+                sureHitMultiplier, defeated
+        );
+    }
+
+    public static String resolveDomainName(int domainId) {
+        return switch (domainId) {
+            case 1 -> "Malevolent Shrine";
+            case 2 -> "Unlimited Void";
+            case 4 -> "Coffin of the Iron Mountain";
+            case 5 -> "Authentic Mutual Love";
+            case 6 -> "Chimera Shadow Garden";
+            case 7 -> "Kashimo Domain";
+            case 8 -> "Horizon of the Captivating Skandha";
+            case 9 -> "Tsukumo Domain";
+            case 10 -> "Choso Domain";
+            case 11 -> "Mei Mei Domain";
+            case 13 -> "Nanami Domain";
+            case 14 -> "Ceremonial Sea of Light";
+            case 15 -> "Self-Embodiment of Perfection";
+            case 18 -> "Womb Profusion";
+            case 19 -> "Time Cell Moon Palace";
+            case 21 -> "Itadori Domain";
+            case 23 -> "Kurourushi Domain";
+            case 24 -> "Uraume Domain";
+            case 25 -> "Graveyard Domain";
+            case 26 -> "Ogi Domain";
+            case 27 -> "Deadly Sentencing";
+            case 29 -> "Idle Death Gamble";
+            case 35 -> "Junpei Domain";
+            case 36 -> "Nishimiya Domain";
+            case 40 -> "Takuma Ino Domain";
+            default -> "";
+        };
+    }
+}
+

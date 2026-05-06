@@ -6,7 +6,7 @@ import net.minecraft.world.entity.LivingEntity;
  * Type-safe representation of domain expansion forms.
  *
  * <p>Replaces the scattered {@code int thisForm} / {@code int candidateForm} values
- * used across clash mixins with a proper enum.  The ordinal values are chosen to
+ * used across domain mixins with a proper enum.  The ordinal values are chosen to
  * match the integer encoding already stored in
  * {@code jjkbrp_domain_form_cast_locked} and {@code jjkbrp_domain_form_effective}.</p>
  *

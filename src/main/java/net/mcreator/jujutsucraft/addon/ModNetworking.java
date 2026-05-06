@@ -13,7 +13,9 @@ import net.mcreator.jujutsucraft.addon.limb.LimbSyncPacket;
 import net.mcreator.jujutsucraft.addon.limb.NearDeathPacket;
 import net.mcreator.jujutsucraft.addon.limb.RCTLevel3Handler;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.addon.util.DomainCostUtils;
+import net.mcreator.jujutsucraft.init.JujutsucraftModItems;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.ChangeTechniqueTestProcedure;
@@ -30,6 +32,7 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
@@ -53,6 +56,10 @@ public class ModNetworking {
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel((ResourceLocation)new ResourceLocation("jjkblueredpurple", "main"), () -> "1", "1"::equals, "1"::equals);
     // Monotonically increasing discriminator assigned as packet types are registered.
     private static int packetId = 0;
+    private static final int MAX_WHEEL_PAGE_SIZE = 10;
+    public static final int YUTA_COPY_ENTRY_BASE = 10000;
+    public static final int YUTA_SUREHIT_ENTRY_BASE = 2000000;
+    public static final int YUTA_SUREHIT_CLEAR_ENTRY_ID = -2000000;
 
     // ===== CHANNEL REGISTRATION =====
     public static void register() {
@@ -62,6 +69,7 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, CooldownSyncPacket.class, CooldownSyncPacket::encode, CooldownSyncPacket::decode, CooldownSyncPacket::handle);
         CHANNEL.registerMessage(packetId++, BlackFlashSyncPacket.class, BlackFlashSyncPacket::encode, BlackFlashSyncPacket::decode, BlackFlashSyncPacket::handle);
         CHANNEL.registerMessage(packetId++, SelectSpiritPacket.class, SelectSpiritPacket::encode, SelectSpiritPacket::decode, SelectSpiritPacket::handle);
+        CHANNEL.registerMessage(packetId++, SelectYutaCopyPacket.class, SelectYutaCopyPacket::encode, SelectYutaCopyPacket::decode, SelectYutaCopyPacket::handle);
         CHANNEL.registerMessage(packetId++, LimbSyncPacket.class, LimbSyncPacket::encode, LimbSyncPacket::decode, LimbSyncPacket::handle);
         CHANNEL.registerMessage(packetId++, NearDeathPacket.class, NearDeathPacket::encode, NearDeathPacket::decode, NearDeathPacket::handle);
         CHANNEL.registerMessage(packetId++, NearDeathCdSyncPacket.class, NearDeathCdSyncPacket::encode, NearDeathCdSyncPacket::decode, NearDeathCdSyncPacket::handle);
@@ -69,7 +77,6 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenPacket.class, DomainMasteryOpenPacket::encode, DomainMasteryOpenPacket::decode, DomainMasteryOpenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle);
         CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, DomainClashMultiSyncPacket.class, DomainClashMultiSyncPacket::encode, DomainClashMultiSyncPacket::decode, DomainClashMultiSyncPacket::handle);
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====
@@ -120,6 +127,49 @@ public class ModNetworking {
      */
     private static int asSelectId(double selectId) {
         return (int)Math.round(selectId);
+    }
+
+    private static boolean isBlockedPlayerYutaHardcodedCopy(ServerPlayer player, int charId, double selectId) {
+        return charId == 5 && YutaCopyStore.isYuta(player) && YutaCopyStore.isVanillaHardcodedCopySelect(selectId);
+    }
+
+    private static boolean hasUnusedLoudspeakerEquipped(ServerPlayer player) {
+        return ModNetworking.isUnusedLoudspeaker(player.getMainHandItem()) || ModNetworking.isUnusedLoudspeaker(player.getOffhandItem());
+    }
+
+    private static boolean isUnusedLoudspeaker(ItemStack stack) {
+        return stack != null && !stack.isEmpty() && stack.is(JujutsucraftModItems.LOUDSPEAKER.get()) && !stack.getOrCreateTag().getBoolean("Used");
+    }
+
+    private static boolean shouldSuppressPlayerYutaWheel(ServerPlayer player, int charId) {
+        return false;
+    }
+
+    private static boolean shouldSuppressAddonWheel(ServerPlayer player) {
+        return false;
+    }
+
+    private static boolean shouldRejectPlayerYutaSelection(ServerPlayer player, int charId, double selectId) {
+        if (ModNetworking.isBlockedPlayerYutaHardcodedCopy(player, charId, selectId)) {
+            return true;
+        }
+        return ModNetworking.hasUnusedLoudspeakerEquipped(player) && ModNetworking.isLoudspeakerOnlySelect(selectId);
+    }
+
+    private static boolean isLoudspeakerOnlySelect(double selectId) {
+        int id = (int)Math.round(selectId);
+        return id >= 5 && id <= 12;
+    }
+
+    private static boolean isBlockedPlayerYutaHardcodedCopyEntry(ServerPlayer player, int charId, double requestedId, JujutsucraftModVariables.PlayerVariables after) {
+        if (charId != 5 || !YutaCopyStore.isYuta(player)) {
+            return false;
+        }
+        if (YutaCopyStore.isVanillaHardcodedCopySelect(requestedId) || YutaCopyStore.isVanillaHardcodedCopySelect(after.PlayerSelectCurseTechnique)) {
+            return true;
+        }
+        String name = after.PlayerSelectCurseTechniqueName == null ? "" : after.PlayerSelectCurseTechniqueName.toLowerCase(Locale.ROOT);
+        return name.contains("cursed speech") || name.contains("loudspeaker") || name.contains("copy");
     }
 
     // ===== COOLDOWN HELPERS =====
@@ -515,6 +565,7 @@ public class ModNetworking {
             ModNetworking.applyOriginalTechniqueSelection(player, selectId);
             JujutsucraftModVariables.PlayerVariables after = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
             double resolvedId = after.PlayerSelectCurseTechnique;
+            if (ModNetworking.isBlockedPlayerYutaHardcodedCopyEntry(player, charId, selectId, after)) continue;
             if (!ModNetworking.isValidSelectId(resolvedId) || seenIds.stream().anyMatch(v -> Math.abs(v - resolvedId) < 0.001) || (displayName = after.PlayerSelectCurseTechniqueName) == null || displayName.isBlank() || "-----".equals(displayName)) continue;
             int sid = (int)Math.round(resolvedId);
             int cdRemaining = 0;
@@ -563,6 +614,23 @@ public class ModNetworking {
             entries.add(new WheelTechniqueEntry(baseline.selectId(), baseline.name() == null || baseline.name().isBlank() ? "Technique" : baseline.name(), baseline.finalCost(), baseline.baseCost(), ModNetworking.computeTechniqueColor(baseline.name(), baseline.passive(), baseline.physical(), baseline.selectId()), baseline.passive(), baseline.physical(), -1, 0.0, 0, 0));
         }
         return entries;
+    }
+
+    private static void addPaged(List<List<WheelTechniqueEntry>> pages, List<WheelTechniqueEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return;
+        }
+        ArrayList<WheelTechniqueEntry> page = new ArrayList<>();
+        for (WheelTechniqueEntry entry : entries) {
+            page.add(entry);
+            if (page.size() >= MAX_WHEEL_PAGE_SIZE) {
+                pages.add(page);
+                page = new ArrayList<>();
+            }
+        }
+        if (!page.isEmpty()) {
+            pages.add(page);
+        }
     }
 
     /**
@@ -624,7 +692,7 @@ public class ModNetworking {
             int sid = (int)Math.round(e.selectId());
             return sid >= 11 && sid <= 13;
         });
-        pages.add(normalEntries);
+        ModNetworking.addPaged(pages, normalEntries);
         CompoundTag data = player.getPersistentData();
         ArrayList<SpiritData> allSpirits = new ArrayList<SpiritData>();
         // Geto spirit pages are rebuilt by walking the stored manipulation slots until the first empty sentinel entry is encountered.
@@ -648,7 +716,7 @@ public class ModNetworking {
             for (SpiritData s : lowerGrade) {
                 displayName = s.count > 1 ? s.name + " x" + s.count : s.name;
                 page.add(new WheelTechniqueEntry(100 + s.slot, displayName, 0.0, 0.0, ModNetworking.getSpiritGradeColor(s.grade), false, false, -1, 0.0, 0, 0));
-                if (page.size() < 12) continue;
+                if (page.size() < MAX_WHEEL_PAGE_SIZE) continue;
                 pages.add(page);
                 page = new ArrayList();
             }
@@ -661,7 +729,7 @@ public class ModNetworking {
             for (SpiritData s : upperGrade) {
                 displayName = s.count > 1 ? s.name + " x" + s.count : s.name;
                 page.add(new WheelTechniqueEntry(100 + s.slot, displayName, 0.0, 0.0, ModNetworking.getSpiritGradeColor(s.grade), false, false, -1, 0.0, 0, 0));
-                if (page.size() < 12) continue;
+                if (page.size() < MAX_WHEEL_PAGE_SIZE) continue;
                 pages.add(page);
                 page = new ArrayList();
             }
@@ -669,6 +737,38 @@ public class ModNetworking {
                 pages.add(page);
             }
         }
+        return pages;
+    }
+
+    private static List<List<WheelTechniqueEntry>> buildYutaCopyPages(ServerPlayer player, int charId) {
+        ArrayList<List<WheelTechniqueEntry>> pages = new ArrayList<List<WheelTechniqueEntry>>();
+        YutaCopyStore.cleanupVanillaPlayerCopy(player);
+        ModNetworking.addPaged(pages, ModNetworking.buildWheelEntries(player, charId));
+        ArrayList<WheelTechniqueEntry> copyEntries = new ArrayList<WheelTechniqueEntry>();
+        for (CompoundTag rec : YutaCopyStore.validRecords(player)) {
+            double entryId = (double)YUTA_COPY_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
+            String suffix = rec.contains("usesRemaining") ? " §b(" + rec.getInt("usesRemaining") + " uses)" : (rec.getBoolean("temporary") ? " §7(Temp)" : " §d(Perm)");
+            double cost = rec.contains("cost") ? rec.getDouble("cost") : YutaCopyStore.defaultCost(rec.getDouble("techniqueId"));
+            double cooldown = rec.getDouble("COOLDOWN_TICKS");
+            int cooldownMax = (int)Math.round(cooldown);
+            int cooldownRemaining = YutaCopyStore.cooldownRemainingTicks(player, rec);
+            String moveName = rec.getString("moveName");
+            String label = moveName == null || moveName.isBlank() ? rec.getString("displayName") : YutaCopyStore.techniqueName(rec.getDouble("techniqueId")) + ": " + moveName;
+            copyEntries.add(new WheelTechniqueEntry(entryId, "Rika: " + label + suffix, cost, cooldown, 0xD946EF, false, false, -1, 0.0D, cooldownRemaining, cooldownMax));
+        }
+        ModNetworking.addPaged(pages, copyEntries);
+        ArrayList<WheelTechniqueEntry> sureHitEntries = new ArrayList<WheelTechniqueEntry>();
+        for (CompoundTag rec : YutaCopyStore.validRecords(player)) {
+            if (!YutaCopyStore.isValidSureHitRecord(rec)) {
+                continue;
+            }
+            double entryId = (double)YUTA_SUREHIT_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
+            String moveName = rec.getString("moveName");
+            String label = moveName == null || moveName.isBlank() ? rec.getString("displayName") : YutaCopyStore.techniqueName(rec.getDouble("techniqueId")) + ": " + moveName;
+            sureHitEntries.add(new WheelTechniqueEntry(entryId, "Sure-Hit: " + label, 0.0D, 0.0D, 0xF59E0B, false, false, -1, 0.0D, 0, 0));
+        }
+        sureHitEntries.add(new WheelTechniqueEntry((double)YUTA_SUREHIT_CLEAR_ENTRY_ID, "Sure-Hit: Clear", 0.0D, 0.0D, 0x94A3B8, false, false, -1, 0.0D, 0, 0));
+        ModNetworking.addPaged(pages, sureHitEntries);
         return pages;
     }
 
@@ -754,10 +854,19 @@ public class ModNetworking {
                     return;
                 }
                 int charId = ModNetworking.getActiveCharacterId(vars);
+                if (ModNetworking.shouldSuppressAddonWheel(player)) {
+                    YutaCopyStore.cleanupVanillaPlayerCopy(player);
+                    return;
+                }
+                if (ModNetworking.shouldRejectPlayerYutaSelection(player, charId, pkt.selectId)) {
+                    YutaCopyStore.cleanupVanillaPlayerCopy(player);
+                    return;
+                }
                 if (ModNetworking.isTechniqueLocked(player, charId, pkt.selectId)) {
                     return;
                 }
                 ModNetworking.applyOriginalTechniqueSelection(player, pkt.selectId);
+                YutaCopyStore.cleanupVanillaPlayerCopy(player);
             });
             ctx.setPacketHandled(true);
         }
@@ -801,14 +910,21 @@ public class ModNetworking {
                     return;
                 }
                 int charId = ModNetworking.getActiveCharacterId(vars);
+                YutaCopyStore.cleanupVanillaPlayerCopy(player);
                 double currentSelect = vars.PlayerSelectCurseTechnique;
+                if (ModNetworking.shouldRejectPlayerYutaSelection(player, charId, currentSelect)) {
+                    currentSelect = 0.0D;
+                }
                 if (charId == 18) {
                     List<List<WheelTechniqueEntry>> pages = ModNetworking.buildGetoPages(player, charId);
+                    CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenWheelPacket(pages, currentSelect));
+                } else if (charId == 5 && YutaCopyStore.isYuta(player) && YutaCopyStore.hasValidRikaOrDomain(player)) {
+                    List<List<WheelTechniqueEntry>> pages = ModNetworking.buildYutaCopyPages(player, charId);
                     CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenWheelPacket(pages, currentSelect));
                 } else {
                     List<WheelTechniqueEntry> entries = ModNetworking.buildWheelEntries(player, charId);
                     ArrayList<List<WheelTechniqueEntry>> singlePage = new ArrayList<List<WheelTechniqueEntry>>();
-                    singlePage.add(entries);
+                    ModNetworking.addPaged(singlePage, entries);
                     CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenWheelPacket(singlePage, currentSelect));
                 }
             });
@@ -1064,6 +1180,60 @@ public class ModNetworking {
                     cap.PlayerSelectCurseTechniqueName = displayName;
                     cap.syncPlayerVariables((Entity)player);
                 });
+            });
+            ctx.setPacketHandled(true);
+        }
+    }
+
+    public static class SelectYutaCopyPacket {
+        private final double entryId;
+        private final boolean activate;
+
+        public SelectYutaCopyPacket(double entryId, boolean activate) {
+            this.entryId = entryId;
+            this.activate = activate;
+        }
+
+        public static void encode(SelectYutaCopyPacket pkt, FriendlyByteBuf buf) {
+            buf.writeDouble(pkt.entryId);
+            buf.writeBoolean(pkt.activate);
+        }
+
+        public static SelectYutaCopyPacket decode(FriendlyByteBuf buf) {
+            return new SelectYutaCopyPacket(buf.readDouble(), buf.readBoolean());
+        }
+
+        public static void handle(SelectYutaCopyPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> {
+                ServerPlayer player = ctx.getSender();
+                if (player == null || !YutaCopyStore.isYuta(player) || !YutaCopyStore.hasValidRikaOrDomain(player)) {
+                    return;
+                }
+                JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+                if (Math.abs(pkt.entryId - (double)YUTA_SUREHIT_CLEAR_ENTRY_ID) <= 0.001D) {
+                    YutaCopyStore.clearSureHit(player);
+                    player.displayClientMessage(Component.literal("§d[Rika] Authentic Mutual Love sure-hit cleared."), true);
+                    return;
+                }
+                for (CompoundTag rec : YutaCopyStore.validRecords(player)) {
+                    double sureHitId = (double)YUTA_SUREHIT_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
+                    if (Math.abs(sureHitId - pkt.entryId) <= 0.001D) {
+                        if (YutaCopyStore.setSureHitRecord(player, rec.getString("recordUuid"))) {
+                            player.displayClientMessage(Component.literal("§d[Rika] Authentic Mutual Love sure-hit set to " + rec.getString("displayName") + "."), true);
+                        } else {
+                            player.displayClientMessage(Component.literal("§c[Rika] This copied record cannot be used as sure-hit."), true);
+                        }
+                        return;
+                    }
+                    double id = (double)YUTA_COPY_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
+                    if (Math.abs(id - pkt.entryId) > 0.001D) continue;
+                    if (YutaCopyStore.selectRecord(player, rec.getString("recordUuid")) && pkt.activate) {
+                        YutaCopyStore.activateSelected(player);
+                    }
+                    return;
+                }
+                player.displayClientMessage(Component.literal("§e[Rika] Selected copy is no longer valid."), true);
             });
             ctx.setPacketHandled(true);
         }
@@ -1488,104 +1658,6 @@ public class ModNetworking {
         }
     }
 
-    // ===== DOMAIN CLASH SYNC =====
-    public static void sendDomainClashSync(ServerPlayer player, float casterPower,
-                                           int casterDomainId, int casterForm,
-                                           String casterName, boolean active,
-                                           long syncedGameTime,
-                                           List<DomainClashOpponentPayload> opponents) {
-        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                (Object)new DomainClashMultiSyncPacket(casterPower, casterDomainId, casterForm,
-                        casterName, active, syncedGameTime, opponents));
-    }
-
-    public static class DomainClashMultiSyncPacket {
-        private static final int MAX_OPPONENTS = 8;
-        private final float casterPower;
-        private final int casterDomainId;
-        private final int casterForm;
-        private final String casterName;
-        private final boolean active;
-        private final long syncedGameTime;
-        private final List<DomainClashOpponentPayload> opponents;
-
-        public DomainClashMultiSyncPacket(float casterPower, int casterDomainId, int casterForm,
-                                          String casterName, boolean active,
-                                          long syncedGameTime,
-                                          List<DomainClashOpponentPayload> opponents) {
-            this.casterPower = Math.max(0.0f, casterPower);
-            this.casterDomainId = casterDomainId;
-            this.casterForm = casterForm;
-            this.casterName = casterName == null ? "" : casterName;
-            this.active = active;
-            this.syncedGameTime = syncedGameTime;
-            List<DomainClashOpponentPayload> copy = new ArrayList<>();
-            if (opponents != null) {
-                for (DomainClashOpponentPayload opponent : opponents) {
-                    if (opponent == null) {
-                        continue;
-                    }
-                    copy.add(opponent);
-                    if (copy.size() >= MAX_OPPONENTS) {
-                        break;
-                    }
-                }
-            }
-            this.opponents = copy;
-        }
-
-        public static void encode(DomainClashMultiSyncPacket pkt, FriendlyByteBuf buf) {
-            buf.writeFloat(pkt.casterPower);
-            buf.writeByte(pkt.casterForm);
-            buf.writeInt(pkt.casterDomainId);
-            buf.writeUtf(pkt.casterName, 64);
-            buf.writeBoolean(pkt.active);
-            buf.writeLong(pkt.syncedGameTime);
-            buf.writeByte(pkt.opponents.size());
-            for (DomainClashOpponentPayload opponent : pkt.opponents) {
-                buf.writeFloat(opponent.power());
-                buf.writeByte(opponent.form());
-                buf.writeInt(opponent.domainId());
-                buf.writeUtf(opponent.name(), 64);
-            }
-        }
-
-        public static DomainClashMultiSyncPacket decode(FriendlyByteBuf buf) {
-            float casterPower = buf.readFloat();
-            int casterForm = buf.readByte();
-            int casterDomainId = buf.readInt();
-            String casterName = buf.readUtf(64);
-            boolean active = buf.readBoolean();
-            long syncedGameTime = buf.readLong();
-            int opponentCount = Math.min(MAX_OPPONENTS, Math.max(0, buf.readByte()));
-            List<DomainClashOpponentPayload> opponents = new ArrayList<>(opponentCount);
-            for (int i = 0; i < opponentCount; ++i) {
-                opponents.add(new DomainClashOpponentPayload(
-                        buf.readFloat(),
-                        buf.readByte(),
-                        buf.readInt(),
-                        buf.readUtf(64)));
-            }
-            return new DomainClashMultiSyncPacket(casterPower, casterDomainId, casterForm,
-                    casterName, active, syncedGameTime, opponents);
-        }
-
-        public static void handle(DomainClashMultiSyncPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
-            NetworkEvent.Context ctx = ctxSupplier.get();
-            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () ->
-                    ClientPacketHandler.updateDomainClash(pkt.casterPower, pkt.casterDomainId,
-                            pkt.casterForm, pkt.casterName, pkt.active,
-                            pkt.syncedGameTime, pkt.opponents)));
-            ctx.setPacketHandled(true);
-        }
-    }
-
-    public record DomainClashOpponentPayload(float power, int form, int domainId, String name) {
-        public DomainClashOpponentPayload {
-            power = Math.max(0.0f, power);
-            name = name == null ? "" : name;
-        }
-    }
 
     /**
      * Immutable snapshot of vanilla technique selection state used while the server probes wheel entries.
@@ -1605,5 +1677,7 @@ public class ModNetworking {
      */
     private record SpiritData(int slot, String name, int count, int grade) {
     }
+    public static void sendBlackFlashFeedback(net.minecraft.server.level.ServerPlayer player, boolean success, boolean confirmedHit) { }
 }
+
 

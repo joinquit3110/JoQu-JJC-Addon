@@ -154,15 +154,10 @@ public class ModNetworking {
     }
 
     private static boolean shouldRejectPlayerYutaSelection(ServerPlayer player, int charId, double selectId) {
-        if (ModNetworking.isBlockedPlayerYutaHardcodedCopy(player, charId, selectId)) {
-            return true;
-        }
-        return ModNetworking.hasUnusedLoudspeakerEquipped(player) && ModNetworking.isLoudspeakerOnlySelect(selectId);
-    }
-
-    private static boolean isLoudspeakerOnlySelect(double selectId) {
-        int id = (int)Math.round(selectId);
-        return id >= 5 && id <= 12;
+        // Reject only the vanilla player-Yuta hardcoded Copy slots. Do not use unused loudspeaker
+        // equipment as a generic selector guard: normal techniques also use ids 5..12, so that
+        // blocked Sukuna/Gojo/etc. wheel skills after changing technique with a book.
+        return ModNetworking.isBlockedPlayerYutaHardcodedCopy(player, charId, selectId);
     }
 
     private static boolean isBlockedPlayerYutaHardcodedCopyEntry(ServerPlayer player, int charId, double requestedId, JujutsucraftModVariables.PlayerVariables after) {
@@ -936,7 +931,7 @@ public class ModNetworking {
                     YutaCopyStore.cleanupVanillaPlayerCopy(player);
                 }
                 double currentSelect = vars.PlayerSelectCurseTechnique;
-                if (ModNetworking.shouldRejectPlayerYutaSelection(player, charId, currentSelect)) {
+                if (ModNetworking.isBlockedPlayerYutaHardcodedCopy(player, charId, currentSelect)) {
                     currentSelect = 0.0D;
                 }
                 if (charId == 18) {
@@ -1255,7 +1250,6 @@ public class ModNetworking {
                 if (player == null || !YutaCopyStore.isYuta(player) || !YutaCopyStore.hasValidRikaOrDomain(player)) {
                     return;
                 }
-                JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
                 if (Math.abs(pkt.entryId - (double)YUTA_SUREHIT_CLEAR_ENTRY_ID) <= 0.001D) {
                     YutaCopyStore.clearSureHit(player);
                     player.displayClientMessage(Component.literal("§d[Rika] Authentic Mutual Love sure-hit cleared."), true);

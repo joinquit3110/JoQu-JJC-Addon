@@ -143,10 +143,8 @@ public class ClientEvents {
         if (mc.screen instanceof DomainMasteryScreen) {
             return;
         }
-        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
-        if (vars.noChangeTechnique) {
-            return;
-        }
+        // Always let the server receive the wheel request. RequestWheelPacket clears stale noChangeTechnique
+        // left behind by vanilla/book technique switching before rebuilding the current technique wheel.
         ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.RequestWheelPacket());
     }
 

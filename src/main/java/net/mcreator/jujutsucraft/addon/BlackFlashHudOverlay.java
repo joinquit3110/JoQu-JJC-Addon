@@ -112,16 +112,17 @@ public class BlackFlashHudOverlay {
         long now = System.currentTimeMillis();
         LOGGER.warn("[BlackFlashReleaseDiag] tryRelease source={} mastery={} cacheCharging={} awaitingAck={} localResolved={} charging={} nonce={} debounceOk={}", new Object[]{source, ClientPacketHandler.ClientBlackFlashCache.mastery, ClientPacketHandler.ClientBlackFlashCache.charging, ClientPacketHandler.ClientBlackFlashCache.awaitingReleaseAck, ClientPacketHandler.ClientBlackFlashCache.localReleaseResolved, charging, nonce, now - lastReleasePacketMs > 80L});
         if (!charging || nonce == 0L || now - lastReleasePacketMs <= 80L) return;
-        float computedNeedle = ClientPacketHandler.getBlackFlashClientNeedle(0.0f);
-        boolean renderedNeedleFresh = lastRenderedNeedleNonce == nonce && now - lastRenderedNeedleMs <= 120L;
-        float needle = renderedNeedleFresh ? lastRenderedNeedle : computedNeedle;
+        float computedNeedle = ClientPacketHandler.getBlackFlashClientNeedle();
+        float clientElapsedTicks = ClientPacketHandler.getBlackFlashClientElapsedTicks();
+        boolean renderedNeedleFresh = lastRenderedNeedleNonce == nonce && now - lastRenderedNeedleMs <= 45L;
+        float needle = computedNeedle;
         float redStart = frac(ClientPacketHandler.ClientBlackFlashCache.timingRedStart);
         float redSize = Math.max(0.01f, ClientPacketHandler.ClientBlackFlashCache.timingRedSize);
         float clientReleaseTolerance = Math.max(BlueRedPurpleNukeMod.BF_TIMING_EDGE_TOLERANCE, 0.018f);
         boolean clientTimingSuccess = BlueRedPurpleNukeMod.isBlackFlashNeedleInRedArc(needle, redStart, redSize, clientReleaseTolerance);
         if (ClientPacketHandler.markBlackFlashReleasedLocally(needle, nonce)) {
-            LOGGER.warn("[BlackFlashReleaseDiag] local release detected source={} nonce={} needle={} computedNeedle={} useRenderedNeedle={} clientTimingSuccess={} redStart={} redSize={} tolerance={} renderedAgeMs={} rawSkillUseDown={} reverseTechniqueKeyDown={} fallbackMainSkillKeyDown={} keyUseDown={} mouseRightDown={}", new Object[]{source, nonce, needle, computedNeedle, renderedNeedleFresh, clientTimingSuccess, redStart, redSize, clientReleaseTolerance, now - lastRenderedNeedleMs, rawMainSkillDown, BlackFlashHudOverlay.isNamedKeyMappingDown(mc, "key.jujutsucraft.key_reverse_cursed_technique"), BlackFlashHudOverlay.isNamedKeyMappingDown(mc, "key.jujutsucraft.key_use_main_skill"), mc.options.keyUse.isDown(), BlackFlashHudOverlay.isMouseButtonDown(mc, GLFW.GLFW_MOUSE_BUTTON_RIGHT)});
-            ModNetworking.sendBlackFlashRelease(needle, nonce, clientTimingSuccess);
+            LOGGER.warn("[BlackFlashReleaseDiag] local release detected source={} nonce={} needle={} computedNeedle={} clientElapsedTicks={} renderedNeedleFresh={} renderedNeedle={} clientTimingSuccess={} redStart={} redSize={} tolerance={} renderedAgeMs={} rawSkillUseDown={} reverseTechniqueKeyDown={} fallbackMainSkillKeyDown={} keyUseDown={} mouseRightDown={}", new Object[]{source, nonce, needle, computedNeedle, clientElapsedTicks, renderedNeedleFresh, lastRenderedNeedle, clientTimingSuccess, redStart, redSize, clientReleaseTolerance, now - lastRenderedNeedleMs, rawMainSkillDown, BlackFlashHudOverlay.isNamedKeyMappingDown(mc, "key.jujutsucraft.key_reverse_cursed_technique"), BlackFlashHudOverlay.isNamedKeyMappingDown(mc, "key.jujutsucraft.key_use_main_skill"), mc.options.keyUse.isDown(), BlackFlashHudOverlay.isMouseButtonDown(mc, GLFW.GLFW_MOUSE_BUTTON_RIGHT)});
+            ModNetworking.sendBlackFlashRelease(needle, clientElapsedTicks, nonce, clientTimingSuccess);
             lastReleasePacketMs = now;
         }
     }
@@ -133,10 +134,9 @@ public class BlackFlashHudOverlay {
     private static boolean hasRecentlyVisibleTimingSession() {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null || mc.level == null) return false;
-        long startTick = ClientPacketHandler.ClientBlackFlashCache.timingStartTick;
-        if (startTick <= 0L || ClientPacketHandler.ClientBlackFlashCache.timingRedSize <= 0.0f) return false;
-        long age = mc.level.getGameTime() - startTick;
-        return age >= (long)BlueRedPurpleNukeMod.BF_TIMING_MIN_RELEASE_AGE_TICKS && age <= 80L;
+        if (ClientPacketHandler.ClientBlackFlashCache.timingStartTick <= 0L || ClientPacketHandler.ClientBlackFlashCache.timingRedSize <= 0.0f) return false;
+        float age = ClientPacketHandler.getBlackFlashClientElapsedTicks();
+        return age >= (float)BlueRedPurpleNukeMod.BF_TIMING_MIN_RELEASE_AGE_TICKS && age <= 80.0f;
     }
 
     private static void tickPendingReleaseAckTimeout() {
@@ -297,7 +297,7 @@ public class BlackFlashHudOverlay {
         drawArc(graphics, ringCx, ringCy, radius + 1, redStart, redSize, 0xFF000000 | (red & 0x00FFFFFF), 5 + flow / 3);
         drawArc(graphics, ringCx, ringCy, radius + 7, redStart, redSize, alphaColor(0xAAFF2020, 0.55f + breath * 0.28f), 2 + flow / 3);
         boolean pendingRelease = ClientPacketHandler.ClientBlackFlashCache.awaitingReleaseAck;
-        float needle = pendingRelease ? ClientPacketHandler.ClientBlackFlashCache.localReleaseNeedle : ClientPacketHandler.getBlackFlashClientNeedle(partialTick);
+        float needle = pendingRelease ? ClientPacketHandler.ClientBlackFlashCache.localReleaseNeedle : ClientPacketHandler.getBlackFlashClientNeedle();
         if (!pendingRelease) {
             lastRenderedNeedle = frac(needle);
             lastRenderedNeedleMs = System.currentTimeMillis();

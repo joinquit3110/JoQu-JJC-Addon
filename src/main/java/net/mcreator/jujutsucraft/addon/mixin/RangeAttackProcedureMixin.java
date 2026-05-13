@@ -13,7 +13,6 @@ import net.mcreator.jujutsucraft.entity.RedEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.LogicAttackProcedure;
-import net.mcreator.jujutsucraft.procedures.LogicBetrayalProcedure;
 import net.mcreator.jujutsucraft.procedures.RangeAttackProcedure;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -122,11 +121,7 @@ public class RangeAttackProcedureMixin {
             ci.cancel();
             return;
         }
-        if (RangeAttackProcedureMixin.jjkblueredpurple$cancelBlueDamageCooldown(world, x, y, z, entity, data)) {
-            ci.cancel();
-            return;
-        }
-        // Apply rank-based scaling for addon RED/BLUE/PURPLE attacks while keeping each call idempotent across recursive execute paths.
+        // Keep OG Blue/Red/Purple damage on the original RangeAttack + DamageFix path.
         RangeAttackProcedureMixin.jjkblueredpurple$applyRankDamageScale(world, entity, data);
         // Temporarily swap the shared domain radius so all downstream range checks operate on the mastery-scaled radius instead of the global default.
         RangeAttackProcedureMixin.jjkblueredpurple$scaleDomainAttackRadius(world, entity);
@@ -434,39 +429,6 @@ public class RangeAttackProcedureMixin {
      */
     @Unique
     private static boolean jjkblueredpurple$cancelBlueDamageCooldown(LevelAccessor world, double x, double y, double z, Entity entity, CompoundTag data) {
-        if (!(world instanceof ServerLevel) || data == null || data.getBoolean("DomainAttack") || !(entity instanceof BlueEntity)) {
-            return false;
-        }
-        double range = data.getDouble("Range");
-        if (range <= 0.0) {
-            return false;
-        }
-        ServerLevel serverLevel = (ServerLevel)world;
-        long currentGameTime = serverLevel.getGameTime();
-        List<LivingEntity> nearbyTargets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(x, y, z, x, y, z).inflate(range / 2.0), target -> target.isAlive() && target != entity);
-        boolean foundTarget = false;
-        for (LivingEntity target : nearbyTargets) {
-            boolean betrayal = LogicBetrayalProcedure.execute(entity, target);
-            if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
-                continue;
-            }
-            foundTarget = true;
-            CompoundTag targetData = target.getPersistentData();
-            long lastHitTick = targetData.getLong(KEY_BLUE_LAST_HIT_TICK);
-            if (targetData.contains(KEY_BLUE_LAST_HIT_TICK) && currentGameTime - lastHitTick < (long)BlueRedPurpleNukeMod.BLUE_DAMAGE_COOLDOWN_TICKS) {
-                return true;
-            }
-        }
-        if (!foundTarget) {
-            return false;
-        }
-        for (LivingEntity target : nearbyTargets) {
-            boolean betrayal = LogicBetrayalProcedure.execute(entity, target);
-            if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
-                continue;
-            }
-            target.getPersistentData().putLong(KEY_BLUE_LAST_HIT_TICK, currentGameTime);
-        }
         return false;
     }
 
@@ -491,31 +453,7 @@ public class RangeAttackProcedureMixin {
      */
     @Unique
     private static boolean jjkblueredpurple$applyRedirectedRangeDamage(Entity target, DamageSource source, float amount, LevelAccessor world, Entity attacker, boolean commitCooldown) {
-        if (!(target instanceof LivingEntity livingTarget)) {
-            return target.hurt(source, amount);
-        }
-        if (!(attacker instanceof RedEntity) || !(world instanceof ServerLevel serverLevel)) {
-            return target.hurt(source, amount);
-        }
-        CompoundTag attackerData = attacker.getPersistentData();
-        if (attackerData.getBoolean("DomainAttack")) {
-            return target.hurt(source, amount);
-        }
-        boolean betrayal = LogicBetrayalProcedure.execute(attacker, livingTarget);
-        if (!LogicAttackProcedure.execute(world, attacker, livingTarget) && !betrayal) {
-            return target.hurt(source, amount);
-        }
-        CompoundTag targetData = livingTarget.getPersistentData();
-        long lastHitTick = targetData.getLong(KEY_RED_LAST_HIT_TICK);
-        long currentGameTime = serverLevel.getGameTime();
-        if (targetData.contains(KEY_RED_LAST_HIT_TICK) && currentGameTime - lastHitTick < (long)BlueRedPurpleNukeMod.RED_DAMAGE_COOLDOWN_TICKS) {
-            return false;
-        }
-        boolean hurt = target.hurt(source, amount);
-        if (commitCooldown && hurt) {
-            targetData.putLong(KEY_RED_LAST_HIT_TICK, currentGameTime);
-        }
-        return hurt;
+        return target.hurt(source, amount);
     }
 
     /**
@@ -527,6 +465,9 @@ public class RangeAttackProcedureMixin {
     @Unique
     private static void jjkblueredpurple$applyRankDamageScale(LevelAccessor world, Entity entity, CompoundTag data) {
         if (data == null || entity == null || data.getBoolean(KEY_RANK_DAMAGE_APPLIED) || !data.contains("Damage")) {
+            return;
+        }
+        if (entity instanceof RedEntity || entity instanceof BlueEntity || entity instanceof PurpleEntity) {
             return;
         }
         if (RangeAttackProcedureMixin.jjkblueredpurple$isOgCrouchLowChargeRed(entity, data)) {

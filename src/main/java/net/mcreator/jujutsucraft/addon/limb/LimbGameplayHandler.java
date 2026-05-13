@@ -37,6 +37,12 @@ public class LimbGameplayHandler {
      */
     private static final Map<UUID, Double> PREV_DELTA_Y = new ConcurrentHashMap<UUID, Double>();
 
+    public static void forgetPlayer(UUID playerId) {
+        if (playerId != null) {
+            PREV_DELTA_Y.remove(playerId);
+        }
+    }
+
     // ===== ATTRIBUTE MODIFIERS =====
 
     /**

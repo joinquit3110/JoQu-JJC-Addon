@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.function.Supplier;
 import net.mcreator.jujutsucraft.addon.ClientPacketHandler;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
@@ -37,6 +38,7 @@ import net.minecraft.world.level.LevelAccessor;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.network.NetworkEvent;
+import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
@@ -47,13 +49,13 @@ import net.minecraftforge.registries.ForgeRegistries;
  */
 public class ModNetworking {
     // Shared network protocol version string used when establishing the addon channel.
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "2";
     // Persistent data key used to remember the peak value of the current technique cooldown cycle.
     private static final String DATA_KEY_TECHNIQUE_CD_MAX = "jjkbrp_technique_cd_max";
     // Persistent data key used to remember the peak value of the current combat cooldown cycle.
     private static final String DATA_KEY_COMBAT_CD_MAX = "jjkbrp_combat_cd_max";
     // SimpleChannel used for every addon packet exchanged between client and server.
-    public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel((ResourceLocation)new ResourceLocation("jjkblueredpurple", "main"), () -> "1", "1"::equals, "1"::equals);
+    public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel((ResourceLocation)new ResourceLocation("jjkblueredpurple", "main"), () -> PROTOCOL_VERSION, PROTOCOL_VERSION::equals, PROTOCOL_VERSION::equals);
     // Monotonically increasing discriminator assigned as packet types are registered.
     private static int packetId = 0;
     private static final int MAX_WHEEL_PAGE_SIZE = 10;
@@ -63,24 +65,24 @@ public class ModNetworking {
 
     // ===== CHANNEL REGISTRATION =====
     public static void register() {
-        CHANNEL.registerMessage(packetId++, SelectTechniquePacket.class, SelectTechniquePacket::encode, SelectTechniquePacket::decode, SelectTechniquePacket::handle);
-        CHANNEL.registerMessage(packetId++, RequestWheelPacket.class, RequestWheelPacket::encode, RequestWheelPacket::decode, RequestWheelPacket::handle);
-        CHANNEL.registerMessage(packetId++, OpenWheelPacket.class, OpenWheelPacket::encode, OpenWheelPacket::decode, OpenWheelPacket::handle);
-        CHANNEL.registerMessage(packetId++, CooldownSyncPacket.class, CooldownSyncPacket::encode, CooldownSyncPacket::decode, CooldownSyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, BlackFlashSyncPacket.class, BlackFlashSyncPacket::encode, BlackFlashSyncPacket::decode, BlackFlashSyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, BlackFlashReleasePacket.class, BlackFlashReleasePacket::encode, BlackFlashReleasePacket::decode, BlackFlashReleasePacket::handle);
-        CHANNEL.registerMessage(packetId++, BlackFlashFeedbackPacket.class, BlackFlashFeedbackPacket::encode, BlackFlashFeedbackPacket::decode, BlackFlashFeedbackPacket::handle);
-        CHANNEL.registerMessage(packetId++, GojoShiftTapPacket.class, GojoShiftTapPacket::encode, GojoShiftTapPacket::decode, GojoShiftTapPacket::handle);
-        CHANNEL.registerMessage(packetId++, SelectSpiritPacket.class, SelectSpiritPacket::encode, SelectSpiritPacket::decode, SelectSpiritPacket::handle);
-        CHANNEL.registerMessage(packetId++, SelectYutaCopyPacket.class, SelectYutaCopyPacket::encode, SelectYutaCopyPacket::decode, SelectYutaCopyPacket::handle);
-        CHANNEL.registerMessage(packetId++, LimbSyncPacket.class, LimbSyncPacket::encode, LimbSyncPacket::decode, LimbSyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, NearDeathPacket.class, NearDeathPacket::encode, NearDeathPacket::decode, NearDeathPacket::handle);
-        CHANNEL.registerMessage(packetId++, NearDeathCdSyncPacket.class, NearDeathCdSyncPacket::encode, NearDeathCdSyncPacket::decode, NearDeathCdSyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, DomainPropertyPacket.class, DomainPropertyPacket::encode, DomainPropertyPacket::decode, DomainPropertyPacket::handle);
-        CHANNEL.registerMessage(packetId++, DomainMasteryOpenPacket.class, DomainMasteryOpenPacket::encode, DomainMasteryOpenPacket::decode, DomainMasteryOpenPacket::handle);
-        CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle);
-        CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle);
-        CHANNEL.registerMessage(packetId++, GojoTeleportGhostPacket.class, GojoTeleportGhostPacket::encode, GojoTeleportGhostPacket::decode, GojoTeleportGhostPacket::handle);
+        CHANNEL.registerMessage(packetId++, SelectTechniquePacket.class, SelectTechniquePacket::encode, SelectTechniquePacket::decode, SelectTechniquePacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, RequestWheelPacket.class, RequestWheelPacket::encode, RequestWheelPacket::decode, RequestWheelPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, OpenWheelPacket.class, OpenWheelPacket::encode, OpenWheelPacket::decode, OpenWheelPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, CooldownSyncPacket.class, CooldownSyncPacket::encode, CooldownSyncPacket::decode, CooldownSyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, BlackFlashSyncPacket.class, BlackFlashSyncPacket::encode, BlackFlashSyncPacket::decode, BlackFlashSyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, BlackFlashReleasePacket.class, BlackFlashReleasePacket::encode, BlackFlashReleasePacket::decode, BlackFlashReleasePacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, BlackFlashFeedbackPacket.class, BlackFlashFeedbackPacket::encode, BlackFlashFeedbackPacket::decode, BlackFlashFeedbackPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, GojoShiftTapPacket.class, GojoShiftTapPacket::encode, GojoShiftTapPacket::decode, GojoShiftTapPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, SelectSpiritPacket.class, SelectSpiritPacket::encode, SelectSpiritPacket::decode, SelectSpiritPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, SelectYutaCopyPacket.class, SelectYutaCopyPacket::encode, SelectYutaCopyPacket::decode, SelectYutaCopyPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, LimbSyncPacket.class, LimbSyncPacket::encode, LimbSyncPacket::decode, LimbSyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, NearDeathPacket.class, NearDeathPacket::encode, NearDeathPacket::decode, NearDeathPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, NearDeathCdSyncPacket.class, NearDeathCdSyncPacket::encode, NearDeathCdSyncPacket::decode, NearDeathCdSyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, DomainPropertyPacket.class, DomainPropertyPacket::encode, DomainPropertyPacket::decode, DomainPropertyPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, DomainMasteryOpenPacket.class, DomainMasteryOpenPacket::encode, DomainMasteryOpenPacket::decode, DomainMasteryOpenPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, GojoTeleportGhostPacket.class, GojoTeleportGhostPacket::encode, GojoTeleportGhostPacket::decode, GojoTeleportGhostPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====
@@ -384,11 +386,36 @@ public class ModNetworking {
 
     // ===== PER-SKILL COOLDOWN LOOKUPS =====
     private static int getPerSkillCooldownTicks(ServerPlayer player, int charId, int selectId) {
-        String effectId = ModNetworking.getPerSkillEffectId(charId, selectId);
-        if (effectId == null) {
+        String acerycdEffectId = ModNetworking.getAcerycdExtensionCooldownEffectId(selectId);
+        if (acerycdEffectId != null) {
+            int acerycdCooldown = ModNetworking.getCooldownTicksForEffect(player, "jujutsucraft_acerycd", acerycdEffectId);
+            if (acerycdCooldown >= 0) {
+                return acerycdCooldown;
+            }
+        }
+        String legacyEffectId = ModNetworking.getLegacyPerSkillEffectId(charId, selectId);
+        if (legacyEffectId == null) {
             return -1;
         }
-        MobEffect effect = (MobEffect)ForgeRegistries.MOB_EFFECTS.getValue(new ResourceLocation("jujutsucraft_plus", effectId));
+        return ModNetworking.getCooldownTicksForEffect(player, "jujutsucraft_plus", legacyEffectId);
+    }
+
+    /**
+     * Resolves the per-move cooldown effect used by jujutsucraft_acerycd.
+     * acerycd keys this directly from PlayerSelectCurseTechnique: 1 is unsuffixed,
+     * then 2..19 use extension_cooldown_N.
+     * @param selectId identifier used to resolve the requested entry or state.
+     * @return the resolved effect id, or null when acerycd has no matching effect.
+     */
+    private static String getAcerycdExtensionCooldownEffectId(int selectId) {
+        if (selectId < 1 || selectId > 19) {
+            return null;
+        }
+        return selectId == 1 ? "extension_cooldown" : "extension_cooldown_" + selectId;
+    }
+
+    private static int getCooldownTicksForEffect(ServerPlayer player, String namespace, String effectId) {
+        MobEffect effect = (MobEffect)ForgeRegistries.MOB_EFFECTS.getValue(new ResourceLocation(namespace, effectId));
         if (effect == null) {
             return -1;
         }
@@ -399,12 +426,12 @@ public class ModNetworking {
     }
 
     /**
-     * Returns per skill effect id for the current addon state.
+     * Returns the older per-skill effect id for compatibility with legacy separate-cooldown addons.
      * @param charId identifier used to resolve the requested entry or state.
      * @param selectId identifier used to resolve the requested entry or state.
      * @return the resolved per skill effect id.
      */
-    private static String getPerSkillEffectId(int charId, int selectId) {
+    private static String getLegacyPerSkillEffectId(int charId, int selectId) {
         if (charId == 2) {
             String gojoEffect = null;
             switch (selectId) {
@@ -448,21 +475,25 @@ public class ModNetworking {
             }
         }
         return switch (selectId) {
-            case 5 -> "innate_cooldown";
-            case 6 -> "extension_cooldown_2";
-            case 7 -> "extension_cooldown_3";
-            case 8 -> "extension_cooldown_4";
-            case 9 -> "extension_cooldown_5";
-            case 10 -> "extension_cooldown_6";
-            case 11 -> "extension_cooldown_7";
-            case 12 -> "extension_cooldown_8";
-            case 13 -> "extension_cooldown_9";
-            case 14 -> "extension_cooldown_10";
+            case 1 -> "extension_cooldown";
+            case 2 -> "extension_cooldown_2";
+            case 3 -> "extension_cooldown_3";
+            case 4 -> "extension_cooldown_4";
+            case 5 -> "extension_cooldown_5";
+            case 6 -> "extension_cooldown_6";
+            case 7 -> "extension_cooldown_7";
+            case 8 -> "extension_cooldown_8";
+            case 9 -> "extension_cooldown_9";
+            case 10 -> "extension_cooldown_10";
+            case 11 -> "extension_cooldown_11";
+            case 12 -> "extension_cooldown_12";
+            case 13 -> "extension_cooldown_13";
+            case 14 -> "extension_cooldown_14";
             case 15 -> "maximum";
-            case 16 -> "extension_cooldown_11";
-            case 17 -> "extension_cooldown_12";
-            case 18 -> "extension_cooldown_13";
-            case 19 -> "extension_cooldown_14";
+            case 16 -> "extension_cooldown_16";
+            case 17 -> "extension_cooldown_17";
+            case 18 -> "extension_cooldown_18";
+            case 19 -> "extension_cooldown_19";
             default -> null;
         };
     }
@@ -595,23 +626,19 @@ public class ModNetworking {
             int sid = (int)Math.round(resolvedId);
             int cdRemaining = 0;
             int cdMax = 0;
-            if (after.PhysicalAttack && sid <= 2) {
+            int perSkill = ModNetworking.getPerSkillCooldownTicks(player, charId, sid);
+            if (perSkill >= 0) {
+                cdRemaining = perSkill;
+            } else if (after.PhysicalAttack && sid <= 2) {
                 cdRemaining = ModNetworking.getCombatCooldownTicks(player);
             } else {
-                // Prefer per-skill cooldown effects when they exist so the wheel can gray out only the entry that is actually locked.
-                int perSkill = ModNetworking.getPerSkillCooldownTicks(player, charId, sid);
-                if (perSkill >= 0) {
-                    cdRemaining = perSkill;
-                } else {
-                    cdRemaining = after.PhysicalAttack ? ModNetworking.getCombatCooldownTicks(player) : ModNetworking.getTechniqueCooldownTicks(player);
-                    int n = cdRemaining;
-                }
+                cdRemaining = after.PhysicalAttack ? ModNetworking.getCombatCooldownTicks(player) : ModNetworking.getTechniqueCooldownTicks(player);
             }
             if (cdRemaining <= 0 && sid > 2 && !after.PhysicalAttack && player.hasEffect((MobEffect)JujutsucraftModMobEffects.UNSTABLE.get())) {
                 cdRemaining = player.getEffect((MobEffect)JujutsucraftModMobEffects.UNSTABLE.get()).getDuration();
             }
             if (cdRemaining > 0) {
-                String maxKey = "jjkbrp_cd_max_" + sid;
+                String maxKey = "jjkbrp_cd_max_" + charId + "_" + sid;
                 int storedMax = player.getPersistentData().getInt(maxKey);
                 if (cdRemaining > storedMax) {
                     storedMax = cdRemaining;
@@ -772,10 +799,32 @@ public class ModNetworking {
         if (cancelState) {
             return 0xFB923C;
         }
-        double techniqueId = rec.getDouble("techniqueId");
+        int techniqueId = (int)Math.round(rec.getDouble("techniqueId"));
         int moveSelectId = rec.contains("moveSelectId") ? rec.getInt("moveSelectId") : 5;
-        String moveName = YutaCopyStore.moveName(techniqueId, moveSelectId);
-        return ModNetworking.computeTechniqueColor(moveName, false, false, techniqueId);
+        if (techniqueId == 2) {
+            if (moveSelectId == 7) return 0xEF4444;
+            if (moveSelectId == 15) return 0xA855F7;
+            return 0x3B82F6;
+        }
+        return switch (techniqueId) {
+            case 1 -> 0xDC2626;
+            case 3 -> 0xEC4899;
+            case 4 -> 0xF97316;
+            case 6 -> 0x22C55E;
+            case 7 -> 0x991B1B;
+            case 8 -> 0x38BDF8;
+            case 9 -> 0x14B8A6;
+            case 10 -> 0xFACC15;
+            case 11 -> 0x111827;
+            case 12, 18 -> 0x7C3AED;
+            case 13 -> 0x60A5FA;
+            case 14 -> 0xF59E0B;
+            case 15 -> 0x94A3B8;
+            case 16 -> 0x93C5FD;
+            case 17 -> 0xA3E635;
+            case 19 -> 0xFDE047;
+            default -> ModNetworking.computeTechniqueColor(YutaCopyStore.techniqueName(techniqueId), false, false, techniqueId);
+        };
     }
 
     private static List<List<WheelTechniqueEntry>> buildYutaCopyPages(ServerPlayer player, int charId) {
@@ -792,9 +841,11 @@ public class ModNetworking {
             double entryId = (double)stableYutaCopyEntryId(rec.getString("recordUuid"));
             String suffix = rec.contains("usesRemaining") ? " §b(" + rec.getInt("usesRemaining") + " uses)" : (rec.getBoolean("temporary") ? " §7(Temp)" : " §d(Perm)");
             double cost = rec.contains("cost") ? rec.getDouble("cost") : YutaCopyStore.defaultCost(rec.getDouble("techniqueId"));
-            double cooldown = rec.getDouble("COOLDOWN_TICKS");
+            int moveSelectId = rec.contains("moveSelectId") ? rec.getInt("moveSelectId") : 5;
+            double cooldown = Math.max(rec.getDouble("COOLDOWN_TICKS"), YutaCopyStore.defaultCooldown(rec.getDouble("techniqueId"), moveSelectId));
             int cooldownMax = (int)Math.round(cooldown);
             int cooldownRemaining = YutaCopyStore.cooldownRemainingTicks(player, rec);
+            cooldownMax = Math.max(cooldownMax, cooldownRemaining);
             String moveName = rec.getString("moveName");
             if (Math.round(rec.getDouble("techniqueId")) == 6L && rec.contains("moveSelectId")) {
                 moveName = YutaCopyStore.tenShadowsWheelMoveName(rec.getInt("moveSelectId"));
@@ -835,7 +886,9 @@ public class ModNetworking {
         int primaryFlowCooldown = data.getInt("addon_bf_flow_cd");
         int legacyFlowCooldown = data.getInt("addon_bf_flow_cooldown");
         int flowCooldown = primaryFlowCooldown > 0 ? primaryFlowCooldown : legacyFlowCooldown;
-        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashSyncPacket(pct, mastery, charging, timingStartTick, timingPeriodTicks, timingRedStart, timingRedSize, timingNonce, flow, flowCooldown));
+        long serverNowTick = player.serverLevel().getGameTime();
+        int latencyMs = Math.max(0, player.latency);
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashSyncPacket(pct, mastery, charging, timingStartTick, timingPeriodTicks, timingRedStart, timingRedSize, timingNonce, flow, flowCooldown, serverNowTick, latencyMs));
     }
 
     /**
@@ -1143,8 +1196,10 @@ public class ModNetworking {
         private final long timingNonce;
         private final int flow;
         private final int flowCooldown;
+        private final long serverNowTick;
+        private final int latencyMs;
 
-        public BlackFlashSyncPacket(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown) {
+        public BlackFlashSyncPacket(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown, long serverNowTick, int latencyMs) {
             this.bfPercent = bfPercent;
             this.mastery = mastery;
             this.charging = charging;
@@ -1155,6 +1210,8 @@ public class ModNetworking {
             this.timingNonce = timingNonce;
             this.flow = flow;
             this.flowCooldown = flowCooldown;
+            this.serverNowTick = serverNowTick;
+            this.latencyMs = latencyMs;
         }
 
         public static void encode(BlackFlashSyncPacket pkt, FriendlyByteBuf buf) {
@@ -1168,15 +1225,17 @@ public class ModNetworking {
             buf.writeLong(pkt.timingNonce);
             buf.writeInt(pkt.flow);
             buf.writeInt(pkt.flowCooldown);
+            buf.writeLong(pkt.serverNowTick);
+            buf.writeInt(pkt.latencyMs);
         }
 
         public static BlackFlashSyncPacket decode(FriendlyByteBuf buf) {
-            return new BlackFlashSyncPacket(buf.readFloat(), buf.readBoolean(), buf.readBoolean(), buf.readLong(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readLong(), buf.readInt(), buf.readInt());
+            return new BlackFlashSyncPacket(buf.readFloat(), buf.readBoolean(), buf.readBoolean(), buf.readLong(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readLong(), buf.readInt(), buf.readInt(), buf.readLong(), buf.readInt());
         }
 
         public static void handle(BlackFlashSyncPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
             NetworkEvent.Context ctx = ctxSupplier.get();
-            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.updateBlackFlash(pkt.bfPercent, pkt.mastery, pkt.charging, pkt.timingStartTick, pkt.timingPeriodTicks, pkt.timingRedStart, pkt.timingRedSize, pkt.timingNonce, pkt.flow, pkt.flowCooldown)));
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.updateBlackFlash(pkt.bfPercent, pkt.mastery, pkt.charging, pkt.timingStartTick, pkt.timingPeriodTicks, pkt.timingRedStart, pkt.timingRedSize, pkt.timingNonce, pkt.flow, pkt.flowCooldown, pkt.serverNowTick, pkt.latencyMs)));
             ctx.setPacketHandled(true);
         }
     }
@@ -1819,11 +1878,15 @@ public class ModNetworking {
     }
 
     public static void sendBlackFlashRelease(float clientNeedle, long timingNonce) {
-        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, timingNonce, false));
+        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, Float.NaN, timingNonce, false));
     }
 
     public static void sendBlackFlashRelease(float clientNeedle, long timingNonce, boolean clientTimingSuccess) {
-        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, timingNonce, clientTimingSuccess));
+        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, Float.NaN, timingNonce, clientTimingSuccess));
+    }
+
+    public static void sendBlackFlashRelease(float clientNeedle, float clientElapsedTicks, long timingNonce, boolean clientTimingSuccess) {
+        CHANNEL.sendToServer((Object)new BlackFlashReleasePacket(clientNeedle, clientElapsedTicks, timingNonce, clientTimingSuccess));
     }
 
     public static void sendBlackFlashFeedback(net.minecraft.server.level.ServerPlayer player, boolean success, boolean confirmedHit) {
@@ -1832,27 +1895,34 @@ public class ModNetworking {
 
     public static class BlackFlashReleasePacket {
         private final float clientNeedle;
+        private final float clientElapsedTicks;
         private final long timingNonce;
         private final boolean clientTimingSuccess;
 
         public BlackFlashReleasePacket(float clientNeedle, long timingNonce) {
-            this(clientNeedle, timingNonce, false);
+            this(clientNeedle, Float.NaN, timingNonce, false);
         }
 
         public BlackFlashReleasePacket(float clientNeedle, long timingNonce, boolean clientTimingSuccess) {
+            this(clientNeedle, Float.NaN, timingNonce, clientTimingSuccess);
+        }
+
+        public BlackFlashReleasePacket(float clientNeedle, float clientElapsedTicks, long timingNonce, boolean clientTimingSuccess) {
             this.clientNeedle = clientNeedle;
+            this.clientElapsedTicks = clientElapsedTicks;
             this.timingNonce = timingNonce;
             this.clientTimingSuccess = clientTimingSuccess;
         }
 
         public static void encode(BlackFlashReleasePacket pkt, FriendlyByteBuf buf) {
             buf.writeFloat(pkt.clientNeedle);
+            buf.writeFloat(pkt.clientElapsedTicks);
             buf.writeLong(pkt.timingNonce);
             buf.writeBoolean(pkt.clientTimingSuccess);
         }
 
         public static BlackFlashReleasePacket decode(FriendlyByteBuf buf) {
-            return new BlackFlashReleasePacket(buf.readFloat(), buf.readLong(), buf.readBoolean());
+            return new BlackFlashReleasePacket(buf.readFloat(), buf.readFloat(), buf.readLong(), buf.readBoolean());
         }
 
         public static void handle(BlackFlashReleasePacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
@@ -1860,7 +1930,7 @@ public class ModNetworking {
             ctx.enqueueWork(() -> {
                 ServerPlayer player = ctx.getSender();
                 if (player != null) {
-                    BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, pkt.clientNeedle, pkt.timingNonce, pkt.clientTimingSuccess);
+                    BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, pkt.clientNeedle, pkt.clientElapsedTicks, pkt.timingNonce, pkt.clientTimingSuccess);
                 }
             });
             ctx.setPacketHandled(true);
@@ -1892,5 +1962,3 @@ public class ModNetworking {
         }
     }
 }
-
-

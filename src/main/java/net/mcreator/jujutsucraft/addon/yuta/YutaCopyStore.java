@@ -883,8 +883,7 @@ public final class YutaCopyStore {
 
     public static List<CompoundTag> validRecords(ServerPlayer player) {
         sanitizeBannedCopiedTenShadowsRecords(player);
-        repairCopiedRecordRuntimeSkills(player);
-        ArrayList<CompoundTag> out = new ArrayList<>();
+        repairCopiedRecordRuntimeSkills(player);        ArrayList<CompoundTag> out = new ArrayList<>();
         ListTag store = getStore(player);
         for (int i = 0; i < store.size(); ++i) {
             CompoundTag rec = store.getCompound(i);
@@ -1359,6 +1358,7 @@ public final class YutaCopyStore {
         LOGGER.debug("[Yuta Copy] Prepared copied Ten Shadows state player={} moveSelect={} shikigamiNum={} numActive={}", player.getGameProfile().getName(), moveSelectId, tenShadowsNum, data.getDouble("NUM_TenShadowsTechnique"));
     }
 
+
     private static void allowCopiedTenShadowsTame(CompoundTag data, int tenShadowsNum) {
         String key = "TenShadowsTechnique" + tenShadowsNum;
         if (data.getDouble(key) <= -2.0D) {
@@ -1453,8 +1453,7 @@ public final class YutaCopyStore {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide || !(event.player instanceof ServerPlayer player)) return;
         claimNearbyPlayerLimb(player);
         if (isActiveYuta(player)) {
-            cleanupVanillaPlayerCopy(player);
-            tickCopiedTenShadowsCooldown(player);
+            cleanupVanillaPlayerCopy(player);            tickCopiedTenShadowsCooldown(player);
         }
         if (!hasValidYutaDomain(player) && !inPostLoginGrace(player)) {
             cleanupDomainSwords(player);
@@ -1569,6 +1568,9 @@ public final class YutaCopyStore {
         double oldDomain = entity.getPersistentData().getDouble("skill_domain");
         double oldSkill = entity.getPersistentData().getDouble("skill");
         double oldCooldown = entity.getPersistentData().getDouble("COOLDOWN_TICKS");
+        if (isCopiedTenShadowsRecord(rec)) {
+            prepareCopiedTenShadowsState(player, rec);
+        }
         entity.getPersistentData().putDouble("skill", skill);
         entity.getPersistentData().putDouble("COOLDOWN_TICKS", rec.getDouble("COOLDOWN_TICKS"));
         entity.getPersistentData().putDouble("skill_domain", Math.floor(skill / 100.0D));
@@ -1577,6 +1579,7 @@ public final class YutaCopyStore {
         entity.getPersistentData().putDouble("skill", oldSkill);
         entity.getPersistentData().putDouble("COOLDOWN_TICKS", oldCooldown);
     }
+
 
     public static double runtimeSkill(double techniqueId) {
         return runtimeSkill(techniqueId, 5);

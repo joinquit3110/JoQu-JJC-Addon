@@ -8,7 +8,6 @@ import net.mcreator.jujutsucraft.addon.SkillWheelScreen;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.addon.limb.LimbRegrowthLayer;
 import net.mcreator.jujutsucraft.addon.limb.SeveredLimbRenderer;
-import net.mcreator.jujutsucraft.addon.yuta.YutaFakePlayerRenderer;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -58,8 +57,10 @@ public class ClientEvents {
         if (mc.player == null || mc.gameMode == null) {
             return;
         }
+        ClientPacketHandler.markClientTick(mc.level != null ? mc.level.getGameTime() : 0L);
         NearDeathClientState.clientTick();
         BlackFlashHudOverlay.clientTick();
+        ClientPacketHandler.ClientCooldownCache.tickDecay();
         ClientEvents.tickGojoSneakTap(mc);
         if (mc.screen instanceof SkillWheelScreen) {
             long window = mc.getWindow().getWindow();
@@ -243,7 +244,6 @@ public class ClientEvents {
          */
         public static void registerEntityRenderers(EntityRenderersEvent.RegisterRenderers event) {
             event.registerEntityRenderer((EntityType)LimbEntityRegistry.SEVERED_LIMB.get(), SeveredLimbRenderer::new);
-            event.registerEntityRenderer((EntityType)LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), YutaFakePlayerRenderer::new);
         }
 
         @SubscribeEvent

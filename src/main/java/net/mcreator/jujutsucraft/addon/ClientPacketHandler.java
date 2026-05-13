@@ -45,13 +45,14 @@ public final class ClientPacketHandler {
      * @param mastery mastery used by this method.
      * @param charging charging used by this method.
      */
-    public static void updateBlackFlash(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown) {
+    public static void updateBlackFlash(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown, long serverNowTick, int latencyMs) {
         Minecraft mc = Minecraft.getInstance();
         long previousNonce = ClientBlackFlashCache.timingNonce;
         boolean wasAwaitingReleaseAck = ClientBlackFlashCache.awaitingReleaseAck;
         boolean sameLocalReleaseNonce = ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.localReleaseNonce == timingNonce;
         boolean localReleasedThisSession = sameLocalReleaseNonce;
         boolean newSession = charging && !localReleasedThisSession && (!ClientBlackFlashCache.charging || ClientBlackFlashCache.timingNonce != timingNonce);
+        long clientNowTick = mc.level != null ? mc.level.getGameTime() : 0L;
         ClientBlackFlashCache.bfPercent = bfPercent;
         ClientBlackFlashCache.mastery = mastery;
         ClientBlackFlashCache.charging = charging && !localReleasedThisSession;
@@ -62,10 +63,14 @@ public final class ClientPacketHandler {
         ClientBlackFlashCache.timingNonce = timingNonce;
         ClientBlackFlashCache.flow = Math.max(0, Math.min(BlueRedPurpleNukeMod.BF_FLOW_MAX, flow));
         ClientBlackFlashCache.flowCooldown = Math.max(0, flowCooldown);
-        if (newSession || ClientBlackFlashCache.clientTimingStartTick == Long.MIN_VALUE) {
-            long clientNow = mc.level != null ? mc.level.getGameTime() : timingStartTick;
-            // Render from the authoritative server start tick. Using packet-arrival/clientNow as phase zero makes the HUD needle lag the server by network latency.
-            ClientBlackFlashCache.clientServerTickOffset = clientNow - timingStartTick;
+        ClientBlackFlashCache.serverNowTick = serverNowTick;
+        ClientBlackFlashCache.latencyMs = Math.max(0, latencyMs);
+        if (charging && timingStartTick > 0L && timingNonce != 0L) {
+            long safeServerNow = Math.max(serverNowTick, timingStartTick);
+            float elapsedAtSync = Math.max(0.0f, (float)(safeServerNow - timingStartTick)) + ClientBlackFlashCache.getOneWayLatencyTicks(latencyMs);
+            ClientBlackFlashCache.timingSyncClientTick = clientNowTick;
+            ClientBlackFlashCache.timingSyncNanoTime = System.nanoTime();
+            ClientBlackFlashCache.timingElapsedAtSync = elapsedAtSync;
             ClientBlackFlashCache.clientTimingStartTick = timingStartTick;
         }
         if (newSession) {
@@ -76,6 +81,9 @@ public final class ClientPacketHandler {
         }
         if (!charging) {
             ClientBlackFlashCache.clientTimingStartTick = Long.MIN_VALUE;
+            ClientBlackFlashCache.timingSyncClientTick = Long.MIN_VALUE;
+            ClientBlackFlashCache.timingSyncNanoTime = 0L;
+            ClientBlackFlashCache.timingElapsedAtSync = 0.0f;
             ClientBlackFlashCache.timingStartTick = 0L;
             ClientBlackFlashCache.timingRedStart = 0.0f;
             ClientBlackFlashCache.timingRedSize = 0.0f;
@@ -95,6 +103,11 @@ public final class ClientPacketHandler {
                 ClientBlackFlashCache.localReleaseNeedle = 0.0f;
             }
         }
+    }
+
+    public static void markClientTick(long clientGameTick) {
+        ClientBlackFlashCache.lastClientTick = clientGameTick;
+        ClientBlackFlashCache.lastClientTickNanos = System.nanoTime();
     }
 
     public static boolean markBlackFlashReleasedLocally(float needle, long timingNonce) {
@@ -150,14 +163,26 @@ public final class ClientPacketHandler {
         }
     }
 
-    public static float getBlackFlashClientNeedle(float partialTick) {
+    public static float getBlackFlashClientNeedle() {
         if (ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.awaitingReleaseAck) {
             return ClientBlackFlashCache.localReleaseNeedle;
         }
+        return frac(getBlackFlashClientElapsedTicks() / Math.max(1.0f, ClientBlackFlashCache.timingPeriodTicks));
+    }
+
+    public static float getBlackFlashClientNeedle(float partialTick) {
+        return getBlackFlashClientNeedle();
+    }
+
+    public static float getBlackFlashClientElapsedTicks() {
         Minecraft mc = Minecraft.getInstance();
-        long gameTime = mc.level != null ? mc.level.getGameTime() : 0L;
+        long gameTime = mc.level != null ? mc.level.getGameTime() : ClientBlackFlashCache.timingSyncClientTick;
+        if (ClientBlackFlashCache.timingSyncNanoTime > 0L) {
+            float elapsedSinceSync = Math.max(0.0f, (float)(System.nanoTime() - ClientBlackFlashCache.timingSyncNanoTime) / 50000000.0f);
+            return Math.max(0.0f, ClientBlackFlashCache.timingElapsedAtSync + Math.min(120.0f, elapsedSinceSync));
+        }
         long startTick = ClientBlackFlashCache.clientTimingStartTick != Long.MIN_VALUE ? ClientBlackFlashCache.clientTimingStartTick : ClientBlackFlashCache.timingStartTick;
-        return frac(((float)(gameTime - startTick) + partialTick) / Math.max(1.0f, ClientBlackFlashCache.timingPeriodTicks));
+        return Math.max(0.0f, (float)(gameTime - startTick) + ClientBlackFlashCache.getClientTickFraction(gameTime));
     }
 
     private static float frac(float value) {
@@ -317,6 +342,13 @@ public final class ClientPacketHandler {
         public static long clientTimingStartTick = Long.MIN_VALUE;
         // Difference between local client game time and the synced server timing start; render math uses this bridge but never packet-arrival time as phase zero.
         public static long clientServerTickOffset = 0L;
+        public static long serverNowTick = 0L;
+        public static int latencyMs = 0;
+        public static long timingSyncClientTick = Long.MIN_VALUE;
+        public static long timingSyncNanoTime = 0L;
+        public static float timingElapsedAtSync = 0.0f;
+        public static long lastClientTick = Long.MIN_VALUE;
+        public static long lastClientTickNanos = 0L;
         // Server-authoritative needle lap duration for the current timing session.
         public static float timingPeriodTicks = BlueRedPurpleNukeMod.BF_TIMING_PERIOD_TICKS;
         // Randomized red target arc start, normalized to the 0..1 ring interval.
@@ -346,6 +378,18 @@ public final class ClientPacketHandler {
          * Creates a new client black flash cache instance and initializes its addon state.
          */
         private ClientBlackFlashCache() {
+        }
+
+        private static float getOneWayLatencyTicks(int latencyMs) {
+            return Math.max(0.0f, Math.min(6.0f, (float)Math.max(0, latencyMs) / 100.0f));
+        }
+
+        private static float getClientTickFraction(long currentGameTick) {
+            if (lastClientTickNanos <= 0L || lastClientTick == Long.MIN_VALUE || currentGameTick != lastClientTick) {
+                return 0.0f;
+            }
+            float fraction = (float)(System.nanoTime() - lastClientTickNanos) / 50000000.0f;
+            return Math.max(0.0f, Math.min(1.25f, fraction));
         }
     }
 
@@ -407,4 +451,3 @@ public final class ClientPacketHandler {
         }
     }
 }
-

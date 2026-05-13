@@ -827,4 +827,3 @@ extends Screen {
         return super.mouseReleased(mouseX, mouseY, button);
     }
 }
-

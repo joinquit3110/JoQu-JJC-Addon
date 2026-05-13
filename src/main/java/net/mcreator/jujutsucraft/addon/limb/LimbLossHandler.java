@@ -66,6 +66,10 @@ public class LimbLossHandler {
             return;
         }
         if (entity instanceof YutaFakePlayerEntity fake) {
+            event.setAmount(Math.min(event.getAmount(), 40.0f));
+            if (fake.getHealth() - event.getAmount() < 40.0f) {
+                fake.setHealth(Math.min(fake.getMaxHealth(), 200.0f));
+            }
             LimbLossHandler.handleFakePlayerHit(fake, event.getSource());
             return;
         }
@@ -241,8 +245,12 @@ public class LimbLossHandler {
             Vec3 dir = entity.position().subtract(source.getDirectEntity().position()).normalize();
             LimbParticles.spawnBloodSpray(entity, type, dir);
         }
-        LimbLossHandler.spawnSeveredLimbEntity(entity, type);
-        YutaCopyStore.spawnLimbCopyItem(entity, type.getSerializedName());
+        SeveredLimbEntity detached = LimbLossHandler.spawnSeveredLimbEntity(entity, type);
+        if (entity instanceof ServerPlayer) {
+            YutaCopyStore.attachPlayerLimbCopyData(entity, type.getSerializedName(), detached);
+        } else {
+            YutaCopyStore.spawnLimbCopyItem(entity, type.getSerializedName());
+        }
         LimbGameplayHandler.applyLimbDebuffs(entity, data);
         LimbSyncPacket.sendToTrackingPlayers(entity, data);
         if (entity instanceof ServerPlayer) {
@@ -258,10 +266,10 @@ public class LimbLossHandler {
      * @param owner entity that lost the limb
      * @param type limb that should be represented by the detached entity
      */
-    private static void spawnSeveredLimbEntity(LivingEntity owner, LimbType type) {
+    private static SeveredLimbEntity spawnSeveredLimbEntity(LivingEntity owner, LimbType type) {
         Level level = owner.level();
         if (!(level instanceof ServerLevel)) {
-            return;
+            return null;
         }
         ServerLevel serverLevel = (ServerLevel)level;
         Vec3 offset = LimbParticles.getLimbOffset(owner, type);
@@ -273,6 +281,7 @@ public class LimbLossHandler {
         double throwZ = owner.level().getRandom().nextGaussian() * 0.15;
         limbEntity.setDeltaMovement(throwX, throwY, throwZ);
         serverLevel.addFreshEntity((Entity)limbEntity);
+        return limbEntity;
     }
 
     // ===== TICK PROCESSING =====

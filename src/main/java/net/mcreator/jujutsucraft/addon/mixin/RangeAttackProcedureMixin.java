@@ -446,7 +446,7 @@ public class RangeAttackProcedureMixin {
         List<LivingEntity> nearbyTargets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(x, y, z, x, y, z).inflate(range / 2.0), target -> target.isAlive() && target != entity);
         boolean foundTarget = false;
         for (LivingEntity target : nearbyTargets) {
-            boolean betrayal = LogicBetrayalProcedure.execute(world, entity, target);
+            boolean betrayal = LogicBetrayalProcedure.execute(entity, target);
             if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
                 continue;
             }
@@ -461,7 +461,7 @@ public class RangeAttackProcedureMixin {
             return false;
         }
         for (LivingEntity target : nearbyTargets) {
-            boolean betrayal = LogicBetrayalProcedure.execute(world, entity, target);
+            boolean betrayal = LogicBetrayalProcedure.execute(entity, target);
             if (!LogicAttackProcedure.execute(world, entity, target) && !betrayal) {
                 continue;
             }
@@ -501,7 +501,7 @@ public class RangeAttackProcedureMixin {
         if (attackerData.getBoolean("DomainAttack")) {
             return target.hurt(source, amount);
         }
-        boolean betrayal = LogicBetrayalProcedure.execute(world, attacker, livingTarget);
+        boolean betrayal = LogicBetrayalProcedure.execute(attacker, livingTarget);
         if (!LogicAttackProcedure.execute(world, attacker, livingTarget) && !betrayal) {
             return target.hurt(source, amount);
         }

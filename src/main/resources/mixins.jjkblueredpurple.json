@@ -25,11 +25,15 @@
     "DomainExpireBarrierFixMixin",
     "DomainStartupRadiusMixin",
     "AuthenticMutualLoveActiveMixin",
+    "AuthenticMutualLoveProcedureMixin",
     "CopiedCursedTechniqueRightclickedProcedureMixin",
     "EffectCharactorProcedureMixin",
     "CursedTechniqueOkkotsuProcedureMixin",
     "DomainEntityCollidesInTheBlockProcedureMixin",
-    "EntityItemRightClickedOnEntityProcedureMixin"
+    "EntityItemRightClickedOnEntityProcedureMixin",
+    "TechniqueImitation1ProcedureMixin",
+    "PlayerTickSecondTechniqueProcedureMixin",
+    "RikaEntityOwnerGuardMixin"
   ],
   "injectors": {
     "defaultRequire": 1

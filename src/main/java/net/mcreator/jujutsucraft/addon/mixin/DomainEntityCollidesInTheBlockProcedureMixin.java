@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class DomainEntityCollidesInTheBlockProcedureMixin {
     @Inject(method = {"execute"}, at = {@At(value = "TAIL")}, remap = false)
     private static void jjkbrp$cleanupVanillaYutaCopyUnlock(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
-        if (entity instanceof ServerPlayer player && YutaCopyStore.isYuta(player)) {
+        if (entity instanceof ServerPlayer player && YutaCopyStore.isActiveYuta(player)) {
             YutaCopyStore.cleanupVanillaPlayerCopy(player);
         }
     }

@@ -134,7 +134,7 @@ public class ModNetworking {
     }
 
     private static boolean isBlockedPlayerYutaHardcodedCopy(ServerPlayer player, int charId, double selectId) {
-        return charId == 5 && YutaCopyStore.isYuta(player) && YutaCopyStore.isVanillaHardcodedCopySelect(selectId);
+        return charId == 5 && YutaCopyStore.isVanillaHardcodedCopySelect(selectId);
     }
 
     private static boolean hasUnusedLoudspeakerEquipped(ServerPlayer player) {
@@ -145,30 +145,49 @@ public class ModNetworking {
         return stack != null && !stack.isEmpty() && stack.is(JujutsucraftModItems.LOUDSPEAKER.get()) && !stack.getOrCreateTag().getBoolean("Used");
     }
 
-    private static boolean shouldSuppressPlayerYutaWheel(ServerPlayer player, int charId) {
-        return false;
+    private static boolean isLoudspeakerCursedSpeechEntry(double selectId, String displayName) {
+        int sid = (int)Math.round(selectId);
+        if (sid >= 5 && sid <= 12) {
+            return true;
+        }
+        String normalized = displayName == null ? "" : displayName.toLowerCase(Locale.ROOT).replace('’', '\'').replace("'", "");
+        return normalized.contains("cursed speech")
+            || normalized.contains("curse speech")
+            || normalized.contains("loudspeaker")
+            || normalized.contains("blast away")
+            || normalized.contains("dont move")
+            || normalized.contains("dont get close")
+            || normalized.contains("get crushed")
+            || normalized.contains("explode")
+            || normalized.contains("sleep")
+            || normalized.contains("stop")
+            || normalized.contains("plummet")
+            || normalized.contains("twist")
+            || normalized.contains("return");
     }
 
-    private static boolean shouldSuppressAddonWheel(ServerPlayer player) {
-        return false;
+    private static boolean shouldHideLoudspeakerEntriesFromYutaCopyWheel(ServerPlayer player, int charId) {
+        return ModNetworking.shouldHideLoudspeakerEntriesForActiveYuta(player, charId);
+    }
+
+    private static boolean shouldHideLoudspeakerEntriesForActiveYuta(ServerPlayer player, int charId) {
+        return charId == 5 && YutaCopyStore.isActiveYuta(player) && ModNetworking.hasUnusedLoudspeakerEquipped(player);
+    }
+
+    private static void removeLoudspeakerEntriesForActiveYuta(ServerPlayer player, int charId, List<WheelTechniqueEntry> entries) {
+        if (ModNetworking.shouldHideLoudspeakerEntriesForActiveYuta(player, charId)) {
+            entries.removeIf(entry -> ModNetworking.isLoudspeakerCursedSpeechEntry(entry.selectId(), entry.displayName()));
+        }
     }
 
     private static boolean shouldRejectPlayerYutaSelection(ServerPlayer player, int charId, double selectId) {
-        // Reject only the vanilla player-Yuta hardcoded Copy slots. Do not use unused loudspeaker
-        // equipment as a generic selector guard: normal techniques also use ids 5..12, so that
-        // blocked Sukuna/Gojo/etc. wheel skills after changing technique with a book.
-        return ModNetworking.isBlockedPlayerYutaHardcodedCopy(player, charId, selectId);
+        return charId == 5 && YutaCopyStore.isActiveYuta(player) && YutaCopyStore.isVanillaHardcodedCopySelect(selectId);
     }
 
     private static boolean isBlockedPlayerYutaHardcodedCopyEntry(ServerPlayer player, int charId, double requestedId, JujutsucraftModVariables.PlayerVariables after) {
-        if (charId != 5 || !YutaCopyStore.isYuta(player)) {
-            return false;
-        }
-        if (YutaCopyStore.isVanillaHardcodedCopySelect(requestedId) || YutaCopyStore.isVanillaHardcodedCopySelect(after.PlayerSelectCurseTechnique)) {
-            return true;
-        }
-        String name = after.PlayerSelectCurseTechniqueName == null ? "" : after.PlayerSelectCurseTechniqueName.toLowerCase(Locale.ROOT);
-        return name.contains("cursed speech") || name.contains("loudspeaker") || name.contains("copy");
+        return charId == 5
+            && YutaCopyStore.isActiveYuta(player)
+            && (YutaCopyStore.isVanillaHardcodedCopySelect(requestedId) || YutaCopyStore.isVanillaHardcodedCopySelect(after.PlayerSelectCurseTechnique));
     }
 
     // ===== COOLDOWN HELPERS =====
@@ -746,36 +765,59 @@ public class ModNetworking {
         return pages;
     }
 
+    // Returns the wheel color for a Yuta copy record. Cancel-state entries (active Ten Shadows copy toggle)
+    // use an orange accent so the "Cancel: …" label is visually distinct, otherwise the color is derived
+    // from the underlying technique name via the existing computeTechniqueColor heuristics.
+    private static int copyEntryColor(CompoundTag rec, boolean cancelState) {
+        if (cancelState) {
+            return 0xFB923C;
+        }
+        double techniqueId = rec.getDouble("techniqueId");
+        int moveSelectId = rec.contains("moveSelectId") ? rec.getInt("moveSelectId") : 5;
+        String moveName = YutaCopyStore.moveName(techniqueId, moveSelectId);
+        return ModNetworking.computeTechniqueColor(moveName, false, false, techniqueId);
+    }
+
     private static List<List<WheelTechniqueEntry>> buildYutaCopyPages(ServerPlayer player, int charId) {
         ArrayList<List<WheelTechniqueEntry>> pages = new ArrayList<List<WheelTechniqueEntry>>();
         YutaCopyStore.cleanupVanillaPlayerCopy(player);
-        ModNetworking.addPaged(pages, ModNetworking.buildWheelEntries(player, charId));
+        YutaCopyStore.clearSureHit(player);
+        List<WheelTechniqueEntry> baseEntries = ModNetworking.buildWheelEntries(player, charId);
+        ModNetworking.removeLoudspeakerEntriesForActiveYuta(player, charId, baseEntries);
+        ModNetworking.addPaged(pages, baseEntries);
+        List<CompoundTag> validRecords = YutaCopyStore.validRecords(player);
         ArrayList<WheelTechniqueEntry> copyEntries = new ArrayList<WheelTechniqueEntry>();
-        for (CompoundTag rec : YutaCopyStore.validRecords(player)) {
-            double entryId = (double)YUTA_COPY_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
+        for (int recordIndex = 0; recordIndex < validRecords.size(); ++recordIndex) {
+            CompoundTag rec = validRecords.get(recordIndex);
+            double entryId = (double)stableYutaCopyEntryId(rec.getString("recordUuid"));
             String suffix = rec.contains("usesRemaining") ? " §b(" + rec.getInt("usesRemaining") + " uses)" : (rec.getBoolean("temporary") ? " §7(Temp)" : " §d(Perm)");
             double cost = rec.contains("cost") ? rec.getDouble("cost") : YutaCopyStore.defaultCost(rec.getDouble("techniqueId"));
             double cooldown = rec.getDouble("COOLDOWN_TICKS");
             int cooldownMax = (int)Math.round(cooldown);
             int cooldownRemaining = YutaCopyStore.cooldownRemainingTicks(player, rec);
             String moveName = rec.getString("moveName");
+            if (Math.round(rec.getDouble("techniqueId")) == 6L && rec.contains("moveSelectId")) {
+                moveName = YutaCopyStore.tenShadowsWheelMoveName(rec.getInt("moveSelectId"));
+            }
             String label = moveName == null || moveName.isBlank() ? rec.getString("displayName") : YutaCopyStore.techniqueName(rec.getDouble("techniqueId")) + ": " + moveName;
-            copyEntries.add(new WheelTechniqueEntry(entryId, "Rika: " + label + suffix, cost, cooldown, 0xD946EF, false, false, -1, 0.0D, cooldownRemaining, cooldownMax));
+            boolean cancelState = Math.round(rec.getDouble("techniqueId")) == 6L
+                && rec.contains("moveSelectId")
+                && YutaCopyStore.isCopiedTenShadowsMoveActive(player, rec);
+            if (cancelState) {
+                label = "Cancel: " + moveName;
+                cost = 0.0D;
+                cooldownRemaining = 0;
+            }
+            int entryColor = ModNetworking.copyEntryColor(rec, cancelState);
+            copyEntries.add(new WheelTechniqueEntry(entryId, "Rika: " + label + suffix, cost, cooldown, entryColor, false, false, -1, 0.0D, cooldownRemaining, cooldownMax));
         }
         ModNetworking.addPaged(pages, copyEntries);
-        ArrayList<WheelTechniqueEntry> sureHitEntries = new ArrayList<WheelTechniqueEntry>();
-        for (CompoundTag rec : YutaCopyStore.validRecords(player)) {
-            if (!YutaCopyStore.isValidSureHitRecord(rec)) {
-                continue;
-            }
-            double entryId = (double)YUTA_SUREHIT_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
-            String moveName = rec.getString("moveName");
-            String label = moveName == null || moveName.isBlank() ? rec.getString("displayName") : YutaCopyStore.techniqueName(rec.getDouble("techniqueId")) + ": " + moveName;
-            sureHitEntries.add(new WheelTechniqueEntry(entryId, "Sure-Hit: " + label, 0.0D, 0.0D, 0xF59E0B, false, false, -1, 0.0D, 0, 0));
-        }
-        sureHitEntries.add(new WheelTechniqueEntry((double)YUTA_SUREHIT_CLEAR_ENTRY_ID, "Sure-Hit: Clear", 0.0D, 0.0D, 0x94A3B8, false, false, -1, 0.0D, 0, 0));
-        ModNetworking.addPaged(pages, sureHitEntries);
         return pages;
+    }
+
+    private static int stableYutaCopyEntryId(String recordUuid) {
+        int hash = recordUuid == null ? 0 : (recordUuid.hashCode() & 0x7fffffff);
+        return YUTA_COPY_ENTRY_BASE + (hash % (YUTA_SUREHIT_ENTRY_BASE - YUTA_COPY_ENTRY_BASE - 1));
     }
 
     // ===== CLIENT SYNC SENDERS =====
@@ -790,7 +832,9 @@ public class ModNetworking {
         float timingRedSize = (float)data.getDouble("addon_bf_timing_red_size");
         long timingNonce = data.getLong("addon_bf_timing_nonce");
         int flow = data.getInt("addon_bf_flow");
-        int flowCooldown = data.getInt("addon_bf_flow_cooldown");
+        int primaryFlowCooldown = data.getInt("addon_bf_flow_cd");
+        int legacyFlowCooldown = data.getInt("addon_bf_flow_cooldown");
+        int flowCooldown = primaryFlowCooldown > 0 ? primaryFlowCooldown : legacyFlowCooldown;
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashSyncPacket(pct, mastery, charging, timingStartTick, timingPeriodTicks, timingRedStart, timingRedSize, timingNonce, flow, flowCooldown));
     }
 
@@ -867,10 +911,6 @@ public class ModNetworking {
                     return;
                 }
                 int charId = ModNetworking.getActiveCharacterId(vars);
-                if (ModNetworking.shouldSuppressAddonWheel(player)) {
-                    YutaCopyStore.cleanupVanillaPlayerCopy(player);
-                    return;
-                }
                 if (ModNetworking.shouldRejectPlayerYutaSelection(player, charId, pkt.selectId)) {
                     YutaCopyStore.cleanupVanillaPlayerCopy(player);
                     return;
@@ -927,8 +967,10 @@ public class ModNetworking {
                     vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
                 }
                 int charId = ModNetworking.getActiveCharacterId(vars);
-                if (charId == 5 && YutaCopyStore.isYuta(player)) {
+                if (charId == 5) {
                     YutaCopyStore.cleanupVanillaPlayerCopy(player);
+                } else {
+                    YutaCopyStore.clearTransientYutaRuntimeState(player);
                 }
                 double currentSelect = vars.PlayerSelectCurseTechnique;
                 if (ModNetworking.isBlockedPlayerYutaHardcodedCopy(player, charId, currentSelect)) {
@@ -937,11 +979,12 @@ public class ModNetworking {
                 if (charId == 18) {
                     List<List<WheelTechniqueEntry>> pages = ModNetworking.buildGetoPages(player, charId);
                     CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenWheelPacket(pages, currentSelect));
-                } else if (charId == 5 && YutaCopyStore.isYuta(player) && YutaCopyStore.hasValidRikaOrDomain(player)) {
+                } else if (charId == 5 && YutaCopyStore.hasValidRikaOrDomain(player)) {
                     List<List<WheelTechniqueEntry>> pages = ModNetworking.buildYutaCopyPages(player, charId);
                     CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenWheelPacket(pages, currentSelect));
                 } else {
                     List<WheelTechniqueEntry> entries = ModNetworking.buildWheelEntries(player, charId);
+                    ModNetworking.removeLoudspeakerEntriesForActiveYuta(player, charId, entries);
                     ArrayList<List<WheelTechniqueEntry>> singlePage = new ArrayList<List<WheelTechniqueEntry>>();
                     ModNetworking.addPaged(singlePage, entries);
                     CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenWheelPacket(singlePage, currentSelect));
@@ -1247,26 +1290,39 @@ public class ModNetworking {
             NetworkEvent.Context ctx = ctxSupplier.get();
             ctx.enqueueWork(() -> {
                 ServerPlayer player = ctx.getSender();
-                if (player == null || !YutaCopyStore.isYuta(player) || !YutaCopyStore.hasValidRikaOrDomain(player)) {
+                if (player == null || !YutaCopyStore.isActiveYuta(player) || !YutaCopyStore.hasValidRikaOrDomain(player)) {
                     return;
                 }
                 if (Math.abs(pkt.entryId - (double)YUTA_SUREHIT_CLEAR_ENTRY_ID) <= 0.001D) {
                     YutaCopyStore.clearSureHit(player);
-                    player.displayClientMessage(Component.literal("§d[Rika] Authentic Mutual Love sure-hit cleared."), true);
                     return;
                 }
-                for (CompoundTag rec : YutaCopyStore.validRecords(player)) {
-                    double sureHitId = (double)YUTA_SUREHIT_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
-                    if (Math.abs(sureHitId - pkt.entryId) <= 0.001D) {
-                        if (YutaCopyStore.setSureHitRecord(player, rec.getString("recordUuid"))) {
-                            player.displayClientMessage(Component.literal("§d[Rika] Authentic Mutual Love sure-hit set to " + rec.getString("displayName") + "."), true);
-                        } else {
-                            player.displayClientMessage(Component.literal("§c[Rika] This copied record cannot be used as sure-hit."), true);
+                List<CompoundTag> validRecords = YutaCopyStore.validRecords(player);
+                if (validRecords.isEmpty()) {
+                    player.displayClientMessage(Component.literal("§e[Rika] No valid copied techniques are available."), true);
+                    return;
+                }
+                int entryId = (int)Math.round(pkt.entryId);
+                if (Math.abs(pkt.entryId - (double)entryId) > 0.001D) {
+                    player.displayClientMessage(Component.literal("§e[Rika] Selected copy is no longer valid."), true);
+                    return;
+                }
+                if (entryId >= YUTA_SUREHIT_ENTRY_BASE) {
+                    YutaCopyStore.clearSureHit(player);
+                    return;
+                }
+                if (entryId >= YUTA_COPY_ENTRY_BASE && entryId < YUTA_SUREHIT_ENTRY_BASE) {
+                    CompoundTag rec = null;
+                    for (CompoundTag candidate : validRecords) {
+                        if (stableYutaCopyEntryId(candidate.getString("recordUuid")) == entryId) {
+                            rec = candidate;
+                            break;
                         }
+                    }
+                    if (rec == null) {
+                        player.displayClientMessage(Component.literal("§e[Rika] Selected copy is no longer valid."), true);
                         return;
                     }
-                    double id = (double)YUTA_COPY_ENTRY_BASE + (double)Math.abs(rec.getString("recordUuid").hashCode() % 1000000);
-                    if (Math.abs(id - pkt.entryId) > 0.001D) continue;
                     if (YutaCopyStore.selectRecord(player, rec.getString("recordUuid")) && pkt.activate) {
                         YutaCopyStore.activateSelected(player);
                     }

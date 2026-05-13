@@ -1261,9 +1261,10 @@ public class BlueRedPurpleNukeMod {
         if (!level.getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)) {
             return;
         }
-        BlockPos origin = BlueRedPurpleNukeMod.findBlackFlashBlessingOriginUnderFeet(level, player);
+        BlockPos protectedSupport = BlueRedPurpleNukeMod.findBlackFlashBlessingOriginUnderFeet(level, player);
+        BlockPos origin = BlueRedPurpleNukeMod.findBlackFlashBlessingOriginBehindPlayer(level, player);
         Vec3 groundCenter = new Vec3((double)origin.getX() + 0.5, (double)origin.getY() + 1.0, (double)origin.getZ() + 0.5);
-        BlueRedPurpleNukeMod.scheduleBlackFlashBlessingBlockWaves(level, player, origin, groundCenter);
+        BlueRedPurpleNukeMod.scheduleBlackFlashBlessingBlockWaves(level, player, origin, protectedSupport, groundCenter);
         center = groundCenter;
         List<LivingEntity> targets = level.getEntitiesOfClass(LivingEntity.class, new AABB(center, center).inflate(BF_BLESSING_ENTITY_RADIUS), e -> e.isAlive() && e != player && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity));
         for (LivingEntity target : targets) {
@@ -1295,11 +1296,48 @@ public class BlueRedPurpleNukeMod {
         return feetBelow;
     }
 
-    private static void scheduleBlackFlashBlessingBlockWaves(ServerLevel level, ServerPlayer player, BlockPos origin, Vec3 center) {
+    private static Vec3 getBlackFlashBlessingBackwardDirection(ServerPlayer player) {
+        if (player == null) {
+            return new Vec3(0.0, 0.0, -1.0);
+        }
+        Vec3 look = player.getLookAngle();
+        Vec3 horizontalLook = new Vec3(look.x, 0.0, look.z);
+        if (horizontalLook.lengthSqr() < 1.0E-6) {
+            float yawRad = player.getYRot() * ((float)Math.PI / 180.0f);
+            horizontalLook = new Vec3((double)(-Mth.sin(yawRad)), 0.0, (double)Mth.cos(yawRad));
+        }
+        return horizontalLook.lengthSqr() < 1.0E-6 ? new Vec3(0.0, 0.0, -1.0) : horizontalLook.normalize().scale(-1.0);
+    }
+
+    private static BlockPos findBlackFlashBlessingOriginBehindPlayer(ServerLevel level, ServerPlayer player) {
+        Vec3 backward = BlueRedPurpleNukeMod.getBlackFlashBlessingBackwardDirection(player);
+        Vec3 behind = backward.scale(4.0);
+        BlockPos behindFeetBelow = BlockPos.containing(player.getX() + behind.x, player.getY() - 1.0, player.getZ() + behind.z);
+        for (int yOff = 2; yOff >= -4; --yOff) {
+            BlockPos pos = behindFeetBelow.offset(0, yOff, 0);
+            BlockState state = level.getBlockState(pos);
+            if (!state.isAir() && !state.getCollisionShape(level, pos).isEmpty()) {
+                return pos;
+            }
+        }
+        for (int yOff = 2; yOff >= -4; --yOff) {
+            BlockPos pos = behindFeetBelow.offset(0, yOff, 0);
+            if (!level.getBlockState(pos).isAir()) {
+                return pos;
+            }
+        }
+        return behindFeetBelow;
+    }
+
+    private static void scheduleBlackFlashBlessingBlockWaves(ServerLevel level, ServerPlayer player, BlockPos origin, BlockPos protectedSupportBlock, Vec3 center) {
         if (level == null || player == null || origin == null || center == null) {
             return;
         }
-        BlackFlashBlessingWaveSession session = new BlackFlashBlessingWaveSession(level.dimension(), player.getUUID(), origin.immutable(), origin.immutable(), center, level.getGameTime());
+        BlockPos protectedPos = protectedSupportBlock != null ? protectedSupportBlock.immutable() : origin.immutable();
+        Vec3 backward = BlueRedPurpleNukeMod.getBlackFlashBlessingBackwardDirection(player);
+        Vec3 side = new Vec3(-backward.z, 0.0, backward.x).normalize();
+        LOGGER.warn("[BlackFlashBlessingDir] player={} yaw={} backward=({}, {}) side=({}, {}) origin={}", new Object[]{player.getName().getString(), player.getYRot(), backward.x, backward.z, side.x, side.z, origin});
+        BlackFlashBlessingWaveSession session = new BlackFlashBlessingWaveSession(level.dimension(), player.getUUID(), origin.immutable(), protectedPos, center, backward, side, level.getGameTime());
         synchronized (BF_BLESSING_WAVE_SESSIONS) {
             BF_BLESSING_WAVE_SESSIONS.add(session);
         }
@@ -1329,7 +1367,7 @@ public class BlueRedPurpleNukeMod {
                     int wave = session.nextWave++;
                     int radius = BF_BLESSING_BLOCK_BREAK_WAVE_RADII[wave];
                     int waveCap = Math.min(BF_BLESSING_BLOCK_BREAK_WAVE_CAPS[wave], BF_BLESSING_MAX_BLOCK_BREAKS - session.broken);
-                    int waveBroken = BlueRedPurpleNukeMod.breakBlackFlashBlessingWave(level, player, session.origin, session.center, wave, radius, waveCap, session.visited, session.protectedSupportBlock);
+                    int waveBroken = BlueRedPurpleNukeMod.breakBlackFlashBlessingWave(level, player, session.origin, session.center, session.backward, session.side, wave, radius, waveCap, session.visited, session.protectedSupportBlock);
                     session.broken += waveBroken;
                     BlueRedPurpleNukeMod.spawnBlackFlashBlessingWaveEffects(level, session.center, session.origin, wave, radius, waveBroken);
                 }
@@ -1340,20 +1378,22 @@ public class BlueRedPurpleNukeMod {
         }
     }
 
-    private static int breakBlackFlashBlessingWave(ServerLevel level, ServerPlayer player, BlockPos origin, Vec3 center, int wave, int radius, int maxBreaks, Set<BlockPos> visited, BlockPos protectedSupportBlock) {
+    private static int breakBlackFlashBlessingWave(ServerLevel level, ServerPlayer player, BlockPos origin, Vec3 center, Vec3 backward, Vec3 side, int wave, int radius, int maxBreaks, Set<BlockPos> visited, BlockPos protectedSupportBlock) {
         int broken = 0;
         int innerRadius = wave <= 0 ? 0 : BF_BLESSING_BLOCK_BREAK_WAVE_RADII[wave - 1] + 1;
         int innerRadiusSq = innerRadius * innerRadius;
         int outerRadiusSq = radius * radius;
         List<BlockPos> candidates = new ArrayList<>();
         Set<BlockPos> waveSeen = new HashSet<>();
-        for (int xOff = -radius; xOff <= radius; ++xOff) {
-            for (int zOff = -radius; zOff <= radius; ++zOff) {
-                int distSq = xOff * xOff + zOff * zOff;
+        for (int depth = 0; depth <= radius; ++depth) {
+            for (int width = -radius; width <= radius; ++width) {
+                int distSq = depth * depth + width * width;
                 if (distSq > outerRadiusSq || distSq < innerRadiusSq) {
                     continue;
                 }
-                BlockPos column = origin.offset(xOff, 0, zOff);
+                double columnX = (double)origin.getX() + 0.5 + backward.x * (double)depth + side.x * (double)width;
+                double columnZ = (double)origin.getZ() + 0.5 + backward.z * (double)depth + side.z * (double)width;
+                BlockPos column = BlockPos.containing(columnX, origin.getY(), columnZ);
                 BlockPos pos = BlueRedPurpleNukeMod.findBlackFlashBlessingGroundBreakPos(level, column);
                 if (pos == null || pos.equals(protectedSupportBlock) || visited.contains(pos) || !waveSeen.add(pos)) {
                     continue;
@@ -1468,17 +1508,21 @@ public class BlueRedPurpleNukeMod {
         private final BlockPos origin;
         private final BlockPos protectedSupportBlock;
         private final Vec3 center;
+        private final Vec3 backward;
+        private final Vec3 side;
         private final long startTick;
         private final Set<BlockPos> visited = new HashSet<>();
         private int nextWave;
         private int broken;
 
-        private BlackFlashBlessingWaveSession(ResourceKey<Level> levelKey, UUID playerUuid, BlockPos origin, BlockPos protectedSupportBlock, Vec3 center, long startTick) {
+        private BlackFlashBlessingWaveSession(ResourceKey<Level> levelKey, UUID playerUuid, BlockPos origin, BlockPos protectedSupportBlock, Vec3 center, Vec3 backward, Vec3 side, long startTick) {
             this.levelKey = levelKey;
             this.playerUuid = playerUuid;
             this.origin = origin;
             this.protectedSupportBlock = protectedSupportBlock;
             this.center = center;
+            this.backward = backward;
+            this.side = side;
             this.startTick = startTick;
         }
     }

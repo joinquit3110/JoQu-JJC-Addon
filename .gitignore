@@ -7,7 +7,7 @@ gradle.properties
 gradlew
 gradlew.bat
 .gitattributes
-
+.kiro
 .gradle/
 build/
 bin/

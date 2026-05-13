@@ -2,8 +2,8 @@ package net.mcreator.jujutsucraft.addon.mixin;
 
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
-import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.AuthenticMutualLoveActiveProcedure;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -23,21 +23,29 @@ public class AuthenticMutualLoveActiveMixin {
     private static final ThreadLocal<Entity> jjkbrp$activeEntity = new ThreadLocal<>();
 
     /**
-     * Incomplete Authentic Mutual Love must not spawn copied-technique swords or Jacob's Ladder helpers.
+     * Active-player Yuta must never use vanilla's first copied-technique item path.
+     * Incomplete domains are fully blocked; closed/open domains run the addon copy-store bridge once.
      */
     @Inject(method = {"execute"}, at = {@At(value = "HEAD")}, cancellable = true, remap = false)
-    private static void jjkbrp$cancelIncompleteAuthenticMutualLove(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
+    private static void jjkbrp$overrideActiveYutaAuthenticMutualLove(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         jjkbrp$activeWorld.set(world);
         jjkbrp$activeEntity.set(entity);
-        if (entity instanceof LivingEntity && DomainAddonUtils.isIncompleteDomainState((LivingEntity)entity)) {
-            jjkbrp$clearAuthenticMutualLoveContext();
-            ci.cancel();
+        if (!(entity instanceof ServerPlayer) || !(entity instanceof LivingEntity)) {
+            return;
         }
-    }
-
-    @Inject(method = {"execute"}, at = {@At(value = "TAIL")}, remap = false)
-    private static void jjkbrp$bridgeRikaCopyStore(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
-        YutaCopyStore.bridgeAuthenticMutualLove(world, x, y, z, entity);
+        ServerPlayer player = (ServerPlayer)entity;
+        LivingEntity living = (LivingEntity)entity;
+        if (!YutaCopyStore.isActiveYuta(player)) {
+            return;
+        }
+        jjkbrp$clearAuthenticMutualLoveContext();
+        ci.cancel();
+        if (DomainAddonUtils.isIncompleteDomainState(living)) {
+            return;
+        }
+        if (DomainAddonUtils.isClosedDomainActive(living) || DomainAddonUtils.isOpenDomainState(living)) {
+            YutaCopyStore.bridgeAuthenticMutualLove(world, x, y, z, entity);
+        }
     }
 
     @Inject(method = {"execute"}, at = {@At(value = "RETURN")}, remap = false)

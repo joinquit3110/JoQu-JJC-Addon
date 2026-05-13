@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class EffectCharactorProcedureMixin {
     @Inject(method = {"execute"}, at = {@At(value = "HEAD")}, cancellable = true, remap = false)
     private static void jjkbrp$disableVanillaPlayerYutaCopyCapture(LevelAccessor world, Entity entity, Entity entityiterator, CallbackInfo ci) {
-        if (entityiterator instanceof ServerPlayer player && YutaCopyStore.isYuta(player)) {
+        if (entityiterator instanceof ServerPlayer player && YutaCopyStore.isActiveYuta(player)) {
             YutaCopyStore.cleanupVanillaPlayerCopy(player);
             ci.cancel();
         }

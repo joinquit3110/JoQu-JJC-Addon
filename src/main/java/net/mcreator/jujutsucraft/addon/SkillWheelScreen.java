@@ -119,10 +119,6 @@ extends Screen {
         return entry.selectId() >= 100.0 && entry.selectId() < 10000.0;
     }
 
-    private boolean isYutaSureHitEntry(ModNetworking.WheelTechniqueEntry entry) {
-        return entry.selectId() == (double)ModNetworking.YUTA_SUREHIT_CLEAR_ENTRY_ID || entry.selectId() >= (double)ModNetworking.YUTA_SUREHIT_ENTRY_BASE;
-    }
-
     private boolean isYutaCopyEntry(ModNetworking.WheelTechniqueEntry entry) {
         return entry.selectId() >= (double)ModNetworking.YUTA_COPY_ENTRY_BASE && entry.selectId() < (double)ModNetworking.YUTA_SUREHIT_ENTRY_BASE;
     }
@@ -404,9 +400,7 @@ extends Screen {
         if (this.isMultiPage()) {
             String[] pageTitles = new String[]{"Techniques", "Cursed Spirits (Lower)", "Cursed Spirits (Upper)"};
             List<ModNetworking.WheelTechniqueEntry> pageEntries = this.currentTechniques();
-            if (!pageEntries.isEmpty() && this.isYutaSureHitEntry(pageEntries.get(0))) {
-                title = "Yuta Sure-Hit";
-            } else if (!pageEntries.isEmpty() && this.isYutaCopyEntry(pageEntries.get(0))) {
+            if (!pageEntries.isEmpty() && this.isYutaCopyEntry(pageEntries.get(0))) {
                 title = "Rika Copies";
             } else {
                 title = this.currentPage < pageTitles.length ? pageTitles[this.currentPage] : "Cursed Spirits (Page " + (this.currentPage + 1) + ")";
@@ -775,9 +769,7 @@ extends Screen {
         this.confirmFlash = 1.0f;
         this.spawnConfirmParticles(tech);
         this.playConfirmSound(tech);
-        if (this.isYutaSureHitEntry(tech)) {
-            ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.SelectYutaCopyPacket(tech.selectId(), false));
-        } else if (this.isYutaCopyEntry(tech)) {
+        if (this.isYutaCopyEntry(tech)) {
             ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.SelectYutaCopyPacket(tech.selectId(), true));
         } else if (this.isSpiritEntry(tech)) {
             int spiritSlot = (int)Math.round(tech.selectId()) - 100;

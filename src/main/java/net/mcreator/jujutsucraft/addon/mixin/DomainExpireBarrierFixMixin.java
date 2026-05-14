@@ -104,6 +104,7 @@ public class DomainExpireBarrierFixMixin {
         boolean forceClosedCleanup = nbt.getBoolean("jjkbrp_force_closed_cleanup");
         boolean failedBeforeHook = nbt.getBoolean("jjkbrp_was_failed");
         boolean defeatedBeforeHook = nbt.getBoolean("jjkbrp_was_domain_defeated");
+        boolean clashDefeatCleanup = defeatedBeforeHook && nbt.contains("jjkbrp_clash_result_tick");
         // Some skills refresh DOMAIN_EXPANSION by replacing the effect instance, which can still invoke expire callbacks.
         // For intentional range-cancel removals, keep cleanup enabled even if the effect still appears active during this callback.
         boolean forcedCleanup = nbt.getBoolean("jjkbrp_open_cancelled") || nbt.getBoolean("jjkbrp_incomplete_cancelled");
@@ -501,11 +502,9 @@ public class DomainExpireBarrierFixMixin {
             if (!DomainAddonUtils.isDomainBuildOrActive(world, caster) || DomainAddonUtils.isOpenDomainState(caster)) continue;
             CompoundTag casterNbt = caster.getPersistentData();
             Vec3 otherCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
-            if (otherCenter.distanceToSqr(ownerCenter) > 1.0) {
-                double otherRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, casterNbt) + 1.75;
-                if (otherCenter.distanceToSqr(blockPos) <= otherRadius * otherRadius) {
-                    return true;
-                }
+            double otherRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, casterNbt) + 1.75;
+            if (otherCenter.distanceToSqr(blockPos) <= otherRadius * otherRadius) {
+                return true;
             }
             if (!DomainExpireBarrierFixMixin.jjkbrp$isWithinAdoptedBarrierRadius(casterNbt, blockPos)) continue;
             return true;

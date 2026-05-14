@@ -10,6 +10,7 @@ import net.mcreator.jujutsucraft.addon.ClientPacketHandler;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
+import net.mcreator.jujutsucraft.addon.clash.net.DomainClashHudSnapshotPacket;
 import net.mcreator.jujutsucraft.addon.limb.LimbSyncPacket;
 import net.mcreator.jujutsucraft.addon.limb.NearDeathPacket;
 import net.mcreator.jujutsucraft.addon.limb.RCTLevel3Handler;
@@ -83,6 +84,7 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, DomainMasteryOpenScreenPacket.class, DomainMasteryOpenScreenPacket::encode, DomainMasteryOpenScreenPacket::decode, DomainMasteryOpenScreenPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
         CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
         CHANNEL.registerMessage(packetId++, GojoTeleportGhostPacket.class, GojoTeleportGhostPacket::encode, GojoTeleportGhostPacket::decode, GojoTeleportGhostPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, DomainClashHudSnapshotPacket.class, DomainClashHudSnapshotPacket::encode, DomainClashHudSnapshotPacket::decode, DomainClashHudSnapshotPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====

@@ -8,6 +8,8 @@ import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
+import net.mcreator.jujutsucraft.addon.clash.power.PowerCalculator;
+import net.mcreator.jujutsucraft.addon.util.DomainForm;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -846,9 +848,13 @@ extends Screen {
                 descBuilder.append("\nPress [\u2212] to apply Negative Modify \u2022 each level grants +1 point");
             }
         }
+        ClashPowerPreview preview = this.buildClashPowerPreview(prop);
         int maxDescWidth = Math.max(120, Math.min(220, this.width / 3));
         List<FormattedCharSequence> descLines = font.split((FormattedText)Component.literal((String)descBuilder.toString()), maxDescWidth);
         int maxW = font.width(name);
+        if (preview != null) {
+            maxW = Math.max(maxW, font.width(preview.prefix) + font.width(preview.delta) + font.width(preview.suffix));
+        }
         for (FormattedCharSequence line : descLines) {
             maxW = Math.max(maxW, font.width(line));
         }
@@ -856,7 +862,7 @@ extends Screen {
         Objects.requireNonNull(font);
         int n = descLines.size();
         Objects.requireNonNull(font);
-        int th = 9 + n * 9 + 16;
+        int th = 9 + n * 9 + 16 + (preview == null ? 0 : 14);
         int tx = mx + 16;
         int ty = my - th - 4;
         if (tx + tw > this.width) {
@@ -880,7 +886,95 @@ extends Screen {
             Objects.requireNonNull(font);
             g.drawString(font, formattedCharSequence, tx + 10, ty + 7 + 9 + i * 9, -7035976, false);
         }
+        if (preview != null) {
+            int py = ty + 7 + 9 + descLines.size() * 9 + 4;
+            int x = tx + 10;
+            g.drawString(font, preview.prefix, x, py, 0xFFE5E7EB, false);
+            x += font.width(preview.prefix);
+            g.drawString(font, preview.delta, x, py, preview.deltaColor, false);
+            x += font.width(preview.delta);
+            g.drawString(font, preview.suffix, x, py, 0xFFFCD34D, false);
+        }
         g.pose().popPose();
+    }
+
+    private ClashPowerPreview buildClashPowerPreview(DomainMasteryProperties prop) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || prop == null) {
+            return null;
+        }
+        double current = this.estimateRawClashPower(null, 0);
+        int direction = this.hoveredPlus[this.hoveredPropIdx] ? 1 : (this.hoveredMinus[this.hoveredPropIdx] ? -1 : 0);
+        if (direction == 0) {
+            return new ClashPowerPreview("Raw Clash Power ", String.format(java.util.Locale.ROOT, "%.1f", current), "", 0xFFFCD34D);
+        }
+        double next = this.estimateRawClashPower(prop, direction);
+        double delta = next - current;
+        String sign = delta >= 0.0 ? "+" : "";
+        int color = delta >= 0.0 ? 0xFF34D399 : 0xFFF87171;
+        return new ClashPowerPreview(
+            String.format(java.util.Locale.ROOT, "Raw Clash Power %.1f ", current),
+            String.format(java.util.Locale.ROOT, "%s%.1f", sign, delta),
+            String.format(java.util.Locale.ROOT, " = %.1f", next),
+            color
+        );
+    }
+
+    private double estimateRawClashPower(DomainMasteryProperties changedProp, int deltaLevel) {
+        int masteryLevel = this.getDomainMasteryLevel();
+        int barrierPower = adjustedEffectiveLevel(DomainMasteryProperties.BARRIER_POWER, changedProp, deltaLevel);
+        int barrierRef = adjustedEffectiveLevel(DomainMasteryProperties.BARRIER_REFINEMENT, changedProp, deltaLevel);
+        int radiusLevel = adjustedEffectiveLevel(DomainMasteryProperties.RADIUS_BOOST, changedProp, deltaLevel);
+        double radius = 22.0 * Math.max(0.25, 1.0 + radiusLevel * 0.12);
+        double base = 10.0;
+        double hp = 1.0;
+        double duration = 1.0;
+        double form = DomainForm.CLOSED.formFactor;
+        double radiusFactor = PowerCalculator.radiusFactor(radius);
+        double mastery = (1.0 + masteryLevel * 0.04) * (1.0 + barrierPower * 0.06);
+        double flat = masteryLevel;
+        double grade = this.estimateClientGradeMultiplier();
+        double power = base * hp * duration * form * radiusFactor * mastery * grade + flat;
+        double refinement = 1.0 + Math.max(0, barrierRef) * 0.04;
+        return Math.max(0.0, power * refinement);
+    }
+
+    private int adjustedEffectiveLevel(DomainMasteryProperties prop, DomainMasteryProperties changedProp, int deltaLevel) {
+        int level = this.getEffectivePropertyLevel(prop);
+        if (prop == changedProp) {
+            level += deltaLevel;
+        }
+        return Math.max(-5, Math.min(prop.getMaxLevel(), level));
+    }
+
+    private double estimateClientGradeMultiplier() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            return 1.0;
+        }
+        double level = mc.player.experienceLevel;
+        if (level >= 20.0) return 1.45;
+        if (level >= 13.0) return 1.32;
+        if (level >= 11.0) return 1.24;
+        if (level >= 9.0) return 1.16;
+        if (level >= 7.0) return 1.10;
+        if (level >= 4.0) return 1.05;
+        if (level >= 2.0) return 1.02;
+        return 1.0;
+    }
+
+    private static final class ClashPowerPreview {
+        final String prefix;
+        final String delta;
+        final String suffix;
+        final int deltaColor;
+
+        ClashPowerPreview(String prefix, String delta, String suffix, int deltaColor) {
+            this.prefix = prefix;
+            this.delta = delta;
+            this.suffix = suffix;
+            this.deltaColor = deltaColor;
+        }
     }
 
     // ===== FOOTER ACTIONS =====

@@ -15,6 +15,7 @@ import net.mcreator.jujutsucraft.addon.CooldownTrackerEvents;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCommands;
 import net.mcreator.jujutsucraft.addon.ModItems;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
+import net.mcreator.jujutsucraft.addon.clash.ClashSubsystem;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.addon.limb.LimbGameplayHandler;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
@@ -89,9 +90,11 @@ import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.event.entity.living.LivingAttackEvent;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.LivingHurtEvent;
 import net.minecraftforge.event.entity.player.AttackEntityEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -360,6 +363,7 @@ public class BlueRedPurpleNukeMod {
         ModItems.ITEMS.register(modBus);
         modBus.addListener(BlueRedPurpleNukeMod::registerEntityAttributes);
         MinecraftForge.EVENT_BUS.register((Object)this);
+        MinecraftForge.EVENT_BUS.register(ClashSubsystem.getInstance().tickHandler());
         ModNetworking.register();
     }
 
@@ -382,6 +386,24 @@ public class BlueRedPurpleNukeMod {
                 .then(Commands.literal("ring").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashTimingRing(ctx.getSource()))));
     }
 
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
+        ClashSubsystem.getInstance().onServerStopping(event.getServer());
+    }
+
+    @SubscribeEvent
+    public void onPlayerChangedDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            ClashSubsystem.getInstance().onPlayerChangedDimension(player);
+        }
+    }
+
+    @SubscribeEvent
+    public void onLivingDeath(LivingDeathEvent event) {
+        if (event.getEntity() != null) {
+            ClashSubsystem.getInstance().onLivingDeath(event.getEntity());
+        }
+    }
     private static int resetBlackFlashTimingCooldown(CommandSourceStack source) {
         try {
             ServerPlayer player = source.getPlayerOrException();
@@ -4205,3 +4227,7 @@ public class BlueRedPurpleNukeMod {
         }
     }
 }
+
+
+
+

@@ -13,7 +13,7 @@ package net.mcreator.jujutsucraft.addon.clash.model;
  * {@code PowerCalculator}:
  * <ul>
  *   <li>{@link #baseStrength} &mdash; {@code strengthAmplifier + 10} (default {@code 10}).</li>
- *   <li>{@link #hpFactor} &mdash; {@code max(0, (maxHealth - totalDamage * 2) / maxHealth)}.</li>
+ *   <li>{@link #hpFactor} &mdash; {@code max(0, (maxHealth - totalDamage * 2.5) / maxHealth)}.</li>
  *   <li>{@link #durationFactor} &mdash;
  *       {@code min(min(remainingEffectTicks, 1200) / 2400 + 0.5, 1.0)}.</li>
  *   <li>{@link #formFactor} &mdash; the {@code DomainForm.formFactor} column

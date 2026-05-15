@@ -8,6 +8,7 @@ import java.util.UUID;
 import java.util.function.LongSupplier;
 
 import net.mcreator.jujutsucraft.addon.ModNetworking;
+import net.mcreator.jujutsucraft.addon.clash.model.ClashOutcome;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashSession;
 import net.mcreator.jujutsucraft.addon.clash.resolve.ClashResolver;
 import net.mcreator.jujutsucraft.addon.util.DomainForm;
@@ -102,8 +103,8 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
         int domainIdA = getDomainId(a);
         int domainIdB = getDomainId(b);
 
-        dispatchForParticipant(session, a, session.pair.a(), session.pair.b(), session.clashPowerA(), session.clashPowerB(), formIdA, domainIdA, formIdB, domainIdB);
-        dispatchForParticipant(session, b, session.pair.b(), session.pair.a(), session.clashPowerB(), session.clashPowerA(), formIdB, domainIdB, formIdA, domainIdA);
+        dispatchForParticipant(session, a, b, session.pair.a(), session.pair.b(), session.clashPowerA(), session.clashPowerB(), formIdA, domainIdA, formIdB, domainIdB);
+        dispatchForParticipant(session, b, a, session.pair.b(), session.pair.a(), session.clashPowerB(), session.clashPowerA(), formIdB, domainIdB, formIdA, domainIdA);
         dispatchForNearbyViewers(session, a, b, formIdA, domainIdA, formIdB, domainIdB);
     }
 
@@ -131,6 +132,8 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
                 domainIdA,
                 formIdB,
                 domainIdB,
+                getDisplayName(a),
+                getDisplayName(b),
                 session.outcome()
             );
             ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), pkt);
@@ -140,6 +143,7 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
     protected void dispatchForParticipant(
         ClashSession session,
         LivingEntity entity,
+        LivingEntity otherEntity,
         UUID selfUuid,
         UUID otherUuid,
         double selfPower,
@@ -163,9 +167,34 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
             selfDomainId,
             otherFormId,
             otherDomainId,
-            session.outcome()
+            getDisplayName(entity),
+            getDisplayName(otherEntity),
+            outcomeForParticipant(session, selfUuid)
         );
         ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), pkt);
+    }
+
+    private static ClashOutcome outcomeForParticipant(ClashSession session, UUID selfUuid) {
+        ClashOutcome outcome = session.outcome();
+        if (outcome == null || outcome == ClashOutcome.TIE || outcome == ClashOutcome.CANCELLED || selfUuid == null) {
+            return outcome;
+        }
+        boolean selfIsOriginalA = selfUuid.equals(session.pair.a());
+        if (outcome == ClashOutcome.WINNER_A) {
+            return selfIsOriginalA ? ClashOutcome.WINNER_A : ClashOutcome.WINNER_B;
+        }
+        if (outcome == ClashOutcome.WINNER_B) {
+            return selfIsOriginalA ? ClashOutcome.WINNER_B : ClashOutcome.WINNER_A;
+        }
+        return outcome;
+    }
+
+    private static String getDisplayName(LivingEntity entity) {
+        if (entity == null) {
+            return "Enemy";
+        }
+        String name = entity.getName().getString();
+        return name == null || name.isBlank() ? "Enemy" : name;
     }
 
     private static int getFormId(LivingEntity entity) {
@@ -202,3 +231,6 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
         lastSendStates.clear();
     }
 }
+
+
+

@@ -1,9 +1,30 @@
 package net.mcreator.jujutsucraft.addon.clash.resolve;
 
+import java.util.Comparator;
+import java.util.List;
+
+import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
+import net.mcreator.jujutsucraft.init.JujutsucraftModEntities;
+import net.mcreator.jujutsucraft.procedures.JujutsuBarrierUpdateTickProcedure;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.TickTask;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Single choke-point for the {@code Closed_Equivalent_Behavior} loser-effect sequence applied
@@ -91,10 +112,144 @@ public final class OutcomeDelivery {
         if (domain != null && loser.hasEffect(domain)) {
             loser.removeEffect(domain);
         }
+        signalLoserCleanupEntity(loser, nbt);
+        scheduleOwnedBarrierSweeps(loser, nbt);
 
     }
 
-    /**
+
+    private static void scheduleOwnedBarrierSweeps(LivingEntity loser, CompoundTag nbt) {
+        if (!(loser.level() instanceof ServerLevel level)) {
+            return;
+        }
+        Vec3 center = DomainAddonUtils.getDomainCenter(loser);
+        double range = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(level, nbt));
+        String ownerUuid = loser.getUUID().toString();
+        runOwnedBarrierSweep(level, center, range, ownerUuid);
+        if (level.getServer() != null) {
+            level.getServer().tell(new TickTask(level.getServer().getTickCount() + 10, () -> runOwnedBarrierSweep(level, center, range, ownerUuid)));
+            level.getServer().tell(new TickTask(level.getServer().getTickCount() + 30, () -> runOwnedBarrierSweep(level, center, range, ownerUuid)));
+            level.getServer().tell(new TickTask(level.getServer().getTickCount() + 70, () -> runOwnedBarrierSweep(level, center, range, ownerUuid)));
+        }
+    }
+
+    private static void runOwnedBarrierSweep(ServerLevel level, Vec3 center, double range, String ownerUuid) {
+        int cx = (int)Math.round(center.x);
+        int cy = (int)Math.round(center.y);
+        int cz = (int)Math.round(center.z);
+        int scan = (int)Math.ceil(range + 8.0D);
+        int verticalExtra = 18;
+        double radiusSq = (range + 5.0D) * (range + 5.0D);
+        for (int x = cx - scan; x <= cx + scan; x++) {
+            double dx = x - center.x;
+            if (dx * dx > radiusSq) {
+                continue;
+            }
+            for (int y = cy - scan - 2; y <= cy + scan + verticalExtra; y++) {
+                double dy = y - center.y;
+                for (int z = cz - scan; z <= cz + scan; z++) {
+                    double dz = z - center.z;
+                    double horizontalSq = dx * dx + dz * dz;
+                    double distSq = horizontalSq + dy * dy;
+                    boolean inDomainVolume = distSq <= radiusSq || (horizontalSq <= radiusSq && y >= cy - 2 && y <= cy + verticalExtra);
+                    if (!inDomainVolume) {
+                        continue;
+                    }
+                    BlockPos pos = BlockPos.containing(x, y, z);
+                    if (!level.getBlockState(pos).is(BlockTags.create(new ResourceLocation("jujutsucraft:barrier")))) {
+                        continue;
+                    }
+                    BlockEntity be = level.getBlockEntity(pos);
+                    if (be == null || !ownerUuid.equals(resolveBarrierOwner(be))) {
+                        continue;
+                    }
+                    String oldBlock = be.getPersistentData().getString("old_block");
+                    JujutsuBarrierUpdateTickProcedure.execute((LevelAccessor)level, pos.getX(), pos.getY(), pos.getZ());
+                    if (level.getBlockState(pos).is(BlockTags.create(new ResourceLocation("jujutsucraft:barrier"))) && (oldBlock == null || oldBlock.isEmpty())) {
+                        level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
+                    }
+                }
+            }
+        }
+    }
+
+    private static String resolveBarrierOwner(BlockEntity be) {
+        CompoundTag tag = be.getPersistentData();
+        String owner = tag.getString("OWNER_UUID");
+        if (owner == null || owner.isEmpty()) {
+            owner = tag.getString("jjkbrp_owner_uuid");
+        }
+        return owner == null ? "" : owner;
+    }    private static void signalLoserCleanupEntity(LivingEntity loser, CompoundTag nbt) {
+        if (!(loser.level() instanceof ServerLevel level)) {
+            return;
+        }
+        Vec3 center = DomainAddonUtils.getDomainCenter(loser);
+        double range = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(level, nbt));
+        double searchRange = Math.max(8.0, range + 6.0);
+        String ownerUuid = loser.getUUID().toString();
+        List<DomainExpansionEntityEntity> entities = level.getEntitiesOfClass(
+                DomainExpansionEntityEntity.class,
+                new AABB(center.x - searchRange, center.y - searchRange, center.z - searchRange, center.x + searchRange, center.y + searchRange, center.z + searchRange),
+                entity -> true
+        );
+        int signalled = 0;
+        for (DomainExpansionEntityEntity cleanup : entities) {
+            CompoundTag cleanupNbt = cleanup.getPersistentData();
+            String cleanupOwner = cleanupNbt.getString("jjkbrp_owner_uuid");
+            if (cleanupOwner == null || cleanupOwner.isEmpty()) {
+                cleanupOwner = cleanupNbt.getString("OWNER_UUID");
+            }
+            Vec3 cleanupCenter = cleanupNbt.contains("x_pos")
+                    ? new Vec3(cleanupNbt.getDouble("x_pos"), cleanupNbt.getDouble("y_pos"), cleanupNbt.getDouble("z_pos"))
+                    : cleanup.position();
+            boolean owned = ownerUuid.equals(cleanupOwner);
+            boolean claimableAtLoserCenter = (cleanupOwner == null || cleanupOwner.isEmpty()) && cleanupCenter.distanceToSqr(center) <= Math.max(16.0D, range * range * 0.16D);
+            if (!owned && !claimableAtLoserCenter) {
+                continue;
+            }
+            wakeCleanupEntity(cleanup, ownerUuid, center, range);
+            signalled++;
+        }
+        if (signalled == 0) {
+            DomainExpansionEntityEntity spawned = spawnCleanupEntity(level, center, range);
+            if (spawned != null) {
+                wakeCleanupEntity(spawned, ownerUuid, center, range);
+            }
+        }
+    }
+
+    private static void wakeCleanupEntity(DomainExpansionEntityEntity cleanup, String ownerUuid, Vec3 center, double range) {
+        CompoundTag cleanupNbt = cleanup.getPersistentData();
+        cleanupNbt.putString("jjkbrp_owner_uuid", ownerUuid);
+        cleanupNbt.putDouble("x_pos", center.x);
+        cleanupNbt.putDouble("y_pos", center.y);
+        cleanupNbt.putDouble("z_pos", center.z);
+        cleanupNbt.putDouble("range", range);
+        cleanupNbt.putBoolean("Break", true);
+        cleanupNbt.putDouble("cnt_life2", 0.0D);
+        cleanupNbt.putDouble("cnt_break", 0.0D);
+        cleanup.setDeltaMovement(Vec3.ZERO);
+        cleanup.setPos(center.x, center.y, center.z);
+    }
+
+    private static DomainExpansionEntityEntity spawnCleanupEntity(ServerLevel level, Vec3 center, double range) {
+        try {
+            DomainExpansionEntityEntity entity = new DomainExpansionEntityEntity((EntityType) JujutsucraftModEntities.DOMAIN_EXPANSION_ENTITY.get(), (Level) level);
+            entity.moveTo(center.x, center.y, center.z, 0.0F, 0.0F);
+            entity.setNoGravity(true);
+            entity.setSilent(true);
+            entity.setInvulnerable(true);
+            entity.getPersistentData().putDouble("x_pos", center.x);
+            entity.getPersistentData().putDouble("y_pos", center.y);
+            entity.getPersistentData().putDouble("z_pos", center.z);
+            entity.getPersistentData().putDouble("range", range);
+            level.addFreshEntity((Entity) entity);
+            return entity;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }    /**
      * Pure-NBT helper that performs the two "loser defeat flag" writes in the canonical order
      * used by {@link #applyLoserEffects(LivingEntity, long)}: {@code DomainDefeated=true} first
      * (Requirements 7.2 + 2.3), then {@code Failed=true} (Requirement 7.3). This helper is
@@ -135,6 +290,41 @@ public final class OutcomeDelivery {
         nbt.putLong("jjkbrp_clash_result_tick", serverTick);
     }
 
+
+    public void preserveOpenWinnerSureHit(LivingEntity winner, long serverTick) {
+        if (winner == null || winner.level().isClientSide()) {
+            return;
+        }
+        CompoundTag nbt = winner.getPersistentData();
+        boolean open = nbt.getBoolean("jjkbrp_open_form_active")
+            || nbt.getInt("jjkbrp_domain_form_effective") == 2
+            || nbt.getInt("jjkbrp_domain_form_cast_locked") == 2;
+        MobEffect domain = (MobEffect) JujutsucraftModMobEffects.DOMAIN_EXPANSION.get();
+        if (domain != null && winner.hasEffect(domain)) {
+            MobEffectInstance current = winner.getEffect(domain);
+            open = open || (current != null && current.getAmplifier() > 0);
+        }
+        if (!open) {
+            return;
+        }
+        nbt.putBoolean("Failed", false);
+        nbt.putBoolean("Cover", false);
+        nbt.putBoolean("DomainDefeated", false);
+        nbt.putBoolean("DomainAttack", true);
+        nbt.putBoolean("StartDomainAttack", true);
+        nbt.putBoolean("jjkbrp_open_form_active", true);
+        nbt.putInt("jjkbrp_domain_form_effective", 2);
+        nbt.putLong("jjkbrp_open_won_clash_tick", serverTick);
+        if (domain != null && !winner.hasEffect(domain)) {
+            winner.addEffect(new MobEffectInstance(domain, 200, 1, true, false));
+        } else if (domain != null) {
+            MobEffectInstance current = winner.getEffect(domain);
+            if (current != null && current.getAmplifier() <= 0) {
+                winner.removeEffect(domain);
+                winner.addEffect(new MobEffectInstance(domain, Math.max(20, current.getDuration()), 1, true, false));
+            }
+        }
+    }
     /**
      * Writes the {@code jjkbrp_clash_result_tick} persistent-data key on {@code participant}
      * (Requirement 7.7). This single write is the only side effect of the method, so it is safe
@@ -157,3 +347,4 @@ public final class OutcomeDelivery {
         writeResultTickTag(participant.getPersistentData(), serverTick);
     }
 }
+

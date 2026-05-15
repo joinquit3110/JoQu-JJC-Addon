@@ -30,7 +30,7 @@ public final class ClientClashCache {
         this.snapshots.put(packet.sessionId, new CachedSnapshot(packet, normalizedTick));
         ClashOutcome outcome = packet.outcome;
         if (outcome == ClashOutcome.WINNER_A || outcome == ClashOutcome.WINNER_B || outcome == ClashOutcome.TIE) {
-            boolean localWon = outcome == ClashOutcome.TIE || packet.casterPower > packet.opponentPower;
+            boolean localWon = outcome == ClashOutcome.TIE || outcome == ClashOutcome.WINNER_A;
             this.banner = new OutcomeBanner(packet.sessionId, outcome, localWon, normalizedTick);
         } else if (outcome == ClashOutcome.CANCELLED && this.banner != null && this.banner.sessionId.equals(packet.sessionId)) {
             this.banner = null;

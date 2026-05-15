@@ -459,12 +459,14 @@ extends Screen {
         float glow = (float)(Math.sin((double)this.pulseTick * 0.8) * 0.5 + 0.5);
         int titleShadow = (int)(this.openAnim * (100.0f + glow * 100.0f)) << 24 | 0x369A1;
         int titleCol = (int)(this.openAnim * 255.0f) << 24 | 0xE0F2FE;
-        int titleX = this.panelX + (this.drawW - font.width(title)) / 2;
+        float titleScale = Math.max(0.72f, this.fontScale);
+        int titleW = this.getScaledTextWidth(font, title, titleScale);
+        int titleX = this.panelX + (this.drawW - titleW) / 2;
         int titleY = this.panelY + padT;
         this.drawLayeredItem(graphics, new ItemStack((ItemLike)Items.END_CRYSTAL), titleX - 22, titleY - 1, 180.0);
-        this.drawLayeredItem(graphics, new ItemStack((ItemLike)Items.NETHER_STAR), titleX + font.width(title) + 6, titleY - 1, 180.0);
-        this.drawForegroundText(graphics, font, title, titleX + 1, titleY + 1, titleShadow);
-        this.drawForegroundText(graphics, font, title, titleX, titleY, titleCol);
+        this.drawLayeredItem(graphics, new ItemStack((ItemLike)Items.NETHER_STAR), titleX + titleW + 6, titleY - 1, 180.0);
+        this.drawScaledForegroundText(graphics, font, title, titleX + 1, titleY + 1, titleShadow, titleScale);
+        this.drawScaledForegroundText(graphics, font, title, titleX, titleY, titleCol, titleScale);
         int level = this.getDomainMasteryLevel();
         this.drawLevelBadge(graphics, this.panelX + padS, this.panelY + Math.max(3, (int)(this.fontScale * 10.0f)), level);
         if (level >= 5) {
@@ -475,12 +477,12 @@ extends Screen {
             xpText = cur + " / " + nxt + " XP";
         }
         int xpCol = (int)(this.openAnim * 255.0f) << 24 | (level >= 5 ? 16569165 : 9741240);
-        graphics.drawString(font, (String)xpText, this.panelX + padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), xpCol, false);
+        this.drawScaledForegroundText(graphics, font, (String)xpText, this.panelX + padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), xpCol, this.fontScale);
         this.drawXPBar(graphics, this.panelX + padS, this.panelY + Math.max(14, (int)(this.fontScale * 50.0f)), this.drawW - padS * 2, barS);
         int pp = this.getDomainPropertyPoints();
         String ppText = "\u2726 " + pp + " PP";
         int ppCol = (int)(this.openAnim * 255.0f) << 24 | (pp > 0 ? 3462041 : 4937059);
-        graphics.drawString(font, ppText, this.panelX + this.drawW - font.width(ppText) - padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), ppCol, false);
+        this.drawRightAlignedFittedForegroundText(graphics, font, ppText, this.panelX + this.drawW - padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), ppCol, Math.max(28, this.drawW / 3), this.fontScale, 0.55f);
         this.drawFormButtons(graphics, mx, my);
         this.drawFormHint(graphics);
     }
@@ -496,7 +498,8 @@ extends Screen {
         int bgCol;
         Font font = this.font;
         String text = "Lv." + level;
-        int badgeW = font.width(text) + (int)(this.fontScale * 16.0f);
+        float badgeTextScale = Math.max(0.55f, this.fontScale);
+        int badgeW = this.getScaledTextWidth(font, text, badgeTextScale) + (int)(this.fontScale * 16.0f);
         int badgeH = Math.max(8, (int)(this.fontScale * 18.0f));
         int padX = Math.max(2, (int)(this.fontScale * 8.0f));
         int padY = Math.max(1, (int)(this.fontScale * 4.0f));
@@ -534,7 +537,7 @@ extends Screen {
         g.fill(x, y + badgeH - 1, x + badgeW, y + badgeH, bordCol);
         g.fill(x, y, x + 1, y + badgeH, bordCol);
         g.fill(x + badgeW - 1, y, x + badgeW, y + badgeH, bordCol);
-        g.drawString(font, text, x + padX, y + padY, -1, false);
+        this.drawScaledForegroundText(g, font, text, x + padX, y + padY, -1, badgeTextScale);
     }
 
     /**
@@ -589,8 +592,9 @@ extends Screen {
             color = 2278750;
         }
         int y = this.panelY + Math.max(20, (int)(this.fontScale * 122.0f));
-        int x = this.panelX + (this.drawW - font.width(hint)) / 2;
-        graphics.drawString(font, hint, x, y, (int)(this.openAnim * 255.0f) << 24 | color, false);
+        float hintScale = this.resolveFittedTextScale(font, hint, this.drawW - Math.max(12, (int)(this.fontScale * 28.0f)), this.fontScale, 0.5f);
+        int x = this.panelX + (this.drawW - this.getScaledTextWidth(font, hint, hintScale)) / 2;
+        this.drawScaledForegroundText(graphics, font, hint, x, y, (int)(this.openAnim * 255.0f) << 24 | color, hintScale);
     }
 
     /**
@@ -777,9 +781,12 @@ extends Screen {
             int statY = Math.max(statTopLimit + pipH + barToValueGap, pipY + pipH + barToValueGap + Math.max(1, Math.round(this.fontScale)));
             g.fill(pipX, pipY, pipX + barW, pipY + pipH, -14805966);
             int maxLevel = prop.getMaxLevel();
+            int visibleLevel = negativeActive ? Math.min(maxLevel, Math.max(1, Math.abs(effectiveLevel))) : propLevel;
+            int activeBarColor = negativeActive ? 0xFF4444 : propColor;
             for (int p = 0; p < maxLevel; ++p) {
-                int filled = p < propLevel ? a : (int)((float)a * 0.125f);
-                int pipCol = filled << 24 | propColor & 0xFFFFFF;
+                int logicalIndex = negativeActive ? maxLevel - 1 - p : p;
+                int filled = logicalIndex < visibleLevel ? a : (int)((float)a * 0.125f);
+                int pipCol = filled << 24 | activeBarColor & 0xFFFFFF;
                 int segEnd = pipX + (p + 1) * barW / maxLevel;
                 int segStart = pipX + p * barW / maxLevel;
                 if (segEnd - segStart <= 2) {
@@ -874,26 +881,30 @@ extends Screen {
         int propColor = this.getPropertyColor(this.hoveredPropIdx);
         g.pose().pushPose();
         g.pose().translate(0.0, 0.0, 420.0);
+        float tooltipScale = Math.max(0.5f, this.fontScale);
         g.fill(tx, ty, tx + tw, ty + th, -268106220);
         g.fill(tx, ty, tx + tw, ty + 1, -13058568);
         g.fill(tx, ty + th - 1, tx + tw, ty + th, -13058568);
         g.fill(tx, ty, tx + 1, ty + th, -13058568);
         g.fill(tx + tw - 1, ty, tx + tw, ty + th, -13058568);
-        g.drawString(font, name, tx + 10, ty + 7, 0xFF000000 | propColor, false);
+        g.pose().pushPose();
+        g.pose().scale(tooltipScale, tooltipScale, 1.0f);
+        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), 0xFF000000 | propColor, false);
         for (int i = 0; i < descLines.size(); ++i) {
             FormattedCharSequence formattedCharSequence = (FormattedCharSequence)descLines.get(i);
             Objects.requireNonNull(font);
             Objects.requireNonNull(font);
-            g.drawString(font, formattedCharSequence, tx + 10, ty + 7 + 9 + i * 9, -7035976, false);
+            g.drawString(font, formattedCharSequence, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7 + 9 + i * 9) / tooltipScale), -7035976, false);
         }
         if (preview != null) {
             int py = ty + 7 + 9 + descLines.size() * 9 + 4;
-            int x = tx + 10;
-            g.drawString(font, preview.prefix, x, py, 0xFFE5E7EB, false);
+            int x = Math.round((float)(tx + 10) / tooltipScale);
+            int scaledPy = Math.round((float)py / tooltipScale);
+            g.drawString(font, preview.prefix, x, scaledPy, 0xFFE5E7EB, false);
             x += font.width(preview.prefix);
-            g.drawString(font, preview.delta, x, py, preview.deltaColor, false);
+            g.drawString(font, preview.delta, x, scaledPy, preview.deltaColor, false);
             x += font.width(preview.delta);
-            g.drawString(font, preview.suffix, x, py, 0xFFFCD34D, false);
+            g.drawString(font, preview.suffix, x, scaledPy, 0xFFFCD34D, false);
         }
         g.pose().popPose();
     }
@@ -1135,7 +1146,14 @@ extends Screen {
     }
 
     // ===== TEXT AND ITEM HELPERS =====
+    private float normalizeReadableTextScale(float scale) {
+        float floor = Math.min(1.0f, this.fontScale + 0.16f);
+        return Math.max(scale, floor);
+    }
+
     private float resolveFittedTextScale(Font font, String text, int maxWidth, float maxScale, float minScale) {
+        maxScale = this.normalizeReadableTextScale(maxScale);
+        minScale = Math.min(maxScale, this.normalizeReadableTextScale(minScale));
         if (text == null || text.isEmpty()) {
             return maxScale;
         }
@@ -1158,6 +1176,7 @@ extends Screen {
      * @return the resolved scaled text width.
      */
     private int getScaledTextWidth(Font font, String text, float scale) {
+        scale = this.normalizeReadableTextScale(scale);
         return Math.round((float)font.width(text) * scale);
     }
 
@@ -1169,6 +1188,7 @@ extends Screen {
      */
     private int getScaledTextHeight(Font font, float scale) {
         Objects.requireNonNull(font);
+        scale = this.normalizeReadableTextScale(scale);
         return Math.max(1, Math.round(9.0f * scale));
     }
 
@@ -1183,6 +1203,7 @@ extends Screen {
      * @param scale scale used by this method.
      */
     private void drawScaledForegroundText(GuiGraphics graphics, Font font, String text, int x, int y, int color, float scale) {
+        scale = this.normalizeReadableTextScale(scale);
         graphics.pose().pushPose();
         graphics.pose().translate(0.0, 0.0, 200.0);
         graphics.pose().scale(scale, scale, 1.0f);
@@ -1653,17 +1674,20 @@ extends Screen {
         }
         g.pose().pushPose();
         g.pose().translate(0.0, 0.0, 420.0);
+        float tooltipScale = Math.max(0.5f, this.fontScale);
         g.fill(tx, ty, tx + tw, ty + th, -268106220);
         g.fill(tx, ty, tx + tw, ty + 1, -680437);
         g.fill(tx, ty + th - 1, tx + tw, ty + th, -680437);
         g.fill(tx, ty, tx + 1, ty + th, -680437);
         g.fill(tx + tw - 1, ty, tx + tw, ty + th, -680437);
-        g.drawString(font, name, tx + 10, ty + 7, -680437, false);
+        g.pose().pushPose();
+        g.pose().scale(tooltipScale, tooltipScale, 1.0f);
+        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), -680437, false);
         for (int i = 0; i < descLines.size(); ++i) {
             FormattedCharSequence formattedCharSequence = (FormattedCharSequence)descLines.get(i);
             Objects.requireNonNull(font);
             Objects.requireNonNull(font);
-            g.drawString(font, formattedCharSequence, tx + 10, ty + 7 + 9 + i * 9, -1906448, false);
+            g.drawString(font, formattedCharSequence, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7 + 9 + i * 9) / tooltipScale), -1906448, false);
         }
         g.pose().popPose();
     }
@@ -1835,4 +1859,6 @@ extends Screen {
         return this.panelY + this.drawHeaderH + Math.max(4, (int)(this.fontScale * 10.0f));
     }
 }
+
+
 

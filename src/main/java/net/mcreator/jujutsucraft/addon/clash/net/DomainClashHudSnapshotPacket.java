@@ -24,6 +24,8 @@ public final class DomainClashHudSnapshotPacket {
     public final int casterDomainId;
     public final int opponentFormId;
     public final int opponentDomainId;
+    public final String casterName;
+    public final String opponentName;
     @Nullable
     public final ClashOutcome outcome;
 
@@ -38,6 +40,8 @@ public final class DomainClashHudSnapshotPacket {
         int casterDomainId,
         int opponentFormId,
         int opponentDomainId,
+        String casterName,
+        String opponentName,
         @Nullable ClashOutcome outcome
     ) {
         this.sessionId = sessionId;
@@ -50,6 +54,8 @@ public final class DomainClashHudSnapshotPacket {
         this.casterDomainId = casterDomainId;
         this.opponentFormId = opponentFormId;
         this.opponentDomainId = opponentDomainId;
+        this.casterName = casterName == null ? "" : casterName;
+        this.opponentName = opponentName == null ? "" : opponentName;
         this.outcome = outcome;
     }
 
@@ -68,6 +74,8 @@ public final class DomainClashHudSnapshotPacket {
         buf.writeVarInt(this.casterDomainId);
         buf.writeVarInt(this.opponentFormId);
         buf.writeVarInt(this.opponentDomainId);
+        buf.writeUtf(this.casterName, 64);
+        buf.writeUtf(this.opponentName, 64);
         buf.writeByte(ClashOutcome.toByte(this.outcome));
     }
 
@@ -82,20 +90,10 @@ public final class DomainClashHudSnapshotPacket {
         int casterDomainId = buf.readVarInt();
         int opponentFormId = buf.readVarInt();
         int opponentDomainId = buf.readVarInt();
+        String casterName = buf.readUtf(64);
+        String opponentName = buf.readUtf(64);
         ClashOutcome outcome = ClashOutcome.fromByte(buf.readByte());
-        return new DomainClashHudSnapshotPacket(
-            sessionId,
-            casterSideUuid,
-            opponentSideUuid,
-            casterPower,
-            opponentPower,
-            remainingTicks,
-            casterFormId,
-            casterDomainId,
-            opponentFormId,
-            opponentDomainId,
-            outcome
-        );
+        return new DomainClashHudSnapshotPacket(sessionId, casterSideUuid, opponentSideUuid, casterPower, opponentPower, remainingTicks, casterFormId, casterDomainId, opponentFormId, opponentDomainId, casterName, opponentName, outcome);
     }
 
     public void handle(Supplier<NetworkEvent.Context> ctxSupplier) {
@@ -112,13 +110,9 @@ public final class DomainClashHudSnapshotPacket {
         try {
             Class<?> mcClass = Class.forName("net.minecraft.client.Minecraft");
             Object mc = mcClass.getMethod("getInstance").invoke(null);
-            if (mc == null) {
-                return 0L;
-            }
+            if (mc == null) return 0L;
             Object level = mcClass.getField("level").get(mc);
-            if (level == null) {
-                return 0L;
-            }
+            if (level == null) return 0L;
             Object tick = level.getClass().getMethod("getGameTime").invoke(level);
             return tick instanceof Long l ? l.longValue() : 0L;
         } catch (Throwable ignored) {
@@ -128,12 +122,8 @@ public final class DomainClashHudSnapshotPacket {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof DomainClashHudSnapshotPacket that)) {
-            return false;
-        }
+        if (this == o) return true;
+        if (!(o instanceof DomainClashHudSnapshotPacket that)) return false;
         return this.remainingTicks == that.remainingTicks
             && this.casterFormId == that.casterFormId
             && this.casterDomainId == that.casterDomainId
@@ -144,43 +134,13 @@ public final class DomainClashHudSnapshotPacket {
             && Objects.equals(this.sessionId, that.sessionId)
             && Objects.equals(this.casterSideUuid, that.casterSideUuid)
             && Objects.equals(this.opponentSideUuid, that.opponentSideUuid)
+            && Objects.equals(this.casterName, that.casterName)
+            && Objects.equals(this.opponentName, that.opponentName)
             && this.outcome == that.outcome;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(
-            this.sessionId,
-            this.casterSideUuid,
-            this.opponentSideUuid,
-            Float.valueOf(this.casterPower),
-            Float.valueOf(this.opponentPower),
-            Integer.valueOf(this.remainingTicks),
-            Integer.valueOf(this.casterFormId),
-            Integer.valueOf(this.casterDomainId),
-            Integer.valueOf(this.opponentFormId),
-            Integer.valueOf(this.opponentDomainId),
-            this.outcome
-        );
-    }
-
-    @Override
-    public String toString() {
-        return "DomainClashHudSnapshotPacket{"
-            + "sessionId=" + this.sessionId
-            + ", casterSideUuid=" + this.casterSideUuid
-            + ", opponentSideUuid=" + this.opponentSideUuid
-            + ", casterPower=" + this.casterPower
-            + ", opponentPower=" + this.opponentPower
-            + ", remainingTicks=" + this.remainingTicks
-            + ", casterFormId=" + this.casterFormId
-            + ", casterDomainId=" + this.casterDomainId
-            + ", opponentFormId=" + this.opponentFormId
-            + ", opponentDomainId=" + this.opponentDomainId
-            + ", outcome=" + this.outcome
-            + '}';
+        return Objects.hash(this.sessionId, this.casterSideUuid, this.opponentSideUuid, Float.valueOf(this.casterPower), Float.valueOf(this.opponentPower), Integer.valueOf(this.remainingTicks), Integer.valueOf(this.casterFormId), Integer.valueOf(this.casterDomainId), Integer.valueOf(this.opponentFormId), Integer.valueOf(this.opponentDomainId), this.casterName, this.opponentName, this.outcome);
     }
 }
-
-
-

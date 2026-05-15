@@ -591,6 +591,9 @@ public class DomainAddonUtils {
         if (!DomainAddonUtils.isDomainBuildOrActive(player)) {
             return false;
         }
+        if (player.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())) {
+            return true;
+        }
         if (world == null) {
             return true;
         }
@@ -609,6 +612,9 @@ public class DomainAddonUtils {
     public static boolean isDomainBuildOrActive(ServerLevel world, LivingEntity caster) {
         if (!DomainAddonUtils.isDomainBuildOrActive(caster)) {
             return false;
+        }
+        if (caster.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())) {
+            return true;
         }
         if (world == null) {
             return true;

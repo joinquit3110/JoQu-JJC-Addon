@@ -73,7 +73,7 @@ public final class PowerCalculator {
     /**
      * Returns the {@code HP_Factor} term of the {@code Clash_Power} formula.
      *
-     * <p>Per Requirement 4.4, {@code HP_Factor = max(0, (maxHealth - totalDamage * 2) / maxHealth)}.
+     * <p>Damage taken during the clash now weighs slightly more: {@code HP_Factor = max(0, (maxHealth - totalDamage * 2.5) / maxHealth)}.
      * When {@code maxHealth <= 0} the caster's health pool is degenerate and the factor is
      * clamped to {@code 0.0} instead of dividing by zero.
      *
@@ -85,7 +85,7 @@ public final class PowerCalculator {
         if (maxHealth <= 0.0f) {
             return 0.0;
         }
-        return Math.max(0.0, (maxHealth - totalDamage * 2.0) / maxHealth);
+        return Math.max(0.0, (maxHealth - totalDamage * 2.5) / maxHealth);
     }
 
     /**

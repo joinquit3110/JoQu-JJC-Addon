@@ -292,10 +292,12 @@ public final class ClashResolver {
             case WINNER_A -> {
                 delivery.applyLoserEffects(casterB, serverTick);
                 delivery.markResultTick(casterA, serverTick);
+                delivery.preserveOpenWinnerSureHit(casterA, serverTick);
             }
             case WINNER_B -> {
                 delivery.applyLoserEffects(casterA, serverTick);
                 delivery.markResultTick(casterB, serverTick);
+                delivery.preserveOpenWinnerSureHit(casterB, serverTick);
             }
             case TIE -> {
                 delivery.applyLoserEffects(casterA, serverTick);
@@ -438,6 +440,7 @@ public final class ClashResolver {
             }
             if (casterB != null) {
                 delivery.markResultTick(casterB, serverTick);
+                delivery.preserveOpenWinnerSureHit(casterB, serverTick);
             }
         } else {
             // Mirror of the WINNER_B branch with A surviving.
@@ -447,6 +450,7 @@ public final class ClashResolver {
             }
             if (casterA != null) {
                 delivery.markResultTick(casterA, serverTick);
+                delivery.preserveOpenWinnerSureHit(casterA, serverTick);
             }
         }
 
@@ -583,3 +587,4 @@ public final class ClashResolver {
         return syncSink;
     }
 }
+

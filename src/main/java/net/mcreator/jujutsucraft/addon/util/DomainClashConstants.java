@@ -128,7 +128,7 @@ public final class DomainClashConstants {
      * helper of the {@code Clash_Power} formula.
      * <p>Requirement 6.3.</p>
      */
-    public static final double BARRIER_REFINEMENT_PER_LEVEL = 0.04;
+    public static final double BARRIER_REFINEMENT_PER_LEVEL = 0.12;
 
     /**
      * Multiplicative {@code Clash_Power} bonus contributed per level of the overall
@@ -365,3 +365,4 @@ public final class DomainClashConstants {
     @Deprecated
     public static final double ASYMMETRY_REFERENCE_RADIUS = 16.0;
 }
+

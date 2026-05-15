@@ -7,6 +7,7 @@ import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
+import net.mcreator.jujutsucraft.addon.clash.ClashSubsystem;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
@@ -47,6 +48,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -61,6 +63,8 @@ public abstract class DomainMasteryMixin {
     private static final Logger LOGGER = LogUtils.getLogger();
     @Unique
     private static final ThreadLocal<CompoundTag> JJKBRP$maskedIncompleteRuntime = new ThreadLocal();
+    @Unique
+    private static final ThreadLocal<Boolean> JJKBRP$preserveDomainRemoval = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
 
     // ===== INCOMPLETE ACTIVE-BEHAVIOR GATING =====
@@ -258,6 +262,82 @@ public abstract class DomainMasteryMixin {
         }
     }
 
+
+
+    @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/minecraft/world/entity/LivingEntity;m_21195_(Lnet/minecraft/world/effect/MobEffect;)Z", remap=false), remap=false)
+    private static boolean jjkbrp$preserveDomainEffectDuringClash(LivingEntity target, MobEffect effect, LevelAccessor world, double x, double y, double z, Entity caster) {
+        if (effect == JujutsucraftModMobEffects.DOMAIN_EXPANSION.get() && target != null && caster instanceof LivingEntity livingCaster && DomainMasteryMixin.jjkbrp$isActiveClashPair(livingCaster, target)) {
+            JJKBRP$preserveDomainRemoval.set(Boolean.TRUE);
+            return false;
+        }
+        return target.removeEffect(effect);
+    }
+
+    @Inject(method={"execute"}, at={@At(value="RETURN")}, remap=false)
+    private static void jjkbrp$restorePreservedDomainRemoval(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
+        JJKBRP$preserveDomainRemoval.remove();
+    }
+
+    @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/minecraft/nbt/CompoundTag;m_128379_(Ljava/lang/String;Z)V", remap=false), remap=false)
+    private static void jjkbrp$maskBaseClashFlags(CompoundTag tag, String key, boolean value) {
+        if (("Failed".equals(key) || "DomainDefeated".equals(key)) && Boolean.TRUE.equals(JJKBRP$preserveDomainRemoval.get())) {
+            return;
+        }
+        tag.putBoolean(key, value);
+    }
+
+    @Unique
+    private static boolean jjkbrp$isActiveClashPair(LivingEntity caster, LivingEntity target) {
+        if (caster == null || target == null || caster == target) {
+            return false;
+        }
+        if (ClashSubsystem.getInstance().registry().hasActiveSession(caster.getUUID(), target.getUUID())) {
+            return true;
+        }
+        return DomainMasteryMixin.jjkbrp$shouldStartClashInsteadOfBaseInstantWin(caster, target);
+    }
+
+    @Unique
+    private static boolean jjkbrp$shouldStartClashInsteadOfBaseInstantWin(LivingEntity caster, LivingEntity target) {
+        if (caster == null || target == null || caster == target) {
+            return false;
+        }
+        MobEffect domainEffect = (MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get();
+        if (!caster.hasEffect(domainEffect) || !target.hasEffect(domainEffect)) {
+            return false;
+        }
+        if (!DomainAddonUtils.isOpenDomainState(caster) && !DomainAddonUtils.isOpenDomainState(target)) {
+            return false;
+        }
+        Vec3 casterCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
+        Vec3 targetCenter = DomainAddonUtils.getDomainCenter((Entity)target);
+        double casterRadius = DomainMasteryMixin.jjkbrp$resolveClashRadius(caster);
+        double targetRadius = DomainMasteryMixin.jjkbrp$resolveClashRadius(target);
+        return casterCenter.distanceToSqr(targetCenter) <= (casterRadius + targetRadius) * (casterRadius + targetRadius);
+    }
+
+    @Unique
+    private static double jjkbrp$resolveClashRadius(LivingEntity caster) {
+        if (caster == null) {
+            return 22.0;
+        }
+        double mapRadius = 22.0;
+        try {
+            mapRadius = JujutsucraftModVariables.MapVariables.get((LevelAccessor)caster.level()).DomainExpansionRadius;
+        } catch (Exception ignored) {
+            mapRadius = 22.0;
+        }
+        CompoundTag nbt = caster.getPersistentData();
+        double radius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)caster.level(), nbt);
+        if (radius <= 0.0) {
+            radius = mapRadius;
+        }
+        if (DomainAddonUtils.isOpenDomainState(caster)) {
+            double openMul = Math.max(2.5, nbt.getDouble("jjkbrp_open_range_multiplier"));
+            radius = Math.max(radius, mapRadius * openMul);
+        }
+        return Math.max(1.0, radius);
+    }
 
     // ===== POST-TICK MASTERY FLOW =====
     /**
@@ -1612,3 +1692,7 @@ public abstract class DomainMasteryMixin {
     private record OpenFogProfile(Vector3f baseColor, Vector3f accentColor, ParticleOptions floorParticle, ParticleOptions accentParticle, int perimeterCount, int interiorCount, float radiusFactor, float heightFactor, float driftStrength) {
     }
 }
+
+
+
+

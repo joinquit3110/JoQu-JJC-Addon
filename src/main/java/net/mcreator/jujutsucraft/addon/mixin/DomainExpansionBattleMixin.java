@@ -2,6 +2,7 @@ package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
@@ -14,6 +15,7 @@ import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -94,18 +96,25 @@ public abstract class DomainExpansionBattleMixin {
         if (entities.isEmpty()) {
             return;
         }
+        String playerUuid = player.getUUID().toString();
         Comparator<DomainExpansionEntityEntity> distanceComparator = Comparator.comparingDouble(cleanup -> cleanup.distanceToSqr(center.x, center.y, center.z));
-        // Keep the closest non-breaking cleanup entity when possible so later restore logic has a single authoritative cleanup anchor.
-        DomainExpansionEntityEntity keeper = entities.stream().filter(cleanup -> !cleanup.getPersistentData().getBoolean("Break")).min(distanceComparator).orElseGet(() -> entities.stream().min(distanceComparator).orElse(null));
-        for (DomainExpansionEntityEntity cleanup2 : entities) {
-            if (cleanup2 == keeper) continue;
-            cleanup2.discard();
+        List<DomainExpansionEntityEntity> ownedOrClaimable = entities.stream()
+                .filter(cleanup -> DomainExpansionBattleMixin.jjkbrp$isOwnedByOrClaimableFor(cleanup, playerUuid, center))
+                .toList();
+        if (ownedOrClaimable.isEmpty()) {
+            return;
         }
+        // Keep the player's own non-breaking cleanup entity when possible. Never discard cleanup anchors owned by other live casters.
+        DomainExpansionEntityEntity keeper = ownedOrClaimable.stream().filter(cleanup -> !cleanup.getPersistentData().getBoolean("Break")).min(distanceComparator).orElseGet(() -> ownedOrClaimable.stream().min(distanceComparator).orElse(null));
         if (keeper == null) {
             return;
         }
+        for (DomainExpansionEntityEntity cleanup2 : ownedOrClaimable) {
+            if (cleanup2 == keeper) continue;
+            cleanup2.discard();
+        }
         CompoundTag entityNbt = keeper.getPersistentData();
-        entityNbt.putDouble("x_pos", center.x);
+        entityNbt.putString("jjkbrp_owner_uuid", playerUuid);        entityNbt.putDouble("x_pos", center.x);
         entityNbt.putDouble("y_pos", center.y);
         entityNbt.putDouble("z_pos", center.z);
         entityNbt.putDouble("range", actualRadius);
@@ -114,5 +123,35 @@ public abstract class DomainExpansionBattleMixin {
         entityNbt.putDouble("cnt_break", 0.0);
         keeper.setDeltaMovement(Vec3.ZERO);
         keeper.setPos(center.x, center.y, center.z);
+    }
+    @Unique
+    private static boolean jjkbrp$isOwnedByOrClaimableFor(DomainExpansionEntityEntity cleanup, String ownerUuid, Vec3 center) {
+        if (cleanup == null || ownerUuid == null || ownerUuid.isEmpty()) {
+            return false;
+        }
+        CompoundTag nbt = cleanup.getPersistentData();
+        String existingOwner = nbt.getString("jjkbrp_owner_uuid");
+        if (existingOwner == null || existingOwner.isEmpty()) {
+            existingOwner = nbt.getString("OWNER_UUID");
+        }
+        if (ownerUuid.equals(existingOwner)) {
+            return true;
+        }
+        if (existingOwner != null && !existingOwner.isEmpty() && DomainExpansionBattleMixin.jjkbrp$isValidUuid(existingOwner)) {
+            return false;
+        }
+        Vec3 cleanupCenter = nbt.contains("x_pos") ? new Vec3(nbt.getDouble("x_pos"), nbt.getDouble("y_pos"), nbt.getDouble("z_pos")) : cleanup.position();
+        return cleanupCenter.distanceToSqr(center) <= 9.0 && cleanup.distanceToSqr(center.x, center.y, center.z) <= 16.0;
+    }
+
+    @Unique
+    private static boolean jjkbrp$isValidUuid(String raw) {
+        try {
+            UUID.fromString(raw);
+            return true;
+        }
+        catch (IllegalArgumentException ex) {
+            return false;
+        }
     }
 }

@@ -24,6 +24,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
 
 public final class ClashDetector {
@@ -85,6 +86,14 @@ public final class ClashDetector {
                 cancelSession(session);
                 continue;
             }
+            if (!isActiveDomain(casterA) || !isActiveDomain(casterB)) {
+                cancelSession(session);
+                continue;
+            }
+            if (!OverlapCalculator.overlaps(domainCenter(casterA), clashRadius(casterA, mapRadius), domainCenter(casterB), clashRadius(casterB, mapRadius))) {
+                cancelSession(session);
+                continue;
+            }
             if (serverTick - session.createdAtServerTick > (long) session.initialDurationTicks + STALE_SESSION_EXTRA_TICKS) {
                 cancelSession(session);
                 continue;
@@ -114,6 +123,7 @@ public final class ClashDetector {
                 int durationTicks = ClashDurationRules.durationTicks(DomainForm.resolve(casters.get(i)), DomainForm.resolve(casters.get(j)));
                 ClashSession created = registry.create(pair, casters.get(i), casters.get(j), serverTick, durationTicks);
                 if (created != null) {
+                    relocateParticipantsIntoSharedDomain(casters.get(i), casters.get(j), centers.get(i), centers.get(j));
                     ParticipantSnapshot snapA = ParticipantSnapshot.capture(casters.get(i), radii.get(i));
                     ParticipantSnapshot snapB = ParticipantSnapshot.capture(casters.get(j), radii.get(j));
                     if (snapA != null && snapB != null) {
@@ -123,6 +133,57 @@ public final class ClashDetector {
                 }
             }
         }
+    }
+
+
+    private void relocateParticipantsIntoSharedDomain(LivingEntity a, LivingEntity b, Vec3 centerA, Vec3 centerB) {
+        if (a == null || b == null || centerA == null || centerB == null || a.level().isClientSide()) {
+            return;
+        }
+        double physicalRadiusA = physicalDomainRadius(a);
+        double physicalRadiusB = physicalDomainRadius(b);
+        Vec3 smallCenter = physicalRadiusA <= physicalRadiusB ? centerA : centerB;
+        double smallRadius = Math.max(2.0, Math.min(physicalRadiusA, physicalRadiusB));
+        Vec3 direction = centerB.subtract(centerA);
+        if (direction.lengthSqr() < 1.0E-4) {
+            direction = new Vec3(1.0, 0.0, 0.0);
+        } else {
+            direction = direction.normalize();
+        }
+        Vec3 side = new Vec3(-direction.z, 0.0, direction.x);
+        if (side.lengthSqr() < 1.0E-4) {
+            side = new Vec3(1.0, 0.0, 0.0);
+        } else {
+            side = side.normalize();
+        }
+        double spacing = Math.max(0.5, Math.min(1.5, smallRadius * 0.10));
+        Vec3 anchor = smallCenter;
+        teleportIntoClash(a, anchor.add(side.scale(spacing)));
+        teleportIntoClash(b, anchor.subtract(side.scale(spacing)));
+    }
+
+    private double physicalDomainRadius(LivingEntity entity) {
+        if (entity == null) {
+            return 22.0;
+        }
+        try {
+            return Math.max(2.0, DomainAddonUtils.getActualDomainRadius(entity.level(), entity.getPersistentData()));
+        } catch (Exception ignored) {
+            return 22.0;
+        }
+    }
+    private void teleportIntoClash(LivingEntity entity, Vec3 pos) {
+        if (entity == null || pos == null) {
+            return;
+        }
+        entity.stopRiding();
+        entity.setDeltaMovement(Vec3.ZERO);
+        if (entity instanceof ServerPlayer player) {
+            player.connection.teleport(pos.x, pos.y, pos.z, entity.getYRot(), entity.getXRot());
+        } else {
+            entity.teleportTo(pos.x, pos.y, pos.z);
+        }
+        entity.fallDistance = 0.0F;
     }
 
     private boolean isActiveDomain(LivingEntity entity) {
@@ -138,6 +199,9 @@ public final class ClashDetector {
     }
 
     private double clashRadius(LivingEntity entity, double mapRadius) {
+        if (entity != null && DomainForm.resolve(entity) == DomainForm.OPEN) {
+            return Math.max(mapRadius, DomainAddonUtils.getOpenDomainRange(entity.level(), entity));
+        }
         ParticipantSnapshot snap = ParticipantSnapshot.capture(entity, mapRadius);
         return snap == null ? mapRadius : snap.clashRadius();
     }
@@ -185,3 +249,11 @@ public final class ClashDetector {
         }
     }
 }
+
+
+
+
+
+
+
+

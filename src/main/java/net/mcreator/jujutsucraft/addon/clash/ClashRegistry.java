@@ -94,6 +94,13 @@ public final class ClashRegistry {
         return out;
     }
 
+    public boolean hasActiveSession(UUID one, UUID two) {
+        if (one == null || two == null) {
+            return false;
+        }
+        ClashSession session = sessions.get(ParticipantPair.of(one, two));
+        return session != null && !session.resolved();
+    }
     /**
      * Creates and registers a new {@link ClashSession} for the given unordered pair, or returns
      * {@code null} if a session for that pair already exists.
@@ -185,3 +192,5 @@ public final class ClashRegistry {
         candidates.clear();
     }
 }
+
+

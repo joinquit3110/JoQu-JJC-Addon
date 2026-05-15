@@ -116,6 +116,10 @@ public class DomainCleanupEntityRangeMixin {
 
         // Stage 1: preferred owner UUID gives the most stable match when geometry jitters during spin ticks.
         LivingEntity caster = DomainCleanupEntityRangeMixin.jjkbrp$resolveCleanupOwnerByUuid(serverLevel, cleanupNbt, cleanupCenter, cleanupRange);
+        boolean hasExplicitOwner = DomainCleanupEntityRangeMixin.jjkbrp$hasExplicitOwner(cleanupNbt);
+        if (caster == null && hasExplicitOwner) {
+            return DomainCleanupEntityRangeMixin.jjkbrp$bridgeRecentOwnedCleanup(serverLevel, cleanupEntity, cleanupNbt, ci);
+        }
         if (caster == null) {
             // Stage 2: strict center match to avoid incorrectly stealing ownership from nearby domains.
             caster = DomainAddonUtils.findMatchingLiveDomainCaster(serverLevel, cleanupCenter, 4.0);
@@ -129,18 +133,7 @@ public class DomainCleanupEntityRangeMixin {
             }
         }
         if (caster == null) {
-            long lastMatchTick = cleanupNbt.getLong(JJKBRP$LAST_MATCH_TICK_KEY);
-            long gameTime = serverLevel.getGameTime();
-            if (!cleanupNbt.getBoolean("Break") && lastMatchTick > 0L && gameTime - lastMatchTick <= 20L) {
-                // Bridge brief ownership dropouts so cleanup cannot chip or nuke barriers during active spin transitions.
-                cleanupNbt.putBoolean("Break", false);
-                cleanupNbt.putDouble("cnt_break", 0.0);
-                cleanupNbt.putDouble("cnt_life2", 0.0);
-                cleanupEntity.setDeltaMovement(Vec3.ZERO);
-                ci.cancel();
-                return true;
-            }
-            return false;
+            return DomainCleanupEntityRangeMixin.jjkbrp$bridgeRecentOwnedCleanup(serverLevel, cleanupEntity, cleanupNbt, ci);
         }
         Vec3 playerCenter = DomainAddonUtils.getDomainCenter((Entity)caster);
         double actualRadius = DomainAddonUtils.getActualDomainRadius((LevelAccessor)serverLevel, caster.getPersistentData());
@@ -160,6 +153,40 @@ public class DomainCleanupEntityRangeMixin {
         return true;
     }
 
+
+    @Unique
+    private static boolean jjkbrp$hasExplicitOwner(CompoundTag cleanupNbt) {
+        if (cleanupNbt == null || !cleanupNbt.contains(JJKBRP$OWNER_UUID_KEY)) {
+            return false;
+        }
+        String ownerUuidRaw = cleanupNbt.getString(JJKBRP$OWNER_UUID_KEY);
+        if (ownerUuidRaw == null || ownerUuidRaw.isEmpty()) {
+            return false;
+        }
+        try {
+            UUID.fromString(ownerUuidRaw);
+            return true;
+        }
+        catch (IllegalArgumentException ex) {
+            return false;
+        }
+    }
+
+    @Unique
+    private static boolean jjkbrp$bridgeRecentOwnedCleanup(ServerLevel serverLevel, Entity cleanupEntity, CompoundTag cleanupNbt, CallbackInfo ci) {
+        long lastMatchTick = cleanupNbt.getLong(JJKBRP$LAST_MATCH_TICK_KEY);
+        long gameTime = serverLevel.getGameTime();
+        if (!cleanupNbt.getBoolean("Break") && lastMatchTick > 0L && gameTime - lastMatchTick <= 20L) {
+            // Bridge brief ownership dropouts so cleanup cannot chip or nuke barriers during active spin transitions.
+            cleanupNbt.putBoolean("Break", false);
+            cleanupNbt.putDouble("cnt_break", 0.0);
+            cleanupNbt.putDouble("cnt_life2", 0.0);
+            cleanupEntity.setDeltaMovement(Vec3.ZERO);
+            ci.cancel();
+            return true;
+        }
+        return false;
+    }
     @Unique
     private static LivingEntity jjkbrp$resolveCleanupOwnerByUuid(ServerLevel world, CompoundTag cleanupNbt, Vec3 cleanupCenter, double cleanupRange) {
         if (!cleanupNbt.contains(JJKBRP$OWNER_UUID_KEY)) {

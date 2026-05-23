@@ -332,7 +332,9 @@ public class RangeAttackProcedureMixin {
                 return;
             }
             JJKBRP$scaledDomainRadiusOriginal.set(original);
-            mapVars.DomainExpansionRadius = scaled;
+            // Match integer-rounding used by other addon radius mixins so range-attack hits
+            // place sphere blocks at the same boundary as the barrier builder.
+            mapVars.DomainExpansionRadius = Math.max(1.0, Math.round(scaled));
         }
         catch (Exception exception) {
             // empty catch block

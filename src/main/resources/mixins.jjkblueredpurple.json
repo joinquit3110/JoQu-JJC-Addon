@@ -16,6 +16,8 @@
     "DomainBarrierMixin",
     "DomainBarrierRestoreGuardMixin",
     "DomainCreateBarrierMixin",
+    "DomainCreateBarrierFormGuardMixin",
+    "ShrineWombActivePhaseGuardMixin",
     "DomainCastCostMixin",
     "RangeAttackBlackFlashChanceMixin",
     "DomainActiveTickRadiusMixin",

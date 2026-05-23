@@ -64,7 +64,9 @@ public class DomainCleanupEntityRangeMixin {
                 return;
             }
             JJKBRP$originalRadius.set(original);
-            mapVars.DomainExpansionRadius = overrideRadius;
+            // Round to integer so cleanup placement/restoration matches the integer-rounded
+            // scaled radius written by other addon mixins, preventing off-by-fraction floor seams.
+            mapVars.DomainExpansionRadius = Math.max(1.0, Math.round(overrideRadius));
         }
         catch (Exception exception) {
             // empty catch block

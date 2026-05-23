@@ -160,14 +160,31 @@ public final class OutcomeDelivery {
                         continue;
                     }
                     BlockEntity be = level.getBlockEntity(pos);
-                    if (be == null || !ownerUuid.equals(resolveBarrierOwner(be))) {
+                    String blockOwner = be == null ? "" : resolveBarrierOwner(be);
+                    // Only restore blocks that belong to the loser. If a different live caster
+                    // owns this block (i.e. the still-live winner whose domain overlaps), leave
+                    // it intact so the winner's domain stays whole until its own expire/cleanup
+                    // path runs. Without this guard, an incomplete-form winner whose floor
+                    // blocks share coordinates with the loser's volume would lose those tracked
+                    // blocks the moment the loser sweep ran.
+                    if (be == null || blockOwner == null || blockOwner.isEmpty() || !ownerUuid.equals(blockOwner)) {
                         continue;
                     }
-                    String oldBlock = be.getPersistentData().getString("old_block");
+                    // Delegate to the base mod's barrier-restore tick. It reads `old_block` from
+                    // the block entity and rolls the block back to whatever was there before the
+                    // domain placed it. The DomainBarrierRestoreGuardMixin chain still cancels
+                    // this if a different live domain owner now claims the block, which keeps
+                    // overlapping winner blocks safe.
+                    //
+                    // Intentionally not falling back to `setBlock(AIR)` when the restore tick
+                    // declines to act: a barrier left standing eventually rolls back via the
+                    // base mod's own block-entity decay timer or via the cleanup entity's
+                    // sweep, both of which honour `old_block` correctly. Hard-clearing to AIR
+                    // here destroys whatever block the player originally placed at that spot
+                    // (an incomplete-form caster's floor was carved out of pre-existing terrain),
+                    // which is exactly the regression user reported: incomplete-domain blocks
+                    // disappear instead of restoring.
                     JujutsuBarrierUpdateTickProcedure.execute((LevelAccessor)level, pos.getX(), pos.getY(), pos.getZ());
-                    if (level.getBlockState(pos).is(BlockTags.create(new ResourceLocation("jujutsucraft:barrier"))) && (oldBlock == null || oldBlock.isEmpty())) {
-                        level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
-                    }
                 }
             }
         }
@@ -204,7 +221,15 @@ public final class OutcomeDelivery {
                     ? new Vec3(cleanupNbt.getDouble("x_pos"), cleanupNbt.getDouble("y_pos"), cleanupNbt.getDouble("z_pos"))
                     : cleanup.position();
             boolean owned = ownerUuid.equals(cleanupOwner);
-            boolean claimableAtLoserCenter = (cleanupOwner == null || cleanupOwner.isEmpty()) && cleanupCenter.distanceToSqr(center) <= Math.max(16.0D, range * range * 0.16D);
+            // CRITICAL: the unowned-and-near-loser-center "claim" path must not steal cleanup
+            // anchors that actually belong to a still-live winner whose domain happens to share
+            // geometry with the loser's. When the cleanup has no recorded owner, only adopt it
+            // if no other live domain caster is anchored to that cleanup position. Otherwise the
+            // wake call below would overwrite the cleanup's owner to the loser, set Break=true,
+            // and start chewing through the still-live winner's tracked floor blocks.
+            boolean claimableAtLoserCenter = (cleanupOwner == null || cleanupOwner.isEmpty())
+                    && cleanupCenter.distanceToSqr(center) <= Math.max(16.0D, range * range * 0.16D)
+                    && !cleanupAnchoredToLiveOtherDomain(level, cleanupCenter, loser);
             if (!owned && !claimableAtLoserCenter) {
                 continue;
             }
@@ -217,6 +242,29 @@ public final class OutcomeDelivery {
                 wakeCleanupEntity(spawned, ownerUuid, center, range);
             }
         }
+    }
+
+    /**
+     * Returns {@code true} when {@code cleanupCenter} is currently the active domain center of a
+     * live caster other than {@code loser}. The clash loser cleanup path uses this to avoid
+     * adopting (and breaking) cleanup anchors that still belong to a winner whose domain is
+     * geometrically close enough to fall within the loser's claim distance.
+     */
+    private static boolean cleanupAnchoredToLiveOtherDomain(ServerLevel level, Vec3 cleanupCenter, LivingEntity loser) {
+        double scanRadius = 6.0D;
+        AABB scan = new AABB(
+                cleanupCenter.x - scanRadius, cleanupCenter.y - scanRadius, cleanupCenter.z - scanRadius,
+                cleanupCenter.x + scanRadius, cleanupCenter.y + scanRadius, cleanupCenter.z + scanRadius);
+        for (LivingEntity candidate : level.getEntitiesOfClass(LivingEntity.class, scan, e -> e != loser && e.isAlive())) {
+            if (!DomainAddonUtils.isDomainBuildOrActive(level, candidate)) {
+                continue;
+            }
+            Vec3 candidateCenter = DomainAddonUtils.getDomainCenter(candidate);
+            if (candidateCenter.distanceToSqr(cleanupCenter) <= 9.0D) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void wakeCleanupEntity(DomainExpansionEntityEntity cleanup, String ownerUuid, Vec3 center, double range) {

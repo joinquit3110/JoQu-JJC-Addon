@@ -254,6 +254,10 @@ public class DomainExpireBarrierFixMixin {
         }
         boolean hadBarrierBlocks = nbt.getBoolean("jjkbrp_barrier_blocks_placed");
         nbt.remove("jjkbrp_barrier_blocks_placed");
+        // Clear the Shrine/Womb active-phase trigger latch so the next cast can fire its
+        // tick-34 trigger again. Set by ShrineWombActivePhaseGuardMixin when it remaps cnt1
+        // to 34 on the real end-of-build tick.
+        nbt.remove("jjkbrp_active_phase_trigger_fired");
         if (!hadOpenForm || hadBarrierBlocks) {
             double sweepRadius = finalRestoreRadius;
             if (!nbt.contains("x_pos_doma")) {

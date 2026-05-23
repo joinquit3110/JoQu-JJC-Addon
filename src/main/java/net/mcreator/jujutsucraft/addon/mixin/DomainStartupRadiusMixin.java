@@ -60,7 +60,8 @@ public abstract class DomainStartupRadiusMixin {
             }
             JJKBRP$originalRadius.set(original);
             // Temporarily expose the actual domain radius to the remainder of the startup procedure, then restore it on method return.
-            mapVars.DomainExpansionRadius = scaled;
+            // Round to integer so the spherical builder's integer-Y assumptions hold for scaled radii.
+            mapVars.DomainExpansionRadius = Math.max(1.0, Math.round(scaled));
         }
         catch (Exception exception) {
             // empty catch block

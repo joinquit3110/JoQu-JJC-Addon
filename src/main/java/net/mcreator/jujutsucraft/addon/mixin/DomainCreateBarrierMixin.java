@@ -115,7 +115,13 @@ public abstract class DomainCreateBarrierMixin {
                 nbt.putDouble("jjkbrp_radius_multiplier", radiusBonus);
                 if (Math.abs(radiusBonus - 1.0) > 1.0E-4) {
                     nbt.putDouble("jjkbrp_orig_domain_radius", origRadius);
-                    mapVars.DomainExpansionRadius = Math.max(1.0, origRadius * radiusBonus);
+                    // Round to integer so the base mod's spherical-shell builder hits its integer-Y
+                    // assumptions exactly (y_pos == y_floor, modulo stripe checks, floor band bounds).
+                    // Non-integer radii cause the bone ring on Shrine/Self-Embodiment shells to drop,
+                    // floor rows at y_floor to be replaced with in_barrier, and the Shrine/Womb totem
+                    // to spawn at the wrong Y because the downward search exits at y_pos_doma instead
+                    // of y_floor+1.
+                    mapVars.DomainExpansionRadius = Math.max(1.0, Math.round(origRadius * radiusBonus));
                 }
             }
             catch (Exception e) {

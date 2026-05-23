@@ -63,7 +63,11 @@ public class DomainActiveTickRadiusMixin {
         try {
             JujutsucraftModVariables.MapVariables mapVars = JujutsucraftModVariables.MapVariables.get((LevelAccessor)world);
             double original = mapVars.DomainExpansionRadius;
-            double scaled = Math.max(1.0, nbt.getDouble("jjkbrp_base_domain_radius") * radiusMul);
+            // Round scaled radius to integer so the base mod's spherical-shell builder hits its
+            // integer-Y assumptions exactly (y_pos == y_floor stripe checks, floor band bounds).
+            // Non-integer radii drop the bone ring on Shrine/Self-Embodiment and shift the totem
+            // spawn search Y so cleanup totems land on the dome instead of the floor.
+            double scaled = Math.max(1.0, Math.round(nbt.getDouble("jjkbrp_base_domain_radius") * radiusMul));
             if (Math.abs(original - scaled) < 1.0E-4) {
                 return;
             }

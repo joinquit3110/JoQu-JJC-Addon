@@ -486,25 +486,39 @@ public abstract class DomainMasteryMixin {
         long gameTime = world.getGameTime();
         Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
         double baseRadius = nbt.contains("jjkbrp_base_domain_radius") ? nbt.getDouble("jjkbrp_base_domain_radius") : 16.0;
-        double scaledRadius = Math.max(1.0, baseRadius * Math.max(0.5, radiusMul));
+        double normalizedRadiusMul = Math.max(0.5, radiusMul);
+        double scaledRadius = Math.max(1.0, baseRadius * normalizedRadiusMul);
         double range = scaledRadius * 2.0;
         if (!nbt.getBoolean("Failed") && gameTime % 5L == 0L) {
-            DomainMasteryMixin.jjkbrp$sendMalevolentShrineSlashVFX(world, center, range);
+            DomainMasteryMixin.jjkbrp$sendMalevolentShrineSlashVFX(world, center, range, normalizedRadiusMul);
         }
-        if (radiusMul < 1.15) {
+        if (normalizedRadiusMul <= 1.0) {
             return;
         }
-        if (gameTime % 3L != 0L) {
+        // Particle density scales with how much extra volume the scaled domain occupies
+        // compared with the unscaled one. Volume ratio is (radiusMul ^ 3) - 1 for the spillover
+        // beyond the base radius. We pick a low coefficient so the VFX feels denser without
+        // turning into a particle wall: at 1.5x radius the extra spillover is ~2.4x base volume,
+        // and at 2.0x it is ~7x base volume. Mapping these directly to ~6 / ~18 extra electric
+        // sparks per emission keeps the visuals readable on common GPUs.
+        double volumeSpill = Math.max(0.0, Math.pow(normalizedRadiusMul, 3.0) - 1.0);
+        int extraCount = (int)Math.round(Math.min(12.0, Math.max(2.0, volumeSpill * 1.4)));
+        // Throttle the emission cadence further when the radius is very large so the
+        // total particle rate per second stays bounded: 1.15x emits every 3 ticks,
+        // 1.5x every 4 ticks, 2.0x every 6 ticks.
+        long emissionPeriod = normalizedRadiusMul < 1.35 ? 4L : (normalizedRadiusMul < 1.75 ? 5L : 7L);
+        if (gameTime % emissionPeriod != 0L) {
             return;
         }
-        int extraCount = (int)Math.round(Math.max(8.0, (radiusMul - 1.0) * 60.0));
         for (int i = 0; i < extraCount; ++i) {
             double ox = (Math.random() - 0.5) * range * 0.5;
             double oy = (Math.random() - 0.5) * range * 0.25;
             double oz = (Math.random() - 0.5) * range * 0.5;
             DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.ELECTRIC_SPARK, center.x + ox, center.y + 1.0 + oy, center.z + oz, 1, 0.6, 0.3, 0.6, 0.03);
         }
-        int sparkCount = Math.max(4, extraCount / 3);
+        // Crits scale at half the spark rate so they remain accent-only and never out-emit
+        // the primary spark layer.
+        int sparkCount = Math.max(1, extraCount / 5);
         for (int i = 0; i < sparkCount; ++i) {
             double angle = Math.random() * Math.PI * 2.0;
             double r = Math.random() * range * 0.4;
@@ -516,12 +530,17 @@ public abstract class DomainMasteryMixin {
     }
 
     @Unique
-    private static void jjkbrp$sendMalevolentShrineSlashVFX(ServerLevel world, Vec3 center, double range) {
+    private static void jjkbrp$sendMalevolentShrineSlashVFX(ServerLevel world, Vec3 center, double range, double radiusMul) {
         if (world == null || center == null) {
             return;
         }
         double spread = Math.max(1.0, range * 0.25);
-        int count = (int)Math.round(Math.max(16.0, Math.min(4.0 * range, 256.0)));
+        // Keep the base density around the vanilla-sized Shrine, then let count rise slower
+        // than radius so larger domains feel broader instead of proportionally more crowded.
+        // The division by sqrt(radiusMul) intentionally scales density down in both directions as radius
+        // changes, keeping shrunken Shrines from looking overfilled and large ones readable.
+        double softenedCount = 4.0 * range / Math.sqrt(Math.max(0.5, radiusMul));
+        int count = (int)Math.round(Math.max(16.0, Math.min(132.0, softenedCount)));
         String command = "particle jujutsucraft:particle_slash_large " + center.x + " " + center.y + " " + center.z + " " + spread + " " + spread + " " + spread + " 0.01 " + count + " normal";
         world.getServer().getCommands().performPrefixedCommand(new CommandSourceStack(CommandSource.NULL, center, Vec2.ZERO, world, 4, "", net.minecraft.network.chat.Component.literal(""), world.getServer(), null).withSuppressedOutput(), command);
     }

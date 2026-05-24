@@ -29,3 +29,10 @@ mandatory=true
 versionRange="[49,)"
 ordering="AFTER"
 side="BOTH"
+
+[[dependencies.jjkblueredpurple]]
+modId="pehkui"
+mandatory=true
+versionRange="[3.8,)"
+ordering="AFTER"
+side="BOTH"

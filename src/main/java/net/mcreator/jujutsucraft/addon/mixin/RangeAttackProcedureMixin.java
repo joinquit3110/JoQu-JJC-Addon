@@ -11,14 +11,23 @@ import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.entity.PurpleEntity;
 import net.mcreator.jujutsucraft.entity.RedEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
+import net.mcreator.jujutsucraft.init.JujutsucraftModParticleTypes;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
+import net.mcreator.jujutsucraft.procedures.CanSeeSukunaSlashProcedure;
 import net.mcreator.jujutsucraft.procedures.LogicAttackProcedure;
 import net.mcreator.jujutsucraft.procedures.RangeAttackProcedure;
+import net.minecraft.commands.CommandSource;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleOptions;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -29,6 +38,9 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec2;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.registries.ForgeRegistries;
 import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -118,6 +130,7 @@ public class RangeAttackProcedureMixin {
         }
         // Incomplete domains intentionally lose sure-hit behavior, so the entire ranged attack procedure is cancelled before the base logic can fire.
         if (RangeAttackProcedureMixin.jjkblueredpurple$isIncompleteDomainAttack(world, entity, data)) {
+            RangeAttackProcedureMixin.jjkblueredpurple$replayIncompleteShrineVisualHit(world, x, y, z, entity, data, domainStateSource);
             ci.cancel();
             return;
         }
@@ -328,6 +341,9 @@ public class RangeAttackProcedureMixin {
             JujutsucraftModVariables.MapVariables mapVars = JujutsucraftModVariables.MapVariables.get((LevelAccessor)world);
             double original = mapVars.DomainExpansionRadius;
             double scaled = DomainAddonUtils.getActualDomainRadius(world, radiusNbt);
+            if (RangeAttackProcedureMixin.jjkblueredpurple$isShrineDomainSource(radiusSource)) {
+                scaled = Math.max(6.0, scaled);
+            }
             if (Math.abs(original - scaled) < 1.0E-4) {
                 return;
             }
@@ -358,6 +374,71 @@ public class RangeAttackProcedureMixin {
         }
         LivingEntity domainStateSource = RangeAttackProcedureMixin.jjkblueredpurple$resolveDomainStateSource(world, entity, data);
         return domainStateSource != null && domainStateSource.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) && DomainAddonUtils.isIncompleteDomainState(domainStateSource);
+    }
+
+    @Unique
+    private static void jjkblueredpurple$replayIncompleteShrineVisualHit(LevelAccessor world, double x, double y, double z, Entity entity, CompoundTag data, LivingEntity domainStateSource) {
+        if (!(world instanceof ServerLevel) || entity == null || data == null || !RangeAttackProcedureMixin.jjkblueredpurple$isShrineDomainSource(domainStateSource)) {
+            return;
+        }
+        double range = data.getDouble("Range");
+        if (range <= 0.0) {
+            return;
+        }
+        ServerLevel serverLevel = (ServerLevel)world;
+        Vec3 center = new Vec3(x, y, z);
+        AABB hitBox = new AABB(center, center).inflate(range / 2.0);
+        List<Entity> targets = serverLevel.getEntitiesOfClass(Entity.class, hitBox, target -> target instanceof LivingEntity);
+        for (Entity target : targets) {
+            if (target == entity || !LogicAttackProcedure.execute(world, entity, target)) {
+                continue;
+            }
+            RangeAttackProcedureMixin.jjkblueredpurple$sendIncompleteShrineHitVfx(serverLevel, entity, target);
+        }
+    }
+
+    @Unique
+    private static boolean jjkblueredpurple$isShrineDomainSource(LivingEntity domainStateSource) {
+        if (!(domainStateSource instanceof Player)) {
+            return false;
+        }
+        CompoundTag nbt = domainStateSource.getPersistentData();
+        int domainId = (int)Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("skill_domain"));
+        }
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("select"));
+        }
+        return domainId == 1;
+    }
+
+    @Unique
+    private static void jjkblueredpurple$sendIncompleteShrineHitVfx(ServerLevel world, Entity caster, Entity target) {
+        double xPos = target.getX();
+        double yPos = target.getY() + caster.getBbHeight() * 0.5;
+        double zPos = target.getZ();
+        double sizeWidth = target.getBbWidth() * 0.3;
+        double sizeHeight = target.getBbHeight() * 0.3;
+        int count = (int)Math.max(1L, Math.round((sizeHeight + sizeWidth) * 1.5));
+        SoundEvent crush = ForgeRegistries.SOUND_EVENTS.getValue(new ResourceLocation("jujutsucraft:crush"));
+        if (crush != null) {
+            world.playSound(null, BlockPos.containing(xPos, yPos, zPos), crush, SoundSource.NEUTRAL, 0.5F, (float)(1.0 + Math.random() * 0.5));
+        }
+        String command = "particle jujutsucraft:particle_slash " + xPos + " " + yPos + " " + zPos + " " + sizeWidth + " " + sizeHeight + " " + sizeWidth + " 0 " + count + " normal";
+        for (Entity viewer : world.getAllEntities()) {
+            if (!CanSeeSukunaSlashProcedure.execute(world, caster, viewer)) {
+                continue;
+            }
+            world.getServer().getCommands().performPrefixedCommand(new CommandSourceStack(CommandSource.NULL, viewer.position(), Vec2.ZERO, world, 4, "", Component.literal(""), world.getServer(), viewer).withSuppressedOutput(), command);
+        }
+        world.sendParticles((ParticleOptions)ParticleTypes.CRIT, xPos, yPos, zPos, count, sizeWidth, sizeHeight, sizeWidth, 0.5);
+        if (target.isAlive() && Math.random() < 0.5) {
+            ParticleOptions blood = target.getPersistentData().getBoolean("CursedSpirit")
+                    ? (ParticleOptions)JujutsucraftModParticleTypes.PARTICLE_BLOOD_PURPLE.get()
+                    : (ParticleOptions)JujutsucraftModParticleTypes.PARTICLE_BLOOD_RED.get();
+            world.sendParticles(blood, xPos, yPos, zPos, 1, 0.2, 0.2, 0.2, 0.25);
+        }
     }
 
     /**

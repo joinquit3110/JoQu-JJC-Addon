@@ -486,7 +486,7 @@ public abstract class DomainMasteryMixin {
         long gameTime = world.getGameTime();
         Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
         double baseRadius = nbt.contains("jjkbrp_base_domain_radius") ? nbt.getDouble("jjkbrp_base_domain_radius") : 16.0;
-        double normalizedRadiusMul = Math.max(0.5, radiusMul);
+        double normalizedRadiusMul = Math.max(0.25, radiusMul);
         double scaledRadius = Math.max(1.0, baseRadius * normalizedRadiusMul);
         double range = scaledRadius * 2.0;
         if (!nbt.getBoolean("Failed") && gameTime % 5L == 0L) {
@@ -534,13 +534,12 @@ public abstract class DomainMasteryMixin {
         if (world == null || center == null) {
             return;
         }
-        double spread = Math.max(1.0, range * 0.25);
-        // Keep the base density around the vanilla-sized Shrine, then let count rise slower
-        // than radius so larger domains feel broader instead of proportionally more crowded.
-        // The division by sqrt(radiusMul) intentionally scales density down in both directions as radius
-        // changes, keeping shrunken Shrines from looking overfilled and large ones readable.
-        double softenedCount = 4.0 * range / Math.sqrt(Math.max(0.5, radiusMul));
-        int count = (int)Math.round(Math.max(16.0, Math.min(132.0, softenedCount)));
+        double spread = Math.max(0.35, range * 0.25);
+        double densityScale = Math.max(0.08, Math.min(1.0, radiusMul * radiusMul));
+        double softenedCount = 4.0 * range * densityScale / Math.sqrt(Math.max(0.25, radiusMul));
+        int minCount = radiusMul < 0.5 ? 3 : (radiusMul < 0.85 ? 6 : 16);
+        int maxCount = radiusMul < 1.0 ? 36 : 132;
+        int count = (int)Math.round(Math.max(minCount, Math.min(maxCount, softenedCount)));
         String command = "particle jujutsucraft:particle_slash_large " + center.x + " " + center.y + " " + center.z + " " + spread + " " + spread + " " + spread + " 0.01 " + count + " normal";
         world.getServer().getCommands().performPrefixedCommand(new CommandSourceStack(CommandSource.NULL, center, Vec2.ZERO, world, 4, "", net.minecraft.network.chat.Component.literal(""), world.getServer(), null).withSuppressedOutput(), command);
     }

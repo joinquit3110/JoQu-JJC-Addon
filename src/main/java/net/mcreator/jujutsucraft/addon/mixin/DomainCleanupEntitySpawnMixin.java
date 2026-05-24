@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.PehkuiDomainScaleUtil;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionEntityOnInitialEntitySpawnProcedure;
 import net.minecraft.nbt.CompoundTag;
@@ -54,6 +55,7 @@ public class DomainCleanupEntitySpawnMixin {
         cleanupNbt.putBoolean("Break", false);
         cleanupNbt.putDouble("cnt_break", 0.0);
         cleanupNbt.putDouble("cnt_life2", 0.0);
+        PehkuiDomainScaleUtil.applyDecorationScale(cleanupEntity, owner.getPersistentData());
         cleanupEntity.setDeltaMovement(Vec3.ZERO);
         // Move the cleanup entity directly onto the real domain center so future cleanup scans start from the correct location.
         cleanupEntity.setPos(center.x, center.y, center.z);

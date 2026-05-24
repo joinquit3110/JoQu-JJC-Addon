@@ -33,7 +33,7 @@ if errorlevel 1 (
 )
 
 echo [INFO] Dang build mod bang Gradle wrapper...
-call gradlew.bat --no-daemon clean build
+call "%~dp0gradlew.bat" --no-daemon clean build
 if errorlevel 1 (
     echo [ERROR] Build failed. Kiem tra log Gradle o phia tren.
     exit /b 1

@@ -9,6 +9,8 @@ import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.clash.power.PowerCalculator;
+import net.mcreator.jujutsucraft.addon.logic.HeaderLayout;
+import net.mcreator.jujutsucraft.addon.logic.Rect;
 import net.mcreator.jujutsucraft.addon.util.DomainForm;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.minecraft.ChatFormatting;
@@ -37,7 +39,7 @@ extends Screen {
     // Base panel width in screen pixels before UI scaling is applied.
     private static final int PANEL_W = 640;
     // Base panel height in screen pixels before UI scaling is applied.
-    private static final int PANEL_H = 588;
+    private static final int PANEL_H = 682;
     // Base header height used by the animated mastery panel layout.
     private static final int HEADER_H = 154;
     // Base footer height reserved for reset and close buttons.
@@ -120,6 +122,17 @@ extends Screen {
     private static final int BTN_MINUS_BG = 14427686;
     // Hover color for minus buttons that refund or deepen negatives.
     private static final int BTN_MINUS_HV = 0xEF4444;
+    // ===== RESTRAINED HEADER TITLE PALETTE (Issue 1) =====
+    // The "DOMAIN MASTERY" title uses at most two cohesive colors: a light icy-blue base
+    // and its dark emboss/shadow color. The single underline uses one accent color. This
+    // small, cohesive blue-family palette replaces the removed per-character chromatic
+    // colors[] / lineColors[] arrays so the header reads as restrained, not multi-color.
+    // Light base fill color for the title text.
+    private static final int TITLE_BASE_COLOR = 0xE0F2FE;
+    // Dark emboss/outline/shadow color paired with the base (second of the two colors).
+    private static final int TITLE_SHADOW_COLOR = 0x0C4A6E;
+    // Single accent color used for the lone title underline (shared with the panel accent).
+    private static final int TITLE_ACCENT_COLOR = 0x38BDF8;
     // Left edge of the scaled mastery panel.
     private int panelX;
     // Top edge of the scaled mastery panel.
@@ -150,6 +163,7 @@ extends Screen {
     private boolean hoveredReset = false;
     // Whether the close button is currently hovered.
     private boolean hoveredClose = false;
+    private boolean hoveredSukunaSureHit = false;
     // Per-property hover flags for the plus buttons.
     private boolean[] hoveredPlus = new boolean[DomainMasteryProperties.values().length];
     // Per-property hover flags for the minus buttons.
@@ -183,8 +197,8 @@ extends Screen {
         int availW = (int)((float)this.width * 0.9f);
         int availH = (int)((float)this.height * 0.9f);
         this.fontScale = Math.min(1.0f, Math.min((float)availW / 640.0f, (float)availH / 682.0f));
-        this.drawW = (int)(640.0f * this.fontScale);
-        this.drawH = (int)(682.0f * this.fontScale);
+        this.drawW = (int)((float)PANEL_W * this.fontScale);
+        this.drawH = (int)((float)PANEL_H * this.fontScale);
         this.drawHeaderH = (int)(154.0f * this.fontScale);
         this.drawFooterH = (int)(56.0f * this.fontScale);
         this.drawPropRow = (int)(82.0f * this.fontScale);
@@ -312,6 +326,29 @@ extends Screen {
             }
             return true;
         }
+        if (this.shouldShowSukunaSureHitOption() && this.isInRect(mx, my, this.getSukunaSureHitBtnBounds())) {
+            if (this.masteryMutationLocked) {
+                this.playUiLockSound();
+                this.sendMutationLockMessage();
+            } else if (this.isInRect(mx, my, this.getSukunaSureHitSealBtnBounds())) {
+                if (this.isSukunaSureHitUnlocked()) {
+                    this.buySukunaSureHit();
+                    this.playRefundSound();
+                } else {
+                    this.playUiLockSound();
+                }
+            } else if (this.isInRect(mx, my, this.getSukunaSureHitForgeBtnBounds())) {
+                if (this.canBuySukunaSureHit()) {
+                    this.buySukunaSureHit();
+                    this.playUpgradeSound();
+                } else {
+                    this.playUiLockSound();
+                }
+            } else {
+                this.playUiLockSound();
+            }
+            return true;
+        }
         if (this.isInRect(mx, my, this.getResetBtnBounds())) {
             if (this.masteryMutationLocked) {
                 this.playUiLockSound();
@@ -378,8 +415,9 @@ extends Screen {
         }
         this.hoveredReset = this.isInRect(mx, my, this.getResetBtnBounds());
         this.hoveredClose = this.isInRect(mx, my, this.getCloseBtnBounds());
+        this.hoveredSukunaSureHit = this.shouldShowSukunaSureHitOption() && this.isInRect(mx, my, this.getSukunaSureHitBtnBounds());
         // Locked hover tracking allows the screen to show an explanation tooltip even when the underlying action cannot be executed.
-        this.hoveredMutationControl = this.masteryMutationLocked && (this.hoveredFormIdx >= 0 || this.hoveredReset);
+        this.hoveredMutationControl = this.masteryMutationLocked && (this.hoveredFormIdx >= 0 || this.hoveredReset || this.hoveredSukunaSureHit);
         this.hoveredPropIdx = -1;
         for (i = 0; i < DomainMasteryProperties.values().length; ++i) {
             this.hoveredPlus[i] = this.isInRect(mx, my, this.getPlusBtnBounds(i));
@@ -402,6 +440,8 @@ extends Screen {
         this.drawFooter(graphics);
         if (this.masteryMutationLocked && this.hoveredMutationControl) {
             this.drawMutationLockTooltip(graphics, mouseX, mouseY);
+        } else if (this.hoveredSukunaSureHit) {
+            this.drawSukunaSureHitTooltip(graphics, mouseX, mouseY);
         } else if (this.hoveredPropIdx >= 0) {
             this.drawPropertyTooltip(graphics, mouseX, mouseY);
         }
@@ -438,7 +478,8 @@ extends Screen {
         int propStartX = this.getPropertyStartX();
         int propStartY = this.getPropertyStartY();
         int propGridW = this.drawPropColW * 2 + this.drawPropGapX;
-        int propGridH = this.drawPropRow * 5 + this.drawPropGapY * 4;
+        int visibleRows = this.shouldShowSukunaSureHitOption() ? 5 : 5;
+        int propGridH = this.drawPropRow * visibleRows + this.drawPropGapY * (visibleRows - 1);
         for (int i = 1; i <= 4; ++i) {
             int lineY = propStartY + i * this.drawPropRow + (i - 1) * this.drawPropGapY + this.drawPropGapY / 2;
             graphics.fill(propStartX, lineY, propStartX + propGridW, lineY + 1, gridSep);
@@ -449,26 +490,44 @@ extends Screen {
 
     // ===== HEADER AND FORM RENDERING =====
     private void drawHeader(GuiGraphics graphics, int mx, int my) {
-        Object xpText;
+        String xpText;
         Font font = this.font;
-        int padS = Math.max(2, (int)(this.fontScale * 14.0f));
-        int padT = Math.max(4, (int)(this.fontScale * 12.0f));
-        int gapS = Math.max(2, (int)(this.fontScale * 22.0f));
-        int barS = Math.max(3, (int)(this.fontScale * 9.0f));
         String title = "DOMAIN MASTERY";
-        float glow = (float)(Math.sin((double)this.pulseTick * 0.8) * 0.5 + 0.5);
-        int titleShadow = (int)(this.openAnim * (100.0f + glow * 100.0f)) << 24 | 0x369A1;
-        int titleCol = (int)(this.openAnim * 255.0f) << 24 | 0xE0F2FE;
-        float titleScale = Math.max(0.72f, this.fontScale);
-        int titleW = this.getScaledTextWidth(font, title, titleScale);
-        int titleX = this.panelX + (this.drawW - titleW) / 2;
-        int titleY = this.panelY + padT;
-        this.drawLayeredItem(graphics, new ItemStack((ItemLike)Items.END_CRYSTAL), titleX - 22, titleY - 1, 180.0);
-        this.drawLayeredItem(graphics, new ItemStack((ItemLike)Items.NETHER_STAR), titleX + titleW + 6, titleY - 1, 180.0);
-        this.drawScaledForegroundText(graphics, font, title, titleX + 1, titleY + 1, titleShadow, titleScale);
-        this.drawScaledForegroundText(graphics, font, title, titleX, titleY, titleCol, titleScale);
+        int a = (int)(this.openAnim * 255.0f);
+        // Title alpha tracks open-animation progress exactly: Math.round(openAnim * 255),
+        // so it is 0 at openAnim 0 and 255 at openAnim 1.0 (Req 1.5/1.6).
+        int titleAlpha = Math.round(this.openAnim * 255.0f);
+        float pulse = (float)(Math.sin((double)this.pulseTick * 0.65) * 0.5 + 0.5);
+        // Single source of header geometry: pure, Minecraft-free layout math drives the
+        // backdrop region, the title/accent/underline rects, the MASTERY/POINTS pills,
+        // and the XP bar so every layer fits, stays in bounds, and never overlaps.
+        HeaderLayout layout = HeaderLayout.compute(this.fontScale, this.panelX, this.panelY, this.drawW, this.drawHeaderH);
+        this.drawHeaderBackdrop(graphics, layout.headerBounds(), a, pulse);
+        // Title layer (Restrained_Title_Style, Req 1.1/1.2): one fitted draw of the full
+        // "DOMAIN MASTERY" string with a stylized emboss treatment in at most two cohesive
+        // colors (a light base + its dark shadow/outline). No per-character coloring, no
+        // chromatic palette. The fitted scale guarantees the whole string fits inside the
+        // title rect with no truncation/clipping/substitution at every Font_Scale (Req 1.3).
+        Rect titleRect = layout.title();
+        float desiredTitleScale = Math.max(0.92f, this.fontScale * 1.18f);
+        float titleScale = this.resolveFittedTextScale(font, title, titleRect.w(), desiredTitleScale, 0.01f);
+        int titleRenderW = this.getScaledTextWidth(font, title, titleScale);
+        int titleRenderH = this.getScaledTextHeight(font, titleScale);
+        int titleX = titleRect.x() + (titleRect.w() - titleRenderW) / 2;
+        int titleY = titleRect.y() + Math.max(0, (titleRect.h() - titleRenderH) / 2);
+        this.drawRestrainedTitle(graphics, font, title, titleX, titleY, titleAlpha, pulse, titleScale);
+        // Underline layer (Req 1.1/1.2): a single centered underline in one accent color at
+        // full alpha over the layout's underline rect. No multi-color segments or accent bars.
+        Rect underline = layout.underline();
+        if (underline.w() > 0 && underline.h() > 0) {
+            graphics.fill(underline.x(), underline.y(), underline.x() + underline.w(), underline.y() + underline.h(), titleAlpha << 24 | TITLE_ACCENT_COLOR);
+        }
         int level = this.getDomainMasteryLevel();
-        this.drawLevelBadge(graphics, this.panelX + padS, this.panelY + Math.max(3, (int)(this.fontScale * 10.0f)), level);
+        int pp = this.getDomainPropertyPoints();
+        Rect masteryPill = layout.masteryPill();
+        Rect pointsPill = layout.pointsPill();
+        this.drawHeaderStatPill(graphics, masteryPill.x(), masteryPill.y(), masteryPill.w(), masteryPill.h(), "MASTERY", "LV " + level, level >= 5 ? 0xFACC15 : 0x38BDF8);
+        this.drawHeaderStatPill(graphics, pointsPill.x(), pointsPill.y(), pointsPill.w(), pointsPill.h(), "POINTS", pp + " PP", pp > 0 ? 0x34D399 : 0x64748B);
         if (level >= 5) {
             xpText = "MAX XP";
         } else {
@@ -477,14 +536,102 @@ extends Screen {
             xpText = cur + " / " + nxt + " XP";
         }
         int xpCol = (int)(this.openAnim * 255.0f) << 24 | (level >= 5 ? 16569165 : 9741240);
-        this.drawScaledForegroundText(graphics, font, (String)xpText, this.panelX + padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), xpCol, this.fontScale);
-        this.drawXPBar(graphics, this.panelX + padS, this.panelY + Math.max(14, (int)(this.fontScale * 50.0f)), this.drawW - padS * 2, barS);
-        int pp = this.getDomainPropertyPoints();
-        String ppText = "\u2726 " + pp + " PP";
-        int ppCol = (int)(this.openAnim * 255.0f) << 24 | (pp > 0 ? 3462041 : 4937059);
-        this.drawRightAlignedFittedForegroundText(graphics, font, ppText, this.panelX + this.drawW - padS, this.panelY + Math.max(10, (int)(this.fontScale * 36.0f)), ppCol, Math.max(28, this.drawW / 3), this.fontScale, 0.55f);
-        this.drawFormButtons(graphics, mx, my);
-        this.drawFormHint(graphics);
+        Rect xpBar = layout.xpBar();
+        // Center the XP label horizontally over the (now centered, button-width) XP bar and
+        // place it just above the bar, so it reads as a balanced caption instead of an
+        // orphaned label floating at the far left.
+        float xpLabelScale = Math.max(0.55f, this.fontScale * 0.82f);
+        int xpLabelW = this.getScaledTextWidth(font, xpText, xpLabelScale);
+        int xpLabelH = this.getScaledTextHeight(font, xpLabelScale);
+        int xpLabelX = xpBar.x() + (xpBar.w() - xpLabelW) / 2;
+        int xpLabelY = xpBar.y() - xpLabelH - Math.max(1, (int)(this.fontScale * 2.0f));
+        this.drawScaledForegroundText(graphics, font, xpText, xpLabelX, xpLabelY, xpCol, xpLabelScale);
+        this.drawXPBar(graphics, xpBar.x(), xpBar.y(), xpBar.w(), xpBar.h());
+        // Form-selector buttons and the unlocked-status text are positioned from the same
+        // HeaderLayout as the XP bar, so the XP bar keeps its >= 1px gap above the selector
+        // row (Req 1.8) and everything stays consistent at every Font_Scale.
+        this.drawFormButtons(graphics, mx, my, layout);
+        this.drawFormHint(graphics, layout);
+    }
+
+    /**
+     * Renders the "DOMAIN MASTERY" title with the Restrained_Title_Style (Req 1.1/1.2):
+     * a single fitted draw of the full string with a stylized emboss/outline treatment
+     * using at most two cohesive colors (a light base color plus its dark shadow/outline
+     * color). There is no per-character color cycling and no chromatic palette. The title
+     * alpha tracks the open-animation progress and a shared pulse-driven glow is layered
+     * on top so the title brightens with the surrounding panel.
+     *
+     * @param g     render context used to draw the current frame.
+     * @param font  the client font.
+     * @param title the full title string (drawn in one piece, never per-character).
+     * @param x     left edge of the fitted title text.
+     * @param y     top edge of the fitted title text.
+     * @param alpha title alpha = Math.round(openAnim * 255) (0 at openAnim 0, 255 at 1.0).
+     * @param pulse shared pulse value (sin(pulseTick * k) * 0.5 + 0.5) used for the glow.
+     * @param scale the fitted text scale that keeps the full string within the title rect.
+     */
+    private void drawRestrainedTitle(GuiGraphics g, Font font, String title, int x, int y, int alpha, float pulse, float scale) {
+        int clampedAlpha = Math.max(0, Math.min(255, alpha));
+        // Dark emboss/outline drawn first as a 1px drop shadow around the base text. This is
+        // the second of the two cohesive colors; it stays subordinate to the base alpha.
+        int shadowAlpha = (int)((float)clampedAlpha * 0.7f);
+        int shadowCol = shadowAlpha << 24 | TITLE_SHADOW_COLOR;
+        this.drawScaledForegroundText(g, font, title, x + 1, y + 1, shadowCol, scale);
+        this.drawScaledForegroundText(g, font, title, x - 1, y + 1, shadowCol, scale);
+        this.drawScaledForegroundText(g, font, title, x + 1, y - 1, shadowCol, scale);
+        // Base title color drawn on top in one fitted pass.
+        int baseCol = clampedAlpha << 24 | TITLE_BASE_COLOR;
+        this.drawScaledForegroundText(g, font, title, x, y, baseCol, scale);
+        // Shared pulse glow: a faint extra pass of the base color whose alpha follows the
+        // panel's pulse, so the title softly brightens in time with the surrounding panel.
+        int glowAlpha = (int)((float)clampedAlpha * (pulse * 0.35f));
+        if (glowAlpha > 0) {
+            this.drawScaledForegroundText(g, font, title, x, y, glowAlpha << 24 | TITLE_BASE_COLOR, scale);
+        }
+    }
+
+    /**
+     * Draws the restrained header backdrop (Req 1.1): a calm dark fill over the header
+     * bounds whose alpha scales with the open animation, plus a single subtle accent glow
+     * line at the bottom whose intensity follows the shared pulse. No multi-color shards,
+     * stripes, or accent bars — just a cohesive backdrop behind the restrained title.
+     *
+     * @param g            render context used to draw the current frame.
+     * @param headerBounds the header area (above the separator) to fill.
+     * @param alpha        open-animation alpha = Math.round(openAnim * 255).
+     * @param pulse        shared pulse value used to modulate the accent glow.
+     */
+    private void drawHeaderBackdrop(GuiGraphics g, Rect headerBounds, int alpha, float pulse) {
+        int top = headerBounds.y();
+        int left = headerBounds.x();
+        int right = headerBounds.x() + headerBounds.w();
+        int bottom = headerBounds.y() + headerBounds.h();
+        int headerH = headerBounds.h();
+        int clampedAlpha = Math.max(0, Math.min(255, alpha));
+        // Base restrained fill plus a soft vertical gradient in the same blue family.
+        g.fill(left, top, right, bottom, clampedAlpha << 24 | 0x07111F);
+        g.fill(left, top, right, top + Math.max(16, headerH / 4), (int)(this.openAnim * 120.0f) << 24 | 0x172554);
+        g.fill(left, top + headerH / 3, right, bottom, (int)(this.openAnim * 90.0f) << 24 | 0x0B1A2E);
+        // Single accent glow line along the header separator, modulated by the shared pulse.
+        int glowA = (int)(this.openAnim * (90.0f + pulse * 60.0f));
+        g.fill(left, bottom - 2, right, bottom, Math.max(0, Math.min(255, glowA)) << 24 | TITLE_ACCENT_COLOR);
+    }
+
+    private void drawHeaderStatPill(GuiGraphics g, int x, int y, int w, int h, String label, String value, int accent) {
+        Font font = this.font;
+        int a = (int)(this.openAnim * 255.0f);
+        g.fill(x - 1, y - 1, x + w + 1, y + h + 1, (int)(this.openAnim * 75.0f) << 24 | accent);
+        g.fill(x, y, x + w, y + h, a << 24 | 0x08111F);
+        g.fill(x, y, x + Math.max(3, (int)(this.fontScale * 4.0f)), y + h, a << 24 | accent);
+        g.fill(x + Math.max(3, (int)(this.fontScale * 4.0f)), y, x + w, y + 1, (int)(this.openAnim * 120.0f) << 24 | accent);
+        float labelScale = this.resolveFittedTextScale(font, label, Math.max(22, w - 12), 0.56f, 0.42f);
+        float valueScale = this.resolveFittedTextScale(font, value, Math.max(22, w - 12), 0.88f, 0.56f);
+        int textX = x + Math.max(8, (int)(this.fontScale * 10.0f));
+        int labelY = y + Math.max(3, (int)(this.fontScale * 4.0f));
+        int valueY = y + h - this.getScaledTextHeight(font, valueScale) - Math.max(3, (int)(this.fontScale * 4.0f));
+        this.drawScaledForegroundText(g, font, label, textX, labelY, (int)(this.openAnim * 150.0f) << 24 | 0xCBD5E1, labelScale);
+        this.drawScaledForegroundText(g, font, value, textX, valueY, a << 24 | 0xF8FAFC, valueScale);
     }
 
     /**
@@ -571,10 +718,13 @@ extends Screen {
     }
 
     /**
-     * Draws form hint as part of the addon presentation layer.
+     * Draws form hint as part of the addon presentation layer. The status text row is
+     * positioned from the shared {@link HeaderLayout} (its {@code unlockedStatus} rect) so
+     * it stays consistent with the XP bar / form-selector layout (Req 1.8).
      * @param graphics render context used to draw the current frame.
+     * @param layout the shared header layout providing the status text row position.
      */
-    private void drawFormHint(GuiGraphics graphics) {
+    private void drawFormHint(GuiGraphics graphics, HeaderLayout layout) {
         int color;
         String hint;
         Font font = this.font;
@@ -591,35 +741,37 @@ extends Screen {
             hint = "All Domain forms are unlocked";
             color = 2278750;
         }
-        int y = this.panelY + Math.max(20, (int)(this.fontScale * 122.0f));
+        int y = layout.unlockedStatus().y();
         float hintScale = this.resolveFittedTextScale(font, hint, this.drawW - Math.max(12, (int)(this.fontScale * 28.0f)), this.fontScale, 0.5f);
         int x = this.panelX + (this.drawW - this.getScaledTextWidth(font, hint, hintScale)) / 2;
         this.drawScaledForegroundText(graphics, font, hint, x, y, (int)(this.openAnim * 255.0f) << 24 | color, hintScale);
     }
 
     /**
-     * Draws form buttons as part of the addon presentation layer.
+     * Draws form buttons as part of the addon presentation layer. Button geometry is taken
+     * from the shared {@link HeaderLayout} so the buttons stay consistent with the XP bar's
+     * {@code >= 1px} gap above this row (Req 1.8).
      * @param g render context used to draw the current frame.
      * @param mx screen or world coordinate used by this calculation.
      * @param my screen or world coordinate used by this calculation.
+     * @param layout the shared header layout providing the three form-selector rects.
      */
-    private void drawFormButtons(GuiGraphics g, int mx, int my) {
+    private void drawFormButtons(GuiGraphics g, int mx, int my, HeaderLayout layout) {
         Font font = this.font;
         int[] formColors = new int[]{4674921, 165063, 1483594};
         String[] formNames = new String[]{"INCOMPLETE", "CLOSED", "OPEN"};
-        int btnW = Math.max(50, (int)(this.fontScale * 130.0f));
-        int btnH = Math.max(10, (int)(this.fontScale * 28.0f));
-        int gap = Math.max(2, (int)(this.fontScale * 10.0f));
-        int totalW = 3 * btnW + 2 * gap;
-        int startX = this.panelX + (this.drawW - totalW) / 2;
-        int btnY = this.panelY + Math.max(20, (int)(this.fontScale * 82.0f));
+        Rect[] btnRects = new Rect[]{layout.incompleteBtn(), layout.closedBtn(), layout.openBtn()};
         int a = (int)(this.openAnim * 255.0f);
         for (int i = 0; i < 3; ++i) {
             int textAlpha;
             int borderAlpha;
             int bgAlpha;
             int baseColor;
-            int bx = startX + i * (btnW + gap);
+            Rect btnRect = btnRects[i];
+            int bx = btnRect.x();
+            int btnY = btnRect.y();
+            int btnW = btnRect.w();
+            int btnH = btnRect.h();
             boolean isSelected = i == this.selectedForm;
             boolean isHovered = i == this.hoveredFormIdx;
             boolean isLocked = i == 1 && !this.closedUnlocked || i == 2 && !this.openUnlocked;
@@ -671,10 +823,9 @@ extends Screen {
         }
         int selColor = this.selectedForm == 2 && !this.openUnlocked ? 2042167 : formColors[this.selectedForm];
         int indicatorCol = (int)(this.openAnim * 255.0f) << 24 | selColor & 0xFFFFFF;
-        int indicatorY = btnY + btnH + Math.max(1, (int)(this.fontScale * 3.0f));
-        int selBtnW = btnW;
-        int selStartX = startX + this.selectedForm * (selBtnW + gap);
-        g.fill(selStartX, indicatorY, selStartX + selBtnW, indicatorY + Math.max(1, (int)(this.fontScale * 2.0f)), indicatorCol);
+        Rect selRect = btnRects[this.selectedForm];
+        int indicatorY = selRect.y() + selRect.h() + Math.max(1, (int)(this.fontScale * 3.0f));
+        g.fill(selRect.x(), indicatorY, selRect.x() + selRect.w(), indicatorY + Math.max(1, (int)(this.fontScale * 2.0f)), indicatorCol);
     }
 
     // ===== PROPERTY CARD RENDERING =====
@@ -827,6 +978,7 @@ extends Screen {
             int disabledBg = (int)((float)a * 0.2f) << 24 | 0x333333;
             this.drawPropertyControlButton(g, pbx, pby, pbw, pbh, disabledBg, (int)((float)a * 0.3f) << 24 | 0x888888, true);
         }
+        this.drawSukunaSureHitOption(g);
     }
 
     /**
@@ -865,11 +1017,14 @@ extends Screen {
         for (FormattedCharSequence line : descLines) {
             maxW = Math.max(maxW, font.width(line));
         }
-        int tw = maxW + 20;
         Objects.requireNonNull(font);
         int n = descLines.size();
         Objects.requireNonNull(font);
-        int th = 9 + n * 9 + 16 + (preview == null ? 0 : 14);
+        int rawTw = maxW + 20;
+        int rawTh = 9 + n * 9 + 16 + (preview == null ? 0 : 14);
+        float tooltipScale = this.resolveTooltipScale(rawTw, rawTh);
+        int tw = Math.round(rawTw * tooltipScale);
+        int th = Math.round(rawTh * tooltipScale);
         int tx = mx + 16;
         int ty = my - th - 4;
         if (tx + tw > this.width) {
@@ -881,7 +1036,6 @@ extends Screen {
         int propColor = this.getPropertyColor(this.hoveredPropIdx);
         g.pose().pushPose();
         g.pose().translate(0.0, 0.0, 420.0);
-        float tooltipScale = Math.max(0.5f, this.fontScale);
         g.fill(tx, ty, tx + tw, ty + th, -268106220);
         g.fill(tx, ty, tx + tw, ty + 1, -13058568);
         g.fill(tx, ty + th - 1, tx + tw, ty + th, -13058568);
@@ -906,6 +1060,7 @@ extends Screen {
             x += font.width(preview.delta);
             g.drawString(font, preview.suffix, x, scaledPy, 0xFFFCD34D, false);
         }
+        g.pose().popPose();
         g.pose().popPose();
     }
 
@@ -1047,15 +1202,132 @@ extends Screen {
         this.drawScaledForegroundText(g, font, text, textX, textY, textCol, textScale);
     }
 
+    private void drawSukunaSureHitOption(GuiGraphics g) {
+        if (!this.shouldShowSukunaSureHitOption()) {
+            return;
+        }
+        int[] bounds = this.getSukunaSureHitBtnBounds();
+        int px = bounds[0];
+        int py = bounds[1];
+        Font font = this.font;
+        boolean unlocked = this.isSukunaSureHitUnlocked();
+        boolean canBuy = !this.masteryMutationLocked && this.canBuySukunaSureHit();
+        int a = (int)(this.openAnim * 255.0f);
+        int propColor = 0xEF4444;
+        int bgA = this.hoveredSukunaSureHit ? 55 : 30;
+        int cardPad = Math.max(1, (int)(this.fontScale * 2.0f));
+        int stripW = Math.max(2, (int)(this.fontScale * 5.0f));
+        int topStripH = Math.max(1, (int)(this.fontScale * 3.0f));
+        int iconPad = Math.max(5, (int)(this.fontScale * 8.0f));
+        int textGap = Math.max(7, (int)(this.fontScale * 8.0f));
+        int slotSize = 18;
+        int controlLaneW = Math.max(32, (int)(this.fontScale * 42.0f));
+        int cardBg = (int)((float)bgA * this.openAnim) << 24 | propColor;
+        g.fill(px + cardPad, py + cardPad, px + this.drawPropColW - cardPad, py + this.drawPropRow - cardPad, cardBg);
+        int stripCol = a << 24 | propColor;
+        g.fill(px + cardPad, py + cardPad, px + stripW, py + this.drawPropRow - cardPad, stripCol);
+        if (this.hoveredSukunaSureHit) {
+            int hlCol = (int)(this.openAnim * 204.0f) << 24 | propColor;
+            g.fill(px + stripW, py + cardPad, px + this.drawPropColW - cardPad, py + topStripH, hlCol);
+        }
+        int slotX = px + iconPad - 1;
+        int slotY = py + Math.max(6, (int)(this.fontScale * 7.0f)) + 1;
+        g.fill(slotX, slotY, slotX + slotSize, slotY + slotSize, -1072687072);
+        g.fill(slotX, slotY, slotX + slotSize, slotY + 1, -10784379);
+        g.fill(slotX, slotY + slotSize - 1, slotX + slotSize, slotY + slotSize, -13945276);
+        g.fill(slotX, slotY, slotX + 1, slotY + slotSize, -10784379);
+        g.fill(slotX + slotSize - 1, slotY, slotX + slotSize, slotY + slotSize, -13945276);
+        this.drawLayeredItem(g, new ItemStack((ItemLike)Items.NETHER_STAR), slotX + 1, slotY + 1, 160.0);
+        int contentLeft = slotX + slotSize + textGap;
+        int headerRight = px + this.drawPropColW - Math.max(7, (int)(this.fontScale * 8.0f));
+        String name = "Cleave Covenant";
+        int statusW = Math.max(28, (int)(this.fontScale * 34.0f));
+        int headerMaxW = Math.max(24, headerRight - contentLeft - statusW - Math.max(5, (int)(this.fontScale * 6.0f)));
+        float nameScale = this.resolveFittedTextScale(font, name, headerMaxW, 0.88f, 0.58f);
+        int headerTextY = py + Math.max(6, (int)(this.fontScale * 7.0f)) + 1;
+        this.drawScaledForegroundText(g, font, name, contentLeft, headerTextY, a << 24 | 0xF1F5F9, nameScale);
+        this.drawRightAlignedFittedForegroundText(g, font, unlocked ? "ON" : "5 PP", headerRight, headerTextY, a << 24 | (unlocked ? 0xFCA5A5 : 0xFCD34D), statusW, 0.82f, 0.58f);
+        int pipX = px + iconPad;
+        int contentRight = px + this.drawPropColW - Math.max(8, (int)(this.fontScale * 9.0f));
+        int barW = Math.max(18, contentRight - pipX);
+        int pipH = Math.max(2, (int)(this.fontScale * 5.0f));
+        int pipY = py + Math.max(31, (int)(this.fontScale * 34.0f));
+        g.fill(pipX, pipY, pipX + barW, pipY + pipH, -14805966);
+        g.fill(pipX + 1, pipY, pipX + barW - 1, pipY + pipH, unlocked ? a << 24 | 0xEF4444 : (int)((float)a * 0.125f) << 24 | 0xEF4444);
+        String statText = unlocked ? "Sure-hit forged" : "Costs 5 PP";
+        float statScale = this.resolveFittedTextScale(font, statText, Math.max(24, contentRight - (px + iconPad)), 0.58f, 0.46f);
+        this.drawScaledForegroundText(g, font, statText, px + iconPad, pipY + pipH + Math.max(4, (int)(this.fontScale * 5.0f)), a << 24 | (unlocked ? 0xEF4444 : 0x475569), statScale);
+        this.drawSukunaSureHitTextButton(g, this.getSukunaSureHitSealBtnBounds(), "SEALED", unlocked && !this.masteryMutationLocked, 0xDC2626, 0xEF4444);
+        this.drawSukunaSureHitTextButton(g, this.getSukunaSureHitForgeBtnBounds(), "FORGE", canBuy, 0x59669, 0x10B981);
+    }
+
+    private void drawSukunaSureHitTextButton(GuiGraphics g, int[] bounds, String text, boolean enabled, int baseColor, int hoverColor) {
+        Font font = this.font;
+        int a = (int)(this.openAnim * 255.0f);
+        int x = bounds[0];
+        int y = bounds[1];
+        int w = bounds[2];
+        int h = bounds[3];
+        int fill = enabled ? a << 24 | (this.hoveredSukunaSureHit ? hoverColor : baseColor) : (int)((float)a * 0.2f) << 24 | 0x333333;
+        int textCol = enabled ? -1 : (int)((float)a * 0.36f) << 24 | 0x9CA3AF;
+        g.fill(x, y, x + w, y + h, fill);
+        g.fill(x, y, x + w, y + 1, enabled ? a << 24 | 0xFCA5A5 : (int)((float)a * 0.3f) << 24 | 0x555555);
+        g.fill(x, y + h - 1, x + w, y + h, enabled ? a << 24 | 0x7F1D1D : (int)((float)a * 0.3f) << 24 | 0x555555);
+        float scale = this.resolveFittedTextScale(font, text, w - Math.max(4, (int)(this.fontScale * 6.0f)), 0.72f, 0.5f);
+        this.drawScaledForegroundText(g, font, text, x + (w - this.getScaledTextWidth(font, text, scale)) / 2, y + (h - this.getScaledTextHeight(font, scale)) / 2, textCol, scale);
+    }
+
+    private void drawSukunaSureHitTooltip(GuiGraphics g, int mx, int my) {
+        Font font = this.font;
+        String name = "Cleave Covenant";
+        String desc = this.isSukunaSureHitUnlocked()
+                ? "A binding vow has sealed Malevolent Shrine into its incomplete shell. Your next incomplete Shrine keeps its guaranteed cleave field, then refunds automatically if the vow is broken by changing form or duration."
+                : "Forge a ruthless Sukuna-only vow: sacrifice five Domain Property Points to let incomplete Malevolent Shrine inherit the true sure-hit cleave field. The vow appears only while the required Shrine setup is valid and refunds itself if invalidated.";
+        int maxDescWidth = Math.max(180, Math.min(320, this.width / 2));
+        List<FormattedCharSequence> descLines = font.split((FormattedText)Component.literal((String)desc), maxDescWidth);
+        int maxW = font.width(name);
+        for (FormattedCharSequence line : descLines) {
+            maxW = Math.max(maxW, font.width(line));
+        }
+        float tooltipScale = this.resolveTooltipScale(maxW + 20, 9 + descLines.size() * 9 + 16);
+        int tw = Math.round((maxW + 20) * tooltipScale);
+        int th = Math.round((9 + descLines.size() * 9 + 16) * tooltipScale);
+        int tx = mx + 16;
+        int ty = my - th - 4;
+        if (tx + tw > this.width) {
+            tx = mx - tw - 4;
+        }
+        if (ty < 0) {
+            ty = my + 16;
+        }
+        g.pose().pushPose();
+        g.pose().translate(0.0, 0.0, 420.0);
+        g.fill(tx, ty, tx + tw, ty + th, -268106220);
+        g.fill(tx, ty, tx + tw, ty + 1, -450095);
+        g.fill(tx, ty + th - 1, tx + tw, ty + th, -450095);
+        g.fill(tx, ty, tx + 1, ty + th, -450095);
+        g.fill(tx + tw - 1, ty, tx + tw, ty + th, -450095);
+        g.pose().pushPose();
+        g.pose().scale(tooltipScale, tooltipScale, 1.0f);
+        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), 0xFFFF5555, false);
+        for (int i = 0; i < descLines.size(); ++i) {
+            g.drawString(font, descLines.get(i), Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 16 + i * 9) / tooltipScale), -1906448, false);
+        }
+        g.pose().popPose();
+        g.pose().popPose();
+    }
+
     // ===== LAYOUT HELPERS =====
     private int[] getFormBtnBounds(int i) {
-        int btnW = Math.max(50, (int)(this.fontScale * 130.0f));
-        int btnH = Math.max(10, (int)(this.fontScale * 28.0f));
-        int gap = Math.max(2, (int)(this.fontScale * 10.0f));
-        int totalW = 3 * btnW + 2 * gap;
-        int startX = this.panelX + (this.drawW - totalW) / 2;
-        int btnY = this.panelY + Math.max(20, (int)(this.fontScale * 82.0f));
-        return new int[]{startX + i * (btnW + gap), btnY, btnW, btnH};
+        // Drive hit-testing from the same HeaderLayout the buttons are rendered from, so
+        // the clickable region always matches the drawn button (Req 1.8 consistency).
+        HeaderLayout layout = HeaderLayout.compute(this.fontScale, this.panelX, this.panelY, this.drawW, this.drawHeaderH);
+        Rect r = switch (i) {
+            case 1 -> layout.closedBtn();
+            case 2 -> layout.openBtn();
+            default -> layout.incompleteBtn();
+        };
+        return new int[]{r.x(), r.y(), r.w(), r.h()};
     }
 
     /**
@@ -1104,6 +1376,31 @@ extends Screen {
      */
     private int[] getResetBtnBounds() {
         return new int[]{this.panelX + Math.max(4, (int)(this.fontScale * 12.0f)), this.panelY + this.drawH - this.drawFooterH + Math.max(2, (int)(this.fontScale * 8.0f)), Math.max(40, (int)(this.fontScale * 110.0f)), Math.max(10, (int)(this.fontScale * 26.0f))};
+    }
+
+    private int[] getSukunaSureHitBtnBounds() {
+        int propStartX = this.getPropertyStartX();
+        int row = 4;
+        int col = 1;
+        int x = propStartX + col * (this.drawPropColW + this.drawPropGapX);
+        int y = this.getPropertyStartY() + row * (this.drawPropRow + this.drawPropGapY);
+        return new int[]{x, y, this.drawPropColW, this.drawPropRow};
+    }
+
+    private int[] getSukunaSureHitForgeBtnBounds() {
+        int[] card = this.getSukunaSureHitBtnBounds();
+        int gap = Math.max(4, (int)(this.fontScale * 5.0f));
+        int btnW = Math.max(34, (int)(this.fontScale * 46.0f));
+        int btnH = Math.max(11, (int)(this.fontScale * 15.0f));
+        int btnY = card[1] + card[3] - btnH - Math.max(2, (int)(this.fontScale * 4.0f));
+        int btnX = card[0] + card[2] - btnW - Math.max(3, (int)(this.fontScale * 5.0f));
+        return new int[]{btnX, btnY, btnW, btnH};
+    }
+
+    private int[] getSukunaSureHitSealBtnBounds() {
+        int[] forge = this.getSukunaSureHitForgeBtnBounds();
+        int gap = Math.max(4, (int)(this.fontScale * 5.0f));
+        return new int[]{forge[0] - forge[2] - gap, forge[1], forge[2], forge[3]};
     }
 
     /**
@@ -1166,6 +1463,10 @@ extends Screen {
         }
         float fittedScale = (float)maxWidth / (float)rawWidth;
         return Math.max(minScale, Math.min(maxScale, fittedScale));
+    }
+
+    private float resolveTooltipScale(int rawWidth, int rawHeight) {
+        return 1.0f;
     }
 
     /**
@@ -1442,6 +1743,45 @@ extends Screen {
         }
     }
 
+    private boolean shouldShowSukunaSureHitOption() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            return false;
+        }
+        try {
+            return mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).resolve().map(DomainMasteryData::canShowSukunaIncompleteSureHit).orElse(false);
+        }
+        catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isSukunaSureHitUnlocked() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            return false;
+        }
+        try {
+            return mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).resolve().map(DomainMasteryData::isSukunaIncompleteSureHitUnlocked).orElse(false);
+        }
+        catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean canBuySukunaSureHit() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            return false;
+        }
+        try {
+            return mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).resolve().map(DomainMasteryData::canPurchaseSukunaIncompleteSureHit).orElse(false);
+        }
+        catch (Exception e) {
+            return false;
+        }
+    }
+
     /**
      * Returns domain xp for the current addon state.
      * @return the resolved domain xp.
@@ -1642,6 +1982,11 @@ extends Screen {
         ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.DomainPropertyPacket(6, propIdx));
     }
 
+    private void buySukunaSureHit() {
+        int operation = this.isSukunaSureHitUnlocked() ? ModNetworking.DomainPropertyPacket.OP_SUKUNA_INCOMPLETE_SUREHIT_CLEAR : ModNetworking.DomainPropertyPacket.OP_SUKUNA_INCOMPLETE_SUREHIT;
+        ModNetworking.CHANNEL.sendToServer((Object)new ModNetworking.DomainPropertyPacket(operation, 0));
+    }
+
     /**
      * Performs reset all for this addon component.
      */
@@ -1828,6 +2173,9 @@ extends Screen {
         }
         if (this.hoveredReset) {
             return 400;
+        }
+        if (this.hoveredSukunaSureHit) {
+            return 402;
         }
         if (this.hoveredClose) {
             return 401;

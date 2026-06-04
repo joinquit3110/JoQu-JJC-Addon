@@ -18,6 +18,9 @@ import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.clash.ClashSubsystem;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.addon.limb.LimbGameplayHandler;
+import net.mcreator.jujutsucraft.addon.logic.DustOverlayFormat;
+import net.mcreator.jujutsucraft.addon.logic.FugaCooldownClear;
+import net.mcreator.jujutsucraft.addon.logic.StaleStateReconciler;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.yuta.YutaFakePlayerCommands;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
@@ -378,6 +381,7 @@ public class BlueRedPurpleNukeMod {
         DomainMasteryCommands.register(dispatcher);
         YutaFakePlayerCommands.register(dispatcher);
         dispatcher.register(Commands.literal("jjkbrp_bf_reset_timing_cd").requires(src -> src.hasPermission(0)).executes(ctx -> BlueRedPurpleNukeMod.resetBlackFlashTimingCooldown(ctx.getSource())));
+        dispatcher.register(Commands.literal("jjkbrp_platform_test").requires(src -> src.hasPermission(0)).executes(ctx -> BlueRedPurpleNukeMod.testShrinePlatform(ctx.getSource())));
         dispatcher.register(Commands.literal("jjkbrp_bf_test_effects").requires(src -> src.hasPermission(0))
                 .then(Commands.literal("completion").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashCompletionEffects(ctx.getSource())))
                 .then(Commands.literal("blackflash").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashHudFeedback(ctx.getSource(), true, true)))
@@ -389,6 +393,32 @@ public class BlueRedPurpleNukeMod {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         ClashSubsystem.getInstance().onServerStopping(event.getServer());
+    }
+
+    /**
+     * Diagnostic: spawns a wide invisible solid platform ~2.5 blocks above the player so we can
+     * verify the collision entity actually carries a walkable AABB in this modpack (independent of
+     * the shrine spawn path). In creative, fly up and try to stand on it. It self-cleans via the
+     * platform's stale-grace timer once it stops being kept alive.
+     */
+    private static int testShrinePlatform(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null || !(player.level() instanceof ServerLevel level)) {
+            return 0;
+        }
+        net.mcreator.jujutsucraft.addon.util.ShrinePlatformEntity platform =
+                new net.mcreator.jujutsucraft.addon.util.ShrinePlatformEntity(
+                        net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry.SHRINE_PLATFORM.get(), level);
+        platform.setPlatformSize(8.0F, 1.0F);
+        double y = player.getY() + 2.5D;
+        platform.moveTo(player.getX(), y, player.getZ(), 0.0F, 0.0F);
+        platform.keepAlive(level.getGameTime());
+        boolean added = level.addFreshEntity(platform);
+        source.sendSuccess(() -> Component.literal("[jjkbrp] platform spawned=" + added
+                + " at y=" + String.format("%.2f", y)
+                + " id=" + platform.getId()
+                + " bb=" + platform.getBoundingBox()), false);
+        return 1;
     }
 
     @SubscribeEvent
@@ -496,8 +526,152 @@ public class BlueRedPurpleNukeMod {
             BlueRedPurpleNukeMod.clearGojoTeleportRuntimeState(player2);
             BlueRedPurpleNukeMod.clearBlackFlashRuntimeState(player2);
             BlueRedPurpleNukeMod.removeBlackFlashBlessingWaveSessions(playerId);
+            // Clear any persisted Sukuna Fuga dust reward so no stale reward survives across relog (Req 5.6).
+            // The helper sets dust_amount = 0 and clears OVERLAY1/OVERLAY2; the reward flag is removed separately.
+            ModNetworking.clearSukunaFugaDustOverlay(player2);
+            player2.getPersistentData().remove("jjkbrp_sukuna_fuga_dust_locked_full");
             LimbGameplayHandler.forgetPlayer(playerId);
         }
+    }
+
+    @SubscribeEvent
+    /**
+     * Reconciles leftover Sukuna Incomplete Domain Shrine addon state at player login (Issue 4).
+     *
+     * <p>For a Sukuna ({@code charId == 1}) {@link ServerPlayer}, this builds a
+     * {@link StaleStateReconciler.AddonSessionState} from the live NBT/capability reads and
+     * delegates the "clean baseline vs. preserve" decision to the pure
+     * {@link StaleStateReconciler}. When the reconciled result differs from the live state —
+     * i.e. there is stale reward/overlay/surehit/cooldown state and no genuinely-active shrine —
+     * the addon writes the {@code Clean_Baseline} back (zero dust + clear overlay, remove the
+     * reward flag, clear the three surehit flags, clear the addon-imposed Fuga cooldown) and
+     * syncs the overlay and cooldown to the client (Requirements 7.1–7.5). A genuinely-active
+     * shrine is preserved untouched (Requirement 7.7), and other characters are never altered
+     * (Requirement 7.6).
+     *
+     * <p>The {@code jjkbrp_stale_reconcile_ticks} safety window is seeded so the per-tick
+     * re-check converges within 20 server ticks even if the capability/world is not fully
+     * ready at the exact login instant.
+     *
+     * @param event context data supplied by the current callback or network pipeline.
+     */
+    public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        // Run the reconciliation immediately at login. The shared helper restricts itself to
+        // Sukuna (Req 7.6) and only writes back when stale state is present with no genuinely-
+        // active shrine (Req 7.7). It returns false for other characters, in which case no
+        // safety window is seeded (no reads/writes happen for them).
+        if (BlueRedPurpleNukeMod.reconcileSukunaStaleState(player)) {
+            // Seed the safety window so the per-tick re-check (CooldownTrackerEvents) re-runs
+            // reconciliation within 20 server ticks of login even if the capability/world was not
+            // fully ready at this instant (Req 7.1, 7.5).
+            player.getPersistentData().putInt("jjkbrp_stale_reconcile_ticks", 20);
+        }
+    }
+
+    /**
+     * Builds the live {@link StaleStateReconciler.AddonSessionState}, delegates the
+     * clean-baseline-vs-preserve decision to {@link StaleStateReconciler#reconcile}, and — only
+     * when the reconciled result differs from the live state — writes the {@code Clean_Baseline}
+     * back via the {@code ModNetworking} helpers and syncs the overlay and cooldown to the client
+     * (Requirements 7.1–7.5).
+     *
+     * <p>Shared by {@link #onPlayerLoggedIn} and the 20-tick per-tick safety re-check in
+     * {@code CooldownTrackerEvents.onPlayerTick} so both paths run identical reconcile +
+     * write-back logic. The re-check converges within 20 server ticks even if the
+     * capability/world was not fully ready at the exact login instant.</p>
+     *
+     * <p>Restricted to Sukuna ({@code charId == 1}); for other characters no live reads or
+     * writes are performed and {@code false} is returned (Requirement 7.6). A genuinely-active
+     * shrine is preserved untouched (Requirement 7.7).</p>
+     *
+     * @param player the server player to reconcile.
+     * @return {@code true} iff the player is Sukuna and the reconciliation ran; {@code false}
+     *         for other characters.
+     */
+    static boolean reconcileSukunaStaleState(ServerPlayer player) {
+        JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+        int charId = (int)Math.round(vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique);
+        // Req 7.6: restrict the reconciliation to Sukuna so no dust/overlay/surehit/cooldown
+        // state is touched for other characters. reconcile() already no-ops for charId != 1, but
+        // gating here keeps the live reads cheap and signals callers not to seed the window.
+        if (charId != StaleStateReconciler.SUKUNA_CHAR_ID) {
+            return false;
+        }
+        CompoundTag data = player.getPersistentData();
+        boolean overlayShown = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null)
+                .map(cap -> DustOverlayFormat.OVERLAY1_LABEL.equals(cap.OVERLAY1))
+                .orElse(false);
+        StaleStateReconciler.AddonSessionState live = new StaleStateReconciler.AddonSessionState(
+                charId,
+                DomainAddonUtils.isActiveSukunaIncompleteShrine(player),
+                data.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full"),
+                data.getDouble("dust_amount"),
+                overlayShown,
+                data.getBoolean("jjkbrp_sukuna_incomplete_surehit_session"),
+                data.getBoolean("jjkbrp_sukuna_incomplete_surehit_active"),
+                data.getBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain"),
+                BlueRedPurpleNukeMod.hasAddonImposedFugaCooldown(player));
+        StaleStateReconciler.AddonSessionState reconciled = StaleStateReconciler.reconcile(live);
+        // Only write back when the reconciler actually changed something: a genuinely-active
+        // shrine (Req 7.7) returns the input unchanged and is therefore preserved.
+        if (!reconciled.equals(live)) {
+            // dust_amount = 0 + clear OVERLAY1/OVERLAY2 (only when OVERLAY1 == "DUST").
+            ModNetworking.clearSukunaFugaDustOverlay(player);
+            // Remove the one-time Fuga dust reward flag so no phantom reward remains (Req 7.2).
+            data.remove("jjkbrp_sukuna_fuga_dust_locked_full");
+            // Clear the three surehit flags (Req 7.3).
+            data.remove("jjkbrp_sukuna_incomplete_surehit_active");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_session");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
+            // Remove the addon-imposed Fuga cooldown effects + zero the cd-max NBT, then sync the
+            // cleared cooldown so the base-mod skill UI shows Fuga usable (Req 7.4).
+            ModNetworking.clearSukunaFugaCooldown(player);
+            // Push the reconciled overlay and cooldown to the client (Req 7.5).
+            ModNetworking.syncDustOverlayFromAmount(player);
+            ModNetworking.sendCooldownSync(player);
+        }
+        return true;
+    }
+
+    /**
+     * Whether an addon-imposed Fuga cooldown is currently present on the player, used to detect
+     * stale cooldown state at login (Requirement 7.4). True when any of the three Fuga cooldown
+     * effects is applied or any of the three cooldown-max NBT values is non-zero, mirroring the
+     * state that {@link ModNetworking#clearSukunaFugaCooldown} clears.
+     *
+     * @param player player whose cooldown state is inspected.
+     * @return {@code true} iff an addon-imposed Fuga cooldown effect or cd-max value is present.
+     */
+    private static boolean hasAddonImposedFugaCooldown(ServerPlayer player) {
+        if (BlueRedPurpleNukeMod.hasCooldownEffectByKey(player, FugaCooldownClear.EXTENSION_COOLDOWN_7)
+                || BlueRedPurpleNukeMod.hasCooldownEffectByKey(player, FugaCooldownClear.FUGA_COOLDOWN)) {
+            return true;
+        }
+        MobEffect techniqueCooldown = (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME.get();
+        if (techniqueCooldown != null && player.hasEffect(techniqueCooldown)) {
+            return true;
+        }
+        CompoundTag data = player.getPersistentData();
+        return data.getDouble(FugaCooldownClear.TECHNIQUE_CD_MAX) != 0.0
+                || data.getDouble(FugaCooldownClear.COMBAT_CD_MAX) != 0.0
+                || data.getInt(FugaCooldownClear.CD_MAX_1_7) != 0;
+    }
+
+    /**
+     * Whether a Fuga cooldown mob effect identified by a {@code namespace:path} key is currently
+     * applied, resolved through {@link ForgeRegistries#MOB_EFFECTS} (mirrors
+     * {@code ModNetworking.removeCooldownEffectByKey}).
+     */
+    private static boolean hasCooldownEffectByKey(ServerPlayer player, String key) {
+        ResourceLocation id = ResourceLocation.tryParse(key);
+        if (id == null) {
+            return false;
+        }
+        MobEffect effect = (MobEffect)ForgeRegistries.MOB_EFFECTS.getValue(id);
+        return effect != null && player.hasEffect(effect);
     }
 
     // ===== SERVER TICK HELPERS =====

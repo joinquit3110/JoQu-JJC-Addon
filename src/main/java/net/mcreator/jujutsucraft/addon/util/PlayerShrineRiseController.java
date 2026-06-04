@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.util;
 
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
+import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.mcreator.jujutsucraft.entity.EntityMalevolentShrine2Entity;
 import net.mcreator.jujutsucraft.entity.EntityMalevolentShrineEntity;
 import net.mcreator.jujutsucraft.entity.EntitySkullEntity;
@@ -29,6 +30,7 @@ public final class PlayerShrineRiseController {
     private static final String KEY_HAND_FORWARD_OFFSET = "jjkbrp_shrine_rise_hand_forward_offset";
     private static final String KEY_RISE_TICK = "jjkbrp_shrine_rise_tick";
     private static final String KEY_RING_INDEX = "jjkbrp_shrine_ring_index";
+    private static final String KEY_PLATFORM_UUID = "jjkbrp_shrine_platform_uuid";
 
     private static final int FORM_INCOMPLETE = 0;
     private static final int FORM_COMPLETE = 1;
@@ -38,6 +40,21 @@ public final class PlayerShrineRiseController {
     private static final double COMPLETE_PLATFORM_OFFSET = 6.0D;
     private static final double INCOMPLETE_PLATFORM_OFFSET = 10.0D;
     private static final double INCOMPLETE_HAND_FORWARD_OFFSET = 3.55D;
+
+    // --- Collision platform tuning (the invisible solid slab the player stands on) ---
+    // Base full width (X/Z) of the walkable slab in blocks, before decoration-scale is applied.
+    // Kept to the structure's standable base footprint rather than the full animated model extent
+    // (the model's huge reaching arm spans ~60 blocks, which would wall off the whole area).
+    private static final double PLATFORM_BASE_WIDTH_COMPLETE = 9.0D;
+    private static final double PLATFORM_BASE_WIDTH_INCOMPLETE = 8.0D;
+    // Thickness of the slab. The player stands on its TOP face.
+    private static final double PLATFORM_THICKNESS = 1.0D;
+    // Height of the slab's TOP face above the shrine origin (entity feet). 0 => deck flush with the
+    // shrine base. Raise this if you want the deck to sit higher on the structure so the rising
+    // shrine visibly lifts a player standing on it.
+    private static final double PLATFORM_DECK_TOP_OFFSET = 0.0D;
+    // Hard clamp on the scaled slab width so an extreme radius multiplier cannot wall off a huge area.
+    private static final double PLATFORM_MAX_WIDTH = 28.0D;
 
     private PlayerShrineRiseController() {
     }
@@ -86,6 +103,8 @@ public final class PlayerShrineRiseController {
         PehkuiDomainScaleUtil.applyDecorationScale(shrine, caster.getPersistentData());
         playRiseStartEffects(level, finalX, finalY, finalZ, decorationScale);
 
+        spawnPlatform(level, shrine, data, incomplete, finalX, startY, finalZ, decorationScale);
+
         if (!incomplete) {
             data.putBoolean("flag_start", true);
             shrine.setInvisible(true);
@@ -113,6 +132,7 @@ public final class PlayerShrineRiseController {
         if (!incomplete && data.getInt(KEY_RING_INDEX) < COMPLETE_RING_SEGMENTS) {
             shrine.setInvisible(true);
             moveShrine(shrine, finalX, startY, finalZ);
+            movePlatform(level, shrine, data, finalX, startY, finalZ);
             spawnNextCompleteRingSkull(level, shrine, data);
             return;
         }
@@ -122,6 +142,7 @@ public final class PlayerShrineRiseController {
         int currentTick = data.getInt(KEY_RISE_TICK);
         if (currentTick >= riseTicks) {
             moveShrine(shrine, finalX, finalY, finalZ);
+            movePlatform(level, shrine, data, finalX, finalY, finalZ);
             return;
         }
         int nextTick = currentTick + 1;
@@ -132,6 +153,7 @@ public final class PlayerShrineRiseController {
         double currentY = startY + (finalY - startY) * eased;
         Vec3 shake = riseShake(nextTick, progress);
         moveShrine(shrine, finalX + shake.x, currentY, finalZ + shake.z);
+        movePlatform(level, shrine, data, finalX + shake.x, currentY, finalZ + shake.z);
         playRiseTickEffects(level, finalX, currentY, finalZ, nextTick, progress, decorationScale(data));
     }
 
@@ -141,6 +163,63 @@ public final class PlayerShrineRiseController {
 
     private static boolean isShrineVisualEntity(Entity entity) {
         return entity instanceof EntityMalevolentShrineEntity || entity instanceof EntityMalevolentShrine2Entity;
+    }
+
+    /**
+     * Spawns the invisible solid collision slab for a shrine and links it via UUID.
+     *
+     * @param level       server level
+     * @param shrine      the shrine visual entity
+     * @param data        the shrine's persistent data (stores the platform UUID link)
+     * @param incomplete  whether this is the incomplete form
+     * @param x           shrine x at spawn (slab is centered here)
+     * @param shrineY     shrine origin y at spawn (slab top is placed relative to this)
+     * @param z           shrine z at spawn
+     * @param scale       decoration scale applied to the shrine, used to size the slab
+     */
+    private static void spawnPlatform(ServerLevel level, Entity shrine, CompoundTag data, boolean incomplete,
+                                      double x, double shrineY, double z, double scale) {
+        double s = Math.max(0.5D, scale);
+        float width = (float)Math.min(PLATFORM_MAX_WIDTH,
+                (incomplete ? PLATFORM_BASE_WIDTH_INCOMPLETE : PLATFORM_BASE_WIDTH_COMPLETE) * s);
+        float thickness = (float)(PLATFORM_THICKNESS * s);
+
+        ShrinePlatformEntity platform =
+                new ShrinePlatformEntity(LimbEntityRegistry.SHRINE_PLATFORM.get(), (Level)level);
+        platform.setPlatformSize(width, thickness);
+        // Position so the slab's TOP face sits at shrineY + deck offset; entity Y is the slab bottom.
+        double deckTop = shrineY + PLATFORM_DECK_TOP_OFFSET * s;
+        platform.moveTo(x, deckTop - thickness, z, 0.0F, 0.0F);
+        platform.keepAlive(level.getGameTime());
+        level.addFreshEntity(platform);
+        data.putString(KEY_PLATFORM_UUID, platform.getStringUUID());
+    }
+
+    /**
+     * Repositions the shrine's collision slab so its top face tracks the shrine origin Y, and pings
+     * it so it does not self-discard as stale while the shrine is alive.
+     */
+    private static void movePlatform(ServerLevel level, Entity shrine, CompoundTag data,
+                                     double x, double shrineY, double z) {
+        if (!data.contains(KEY_PLATFORM_UUID)) {
+            return;
+        }
+        java.util.UUID uuid;
+        try {
+            uuid = java.util.UUID.fromString(data.getString(KEY_PLATFORM_UUID));
+        } catch (IllegalArgumentException ex) {
+            return;
+        }
+        Entity entity = level.getEntity(uuid);
+        if (!(entity instanceof ShrinePlatformEntity platform) || !platform.isAlive()) {
+            return;
+        }
+        double s = Math.max(0.5D, decorationScale(data));
+        double thickness = PLATFORM_THICKNESS * s;
+        double deckTop = shrineY + PLATFORM_DECK_TOP_OFFSET * s;
+        platform.moveTo(x, deckTop - thickness, z, 0.0F, 0.0F);
+        platform.setDeltaMovement(Vec3.ZERO);
+        platform.keepAlive(level.getGameTime());
     }
 
     private static void moveShrine(Entity shrine, double x, double y, double z) {

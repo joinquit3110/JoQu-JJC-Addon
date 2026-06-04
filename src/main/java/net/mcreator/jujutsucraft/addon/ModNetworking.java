@@ -2,8 +2,10 @@ package net.mcreator.jujutsucraft.addon;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 import net.mcreator.jujutsucraft.addon.ClientPacketHandler;
@@ -14,6 +16,9 @@ import net.mcreator.jujutsucraft.addon.clash.net.DomainClashHudSnapshotPacket;
 import net.mcreator.jujutsucraft.addon.limb.LimbSyncPacket;
 import net.mcreator.jujutsucraft.addon.limb.NearDeathPacket;
 import net.mcreator.jujutsucraft.addon.limb.RCTLevel3Handler;
+import net.mcreator.jujutsucraft.addon.logic.DustOverlayFormat;
+import net.mcreator.jujutsucraft.addon.logic.FugaCooldownClear;
+import net.mcreator.jujutsucraft.addon.logic.FugaDustLogic;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.addon.util.DomainCostUtils;
@@ -89,7 +94,69 @@ public class ModNetworking {
 
     // ===== TECHNIQUE SELECTION HELPERS =====
     private static boolean isTechniqueLocked(ServerPlayer player, int charId, double selectId) {
+        if (ModNetworking.isSpecialIncompleteFugaOverride(player, charId, selectId)) {
+            return false;
+        }
         return ChangeTechniqueTestProcedure.execute((LevelAccessor)player.level(), (double)player.getX(), (double)player.getY(), (double)player.getZ(), (Entity)player, (double)charId, (double)selectId);
+    }
+
+    public static boolean canUseSukunaIncompleteFugaOverride(ServerPlayer player, int charId, double selectId) {
+        if (player == null || charId != 1 || Math.round(selectId) != 7L) {
+            return false;
+        }
+        if (ModNetworking.hasSukunaFugaDustReward(player, charId, selectId)) {
+            return true;
+        }
+        return ModNetworking.canUseActiveSukunaIncompleteFugaOverride(player, charId, selectId);
+    }
+
+    public static boolean canUseActiveSukunaIncompleteFugaOverride(ServerPlayer player, int charId, double selectId) {
+        if (player == null || charId != 1 || Math.round(selectId) != 7L) {
+            return false;
+        }
+        CompoundTag data = player.getPersistentData();
+        boolean specialDomainActive = !data.getBoolean("jjkbrp_sukuna_incomplete_fuga_used")
+                && DomainAddonUtils.isActiveSukunaIncompleteShrine(player);
+        if (specialDomainActive) {
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+            ModNetworking.fillSukunaFugaDust(player);
+        }
+        return specialDomainActive;
+    }
+
+    public static boolean hasSukunaFugaDustReward(ServerPlayer player, int charId, double selectId) {
+        if (player == null || charId != 1 || Math.round(selectId) != 7L) {
+            return false;
+        }
+        CompoundTag data = player.getPersistentData();
+        return data.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full");
+    }
+
+    public static boolean applySukunaFugaDustReward(ServerPlayer player, Entity flameArrow) {
+        if (player == null || flameArrow == null) {
+            return false;
+        }
+        CompoundTag ownerData = player.getPersistentData();
+        if (!ownerData.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full")) {
+            return false;
+        }
+        double storedDust = ownerData.getDouble("dust_amount");
+        CompoundTag projectileData = flameArrow.getPersistentData();
+        double existingCnt6 = projectileData.getDouble("cnt6");
+        projectileData.putDouble("cnt6", FugaDustLogic.resolveTransferDust(storedDust, existingCnt6));
+        projectileData.putBoolean("jjkbrp_sukuna_fuga_dust_applied", true);
+        ownerData.remove("jjkbrp_sukuna_fuga_dust_locked_full");
+        ownerData.remove("jjkbrp_sukuna_incomplete_fuga_used");
+        ModNetworking.clearSukunaFugaCooldown(player);
+        // clearSukunaFugaDustOverlay sets dust_amount = 0 and clears OVERLAY1/OVERLAY2.
+        ModNetworking.clearSukunaFugaDustOverlay(player);
+        ModNetworking.sendCooldownSync(player);
+        return true;
+    }
+
+    private static boolean isSpecialIncompleteFugaOverride(ServerPlayer player, int charId, double selectId) {
+        return ModNetworking.canUseSukunaIncompleteFugaOverride(player, charId, selectId);
     }
 
     /**
@@ -215,6 +282,138 @@ public class ModNetworking {
      */
     public static int getCooldownTicks(ServerPlayer player) {
         return Math.max(ModNetworking.getTechniqueCooldownTicks(player), ModNetworking.getCombatCooldownTicks(player));
+    }
+
+    public static void clearSukunaFugaCooldown(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        // Remove the three Fuga cooldown effects (existence-checked) so neither the
+        // base-mod skill UI nor the addon HUD shows Fuga on cooldown. The effect keys
+        // are sourced from FugaCooldownClear.REMOVED_EFFECT_KEYS.
+        // - jujutsucraft_acerycd:extension_cooldown_7 and jujutsucraft_plus:fuga are
+        //   addon/plus mob effects resolved through ForgeRegistries.MOB_EFFECTS.
+        // - COOLDOWN_TIME is the base-mod technique cooldown effect, resolved through
+        //   the JujutsucraftModMobEffects registry object (its symbolic name, not a
+        //   namespaced ResourceLocation).
+        ModNetworking.removeCooldownEffectByKey(player, FugaCooldownClear.EXTENSION_COOLDOWN_7);
+        ModNetworking.removeCooldownEffectByKey(player, FugaCooldownClear.FUGA_COOLDOWN);
+        MobEffect techniqueCooldown = (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME.get();
+        if (techniqueCooldown != null && player.hasEffect(techniqueCooldown)) {
+            player.removeEffect(techniqueCooldown);
+        }
+        // NOTE: we intentionally do NOT remove the UNSTABLE effect here. UNSTABLE is a real
+        // base-mod post-domain debuff; removing it every tick (a previous attempt) made it
+        // vanish entirely, which was wrong. The OG skill UI does derive its Fuga cooldown
+        // readout partly from UNSTABLE, so while UNSTABLE is on the player the OG UI may still
+        // show a Fuga cooldown number; that is handled separately and must not be "fixed" by
+        // deleting the Unstable effect.
+        // Zero the three cooldown-max NBT values that drive the UI cooldown ring fill,
+        // so no stale "full-but-stuck" ring is rendered after the effects are gone.
+        // The zeroing is driven by FugaCooldownClear.clear over a snapshot of the
+        // currently-present cd-max values: keys absent from the snapshot stay absent,
+        // present keys are set to 0. This leaves every other technique's state untouched
+        // and is idempotent under the per-tick (Unstable-window) re-clear.
+        ModNetworking.zeroFugaCooldownMaxValues(player);
+        ModNetworking.sendCooldownSync(player);
+    }
+
+    /**
+     * Removes a Fuga cooldown mob effect identified by a {@code namespace:path} key
+     * (one of {@link FugaCooldownClear#REMOVED_EFFECT_KEYS}). The effect is resolved
+     * through {@link ForgeRegistries#MOB_EFFECTS} and removed only when present.
+     */
+    private static void removeCooldownEffectByKey(ServerPlayer player, String key) {
+        ResourceLocation id = ResourceLocation.tryParse(key);
+        if (id == null) {
+            return;
+        }
+        MobEffect effect = (MobEffect)ForgeRegistries.MOB_EFFECTS.getValue(id);
+        if (effect != null && player.hasEffect(effect)) {
+            player.removeEffect(effect);
+        }
+    }
+
+    /**
+     * Zeroes the {@code jjkbrp_technique_cd_max}, {@code jjkbrp_combat_cd_max}, and
+     * {@code jjkbrp_cd_max_1_7} NBT values that are currently present, driven by
+     * {@link FugaCooldownClear#clear(Map)}. Only present keys are zeroed (matching the
+     * "zeroes only the present ones" contract), and the original storage type is
+     * preserved on write-back: the two technique/combat maxima are stored as doubles
+     * (read by {@link #sendCooldownSync}) while the per-skill {@code jjkbrp_cd_max_1_7}
+     * is stored as an int (read by the wheel builder).
+     */
+    private static void zeroFugaCooldownMaxValues(ServerPlayer player) {
+        CompoundTag data = player.getPersistentData();
+        Map<String, Integer> snapshot = new LinkedHashMap<>();
+        for (String key : FugaCooldownClear.ZEROED_CD_MAX_KEYS) {
+            if (data.contains(key)) {
+                snapshot.put(key, (int)data.getDouble(key));
+            }
+        }
+        Map<String, Integer> cleared = FugaCooldownClear.clear(snapshot);
+        for (Map.Entry<String, Integer> entry : cleared.entrySet()) {
+            String key = entry.getKey();
+            if (DATA_KEY_TECHNIQUE_CD_MAX.equals(key) || DATA_KEY_COMBAT_CD_MAX.equals(key)) {
+                data.putDouble(key, (double)(int)entry.getValue());
+            } else {
+                data.putInt(key, entry.getValue());
+            }
+        }
+    }
+
+    public static void fillSukunaFugaDust(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        data.putDouble("dust_amount", DustOverlayFormat.DUST_MAX);
+        ModNetworking.syncDustOverlayFromAmount(player);
+    }
+
+    /**
+     * Pushes the dust overlay to the client from the caster's current {@code dust_amount},
+     * so the rendered bar reflects the real stored dust instead of a fixed/spoofed value.
+     *
+     * <p>The overlay is only shown while a confirmed reward is present: either the
+     * {@code jjkbrp_sukuna_fuga_dust_locked_full} flag is set or the Incomplete Domain
+     * Shrine is active. When neither holds, this clears the overlay so no unconfirmed
+     * overlay appears. All writes stay server-side and are propagated to the client only
+     * through {@code syncPlayerVariables}.
+     *
+     * @param player player whose dust overlay should be synced.
+     */
+    public static void syncDustOverlayFromAmount(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CompoundTag data = player.getPersistentData();
+        boolean rewardPresent = data.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full")
+                || DomainAddonUtils.isActiveSukunaIncompleteShrine(player);
+        if (!rewardPresent) {
+            ModNetworking.clearSukunaFugaDustOverlay(player);
+            return;
+        }
+        double dust = data.getDouble("dust_amount");
+        player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(cap -> {
+            cap.OVERLAY1 = DustOverlayFormat.OVERLAY1_LABEL;
+            cap.OVERLAY2 = DustOverlayFormat.buildBar(dust);
+            cap.syncPlayerVariables((Entity)player);
+        });
+    }
+
+    public static void clearSukunaFugaDustOverlay(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        player.getPersistentData().putDouble("dust_amount", 0.0);
+        player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(cap -> {
+            if (DustOverlayFormat.OVERLAY1_LABEL.equals(cap.OVERLAY1)) {
+                cap.OVERLAY1 = "";
+                cap.OVERLAY2 = "";
+                cap.syncPlayerVariables((Entity)player);
+            }
+        });
     }
 
     /**
@@ -534,12 +733,49 @@ public class ModNetworking {
     }
 
     /**
+     * Whether the player has unlocked Black Flash Mastery, via either the addon advancement or the
+     * runtime {@code addon_bf_mastery} NBT flag set by {@code CooldownTrackerEvents}.
+     * @param player player instance involved in this operation.
+     * @return true when Black Flash Mastery is unlocked.
+     */
+    private static boolean hasBlackFlashMastery(ServerPlayer player) {
+        if (player.getPersistentData().getBoolean("addon_bf_mastery")) {
+            return true;
+        }
+        return ModNetworking.hasAdvancement(player, new ResourceLocation("jjkblueredpurple", "black_flash_mastery"));
+    }
+
+    /**
+     * Awards every remaining criterion of the requested advancement so it is marked complete for the
+     * player. Safe to call repeatedly; a fully-completed advancement is left untouched.
+     * @param player player instance involved in this operation.
+     * @param id advancement identifier to award.
+     */
+    private static void grantAdvancement(ServerPlayer player, ResourceLocation id) {
+        try {
+            Advancement adv = player.server.getAdvancements().getAdvancement(id);
+            if (adv == null) {
+                return;
+            }
+            AdvancementProgress progress = player.getAdvancements().getOrStartProgress(adv);
+            if (!progress.isDone()) {
+                for (String criterion : progress.getRemainingCriteria()) {
+                    player.getAdvancements().award(adv, criterion);
+                }
+            }
+        }
+        catch (Exception ignored) {
+            // empty catch block
+        }
+    }
+
+    /**
      * Checks whether is domain mastery mutation operation is true for the current addon state.
      * @param operation operation used by this method.
      * @return true when is domain mastery mutation operation succeeds; otherwise false.
      */
     private static boolean isDomainMasteryMutationOperation(int operation) {
-        return operation == 0 || operation == 1 || operation == 2 || operation == 3 || operation == 4 || operation == 5 || operation == 6;
+        return operation == 0 || operation == 1 || operation == 2 || operation == 3 || operation == 4 || operation == 5 || operation == 6 || operation == 7 || operation == 8;
     }
 
     /**
@@ -638,6 +874,10 @@ public class ModNetworking {
             }
             if (cdRemaining <= 0 && sid > 2 && !after.PhysicalAttack && player.hasEffect((MobEffect)JujutsucraftModMobEffects.UNSTABLE.get())) {
                 cdRemaining = player.getEffect((MobEffect)JujutsucraftModMobEffects.UNSTABLE.get()).getDuration();
+            }
+            if (ModNetworking.isSpecialIncompleteFugaOverride(player, charId, sid)) {
+                cdRemaining = 0;
+                cdMax = 0;
             }
             if (cdRemaining > 0) {
                 String maxKey = "jjkbrp_cd_max_" + charId + "_" + sid;
@@ -912,6 +1152,7 @@ public class ModNetworking {
     public static void syncDomainMasteryToClient(ServerPlayer player, DomainMasteryData data) {
         boolean hasOpenAdvancement = ModNetworking.hasOpenBarrierAdvancement(player);
         data.setOpenBarrierAdvancementUnlocked(hasOpenAdvancement);
+        data.setBlackFlashMasteryUnlocked(ModNetworking.hasBlackFlashMastery(player));
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new DomainMasterySyncPacket(data, hasOpenAdvancement));
     }
 
@@ -1449,6 +1690,8 @@ public class ModNetworking {
         public static final int OP_NEGATIVE_DECREASE = 5;
         // Named addon constant for op negative increase.
         public static final int OP_NEGATIVE_INCREASE = 6;
+        public static final int OP_SUKUNA_INCOMPLETE_SUREHIT = 7;
+        public static final int OP_SUKUNA_INCOMPLETE_SUREHIT_CLEAR = 8;
         // Encoded domain mastery mutation operation handled by the server packet.
         private final int operation;
         // Runtime index used for property index.
@@ -1500,6 +1743,7 @@ public class ModNetworking {
                 sender.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> {
                     boolean hasOpenAdvancement = ModNetworking.hasOpenBarrierAdvancement(sender);
                     data.setOpenBarrierAdvancementUnlocked(hasOpenAdvancement);
+                    data.setBlackFlashMasteryUnlocked(ModNetworking.hasBlackFlashMastery(sender));
                     switch (pkt.operation) {
                         case 0: {
                             if (pkt.propertyIndex < 0 || pkt.propertyIndex >= DomainMasteryProperties.values().length) break;
@@ -1615,6 +1859,37 @@ public class ModNetworking {
                                 break;
                             }
                             sender.displayClientMessage(ModNetworking.domainMsgSuccess("+", ChatFormatting.GREEN, ModNetworking.domainPropLabel(prop) + " negative modify cleared"), false);
+                            break;
+                        }
+                        case 7: {
+                            if (!ModNetworking.hasDomainExpansionAdvancement(sender)) {
+                                sender.displayClientMessage(ModNetworking.domainMsgError("Requires the Domain Expansion achievement"), false);
+                                break;
+                            }
+                            if (!data.isBlackFlashMasteryUnlocked()) {
+                                sender.displayClientMessage(ModNetworking.domainMsgError("Cleave Covenant requires Black Flash Mastery first"), false);
+                                break;
+                            }
+                            if (data.isSukunaIncompleteSureHitUnlocked()) {
+                                sender.displayClientMessage(ModNetworking.domainMsgInfo("◈", ChatFormatting.GOLD, "Cleave Covenant is already sealed into your Incomplete Shrine"), false);
+                                break;
+                            }
+                            if (!data.purchaseSukunaIncompleteSureHit()) {
+                                sender.displayClientMessage(ModNetworking.domainMsgError("Cleave Covenant cannot be forged with the current Shrine Setup or Property Point pool"), false);
+                                break;
+                            }
+                            ModNetworking.grantAdvancement(sender, new ResourceLocation("jjkblueredpurple", "cleave_covenant"));
+                            sender.displayClientMessage(ModNetworking.domainMsgSuccess("◈", ChatFormatting.RED, "Cleave Covenant Forged • Incomplete Malevolent Shrine will carry True Sure-Hit"), false);
+                            break;
+                        }
+                        case 8: {
+                            if (!data.isSukunaIncompleteSureHitUnlocked()) {
+                                sender.displayClientMessage(ModNetworking.domainMsgError("Cleave Covenant is not currently sealed"), false);
+                                break;
+                            }
+                            data.clearSukunaIncompleteSureHit();
+                            sender.displayClientMessage(ModNetworking.domainMsgInfo("↺", ChatFormatting.GOLD, "Cleave Covenant Released • 5 Property Points returned"), false);
+                            break;
                         }
                     }
                     data.syncToClient(sender);
@@ -1721,6 +1996,9 @@ public class ModNetworking {
         private final int negativeLevel;
         // Whether the server confirmed the open-barrier advancement for the receiving player.
         private final boolean hasOpenBarrierAdvancement;
+        private final boolean sukunaIncompleteSureHitUnlocked;
+        // Whether the server confirmed Black Flash Mastery for the receiving player.
+        private final boolean blackFlashMasteryUnlocked;
 
         /**
          * Creates a new domain mastery sync packet instance and initializes its addon state.
@@ -1735,6 +2013,8 @@ public class ModNetworking {
             this.negativeProperty = data.getNegativeProperty();
             this.negativeLevel = data.getNegativeLevel();
             this.hasOpenBarrierAdvancement = hasOpenBarrierAdvancement;
+            this.sukunaIncompleteSureHitUnlocked = data.isSukunaIncompleteSureHitUnlocked();
+            this.blackFlashMasteryUnlocked = data.isBlackFlashMasteryUnlocked();
             this.propLevels = new int[DomainMasteryProperties.values().length];
             for (int i = 0; i < this.propLevels.length; ++i) {
                 this.propLevels[i] = data.getPropertyLevel(DomainMasteryProperties.values()[i]);
@@ -1754,6 +2034,8 @@ public class ModNetworking {
             buf.writeUtf(pkt.negativeProperty);
             buf.writeInt(pkt.negativeLevel);
             buf.writeBoolean(pkt.hasOpenBarrierAdvancement);
+            buf.writeBoolean(pkt.sukunaIncompleteSureHitUnlocked);
+            buf.writeBoolean(pkt.blackFlashMasteryUnlocked);
             buf.writeByte(pkt.propLevels.length);
             for (int lvl : pkt.propLevels) {
                 buf.writeByte(lvl);
@@ -1773,12 +2055,14 @@ public class ModNetworking {
             String negativeProperty = buf.readUtf();
             int negativeLevel = buf.readInt();
             boolean hasOpenBarrierAdvancement = buf.readBoolean();
+            boolean sukunaIncompleteSureHitUnlocked = buf.readBoolean();
+            boolean blackFlashMasteryUnlocked = buf.readBoolean();
             int count = buf.readByte();
             int[] levels = new int[count];
             for (int i = 0; i < count; ++i) {
                 levels[i] = buf.readByte();
             }
-            return new DomainMasterySyncPacket(xp, level, form, points, levels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement);
+            return new DomainMasterySyncPacket(xp, level, form, points, levels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement, sukunaIncompleteSureHitUnlocked, blackFlashMasteryUnlocked);
         }
 
         /**
@@ -1792,7 +2076,7 @@ public class ModNetworking {
          * @param negativeLevel level value used by this operation.
          * @param hasOpenBarrierAdvancement has open barrier advancement used by this method.
          */
-        private DomainMasterySyncPacket(double xp, int level, int form, int points, int[] levels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement) {
+        private DomainMasterySyncPacket(double xp, int level, int form, int points, int[] levels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement, boolean sukunaIncompleteSureHitUnlocked, boolean blackFlashMasteryUnlocked) {
             this.xp = xp;
             this.level = level;
             this.form = form;
@@ -1801,6 +2085,8 @@ public class ModNetworking {
             this.negativeProperty = negativeProperty;
             this.negativeLevel = negativeLevel;
             this.hasOpenBarrierAdvancement = hasOpenBarrierAdvancement;
+            this.sukunaIncompleteSureHitUnlocked = sukunaIncompleteSureHitUnlocked;
+            this.blackFlashMasteryUnlocked = blackFlashMasteryUnlocked;
         }
 
         /**
@@ -1809,7 +2095,7 @@ public class ModNetworking {
          * @param ctx context data supplied by the current callback or network pipeline.
          */
         public static void handle(DomainMasterySyncPacket pkt, Supplier<NetworkEvent.Context> ctx) {
-            ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.syncDomainMastery(pkt.xp, pkt.level, pkt.form, pkt.points, pkt.propLevels, pkt.negativeProperty, pkt.negativeLevel, pkt.hasOpenBarrierAdvancement)));
+            ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.syncDomainMastery(pkt.xp, pkt.level, pkt.form, pkt.points, pkt.propLevels, pkt.negativeProperty, pkt.negativeLevel, pkt.hasOpenBarrierAdvancement, pkt.sukunaIncompleteSureHitUnlocked, pkt.blackFlashMasteryUnlocked)));
             ctx.get().setPacketHandled(true);
         }
     }

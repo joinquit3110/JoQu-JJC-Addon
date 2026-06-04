@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.UUID;
+import net.mcreator.jujutsucraft.addon.logic.SurehitState;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
@@ -76,7 +77,22 @@ public class DomainAddonUtils {
      *
      * @param caster the entity whose temporary BF boost should be removed
      */
-    public static void cleanupDomainRuntimeState(LivingEntity caster) { cleanupBFBoost(caster); if (caster != null) clearIncompleteDomainData(caster.getPersistentData()); }
+    public static void cleanupDomainRuntimeState(LivingEntity caster) {
+        cleanupBFBoost(caster);
+        if (caster == null) {
+            return;
+        }
+        CompoundTag nbt = caster.getPersistentData();
+        if (nbt.getBoolean("jjkbrp_sukuna_incomplete_surehit_session") && DomainAddonUtils.isActiveSukunaIncompleteShrine(caster)) {
+            nbt.putBoolean("jjkbrp_incomplete_form_active", true);
+            nbt.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+            return;
+        }
+        // Pass the caster so incidental cleanup preserves the surehit flag while the
+        // live domain effect is still present (Req 2.3); only the genuine domain-end
+        // path (effect gone) is allowed to strip it.
+        clearIncompleteDomainData(caster, nbt);
+    }
 
     public static void cleanupBFBoost(LivingEntity caster) {
         if (caster == null) {
@@ -101,15 +117,52 @@ public class DomainAddonUtils {
      * Removes all addon incomplete-domain transient data, including both the
      * current thin-form markers and legacy BFS/runtime keys from older builds.
      *
+     * <p>This overload has no caster context, so it always strips the surehit
+     * runtime flag. It is retained for callers on the genuine domain-end path
+     * (where the domain effect is already gone) and for fresh-domain startup,
+     * which both want the legacy strip behavior.</p>
+     *
      * @param nbt the persistent tag to clean
      */
     public static void clearIncompleteDomainData(CompoundTag nbt) {
+        clearIncompleteDomainData(null, nbt);
+    }
+
+    /**
+     * Removes all addon incomplete-domain transient data while preserving the
+     * surehit runtime flag when the caster still has a live domain effect.
+     *
+     * <p>Per Requirement 2.3, incidental cleanup/runtime-reset paths must not
+     * strip {@code jjkbrp_sukuna_incomplete_surehit_active} (nor the session
+     * flag, which this method never removes) while the Incomplete Domain Shrine's
+     * domain effect is still present, otherwise surehit vanishes a few ticks after
+     * activation. Only the genuine domain-end path, where
+     * {@link #hasLiveDomainEffect(LivingEntity)} is {@code false}, is allowed to
+     * clear it. This mirrors {@code SurehitState.onCleanup()}: cleanup preserves
+     * surehit while the shrine is live and defers clearing to {@code onDomainEnd()}.</p>
+     *
+     * @param caster the entity being cleaned up, used only to detect a live domain
+     *               effect; {@code null} disables surehit preservation
+     * @param nbt the persistent tag to clean
+     */
+    public static void clearIncompleteDomainData(LivingEntity caster, CompoundTag nbt) {
         if (nbt == null) {
             return;
         }
+        // While the live domain effect is still present, incidental cleanup must
+        // preserve the surehit flags; only the genuine domain-end path clears them.
+        boolean preserveSurehit = caster != null && DomainAddonUtils.hasLiveDomainEffect(caster);
         nbt.remove("jjkbrp_incomplete_penalty_per_tick");
         nbt.remove("jjkbrp_incomplete_surface_multiplier");
-        nbt.remove("jjkbrp_incomplete_form_active");
+        if (!preserveSurehit) {
+            // jjkbrp_incomplete_form_active gates isIncompleteDomainState(), which the
+            // sure-hit predicate (isActiveSukunaIncompleteShrine) depends on. Stripping it
+            // mid-domain flips that predicate false and the RangeAttack mixin then cancels
+            // the shrine's sure-hit attack (Issue 2). While the live domain effect is
+            // present, preserve it; only the genuine domain-end (or context-free) path
+            // clears it.
+            nbt.remove("jjkbrp_incomplete_form_active");
+        }
         nbt.remove("jjkbrp_incomplete_session_active");
         nbt.remove("jjkbrp_incomplete_cancelled");
         nbt.remove("jjkbrp_incomplete_runtime_id");
@@ -133,6 +186,11 @@ public class DomainAddonUtils {
         nbt.remove("jjkbrp_incomplete_runtime_revisits");
         nbt.remove("jjkbrp_incomplete_runtime_walls");
         nbt.remove("jjkbrp_incomplete_runtime_complete");
+        if (!preserveSurehit) {
+            // Genuine domain-end (or context-free) cleanup: clearing the surehit
+            // runtime flag is allowed because the live domain effect is gone.
+            nbt.remove("jjkbrp_sukuna_incomplete_surehit_active");
+        }
         nbt.remove("jjkbrp_ig2_version");
         nbt.remove("jjkbrp_ig2_runtime_id");
         nbt.remove("jjkbrp_ig2_center_x");
@@ -296,6 +354,52 @@ public class DomainAddonUtils {
      */
     public static boolean isClosedDomainActive(LivingEntity entity) {
         return entity != null && entity.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) && !DomainAddonUtils.isOpenDomainState(entity) && !DomainAddonUtils.isIncompleteDomainState(entity);
+    }
+
+    public static int resolveRuntimeDomainId(LivingEntity entity) {
+        if (entity == null) {
+            return 0;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        int domainId = (int)Math.round(nbt.getDouble("jjkbrp_domain_id_runtime"));
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("skill_domain"));
+        }
+        if (domainId <= 0) {
+            domainId = (int)Math.round(nbt.getDouble("select"));
+        }
+        return domainId;
+    }
+
+    public static boolean hasLiveDomainEffect(LivingEntity entity) {
+        if (entity == null || !entity.isAlive() || entity.isDeadOrDying() || entity.isRemoved()) {
+            return false;
+        }
+        CompoundTag nbt = entity.getPersistentData();
+        return entity.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())
+                && !nbt.getBoolean("Failed")
+                && !nbt.getBoolean("DomainDefeated");
+    }
+
+    public static boolean isActiveSukunaIncompleteShrine(LivingEntity caster) {
+        if (caster == null) {
+            return false;
+        }
+        // Build a pure SurehitState from the same live NBT/runtime reads the predicate
+        // has always used, then delegate the boolean decision to the testable model.
+        // Each field maps one-to-one to a live read; the surehit flags are read from the
+        // entity's persistent data (getPersistentData()), which Minecraft serializes with
+        // the player, so an active surehit survives a save/reload while the domain effect
+        // is present (Req 2.6).
+        CompoundTag data = caster.getPersistentData();
+        SurehitState state = new SurehitState(
+                DomainAddonUtils.isIncompleteDomainState(caster),
+                DomainAddonUtils.resolveRuntimeDomainId(caster),
+                data.getBoolean("jjkbrp_sukuna_incomplete_surehit_session"),
+                data.getBoolean("jjkbrp_sukuna_incomplete_surehit_active"),
+                data.getBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain"),
+                DomainAddonUtils.hasLiveDomainEffect(caster));
+        return state.isActiveSukunaIncompleteShrine();
     }
 
     /**

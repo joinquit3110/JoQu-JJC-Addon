@@ -57,6 +57,12 @@ public class DomainMasteryData {
     private String negativeProperty = "";
     // Stored negative modify amount for the selected negative property, clamped between 0 and -5.
     private int negativeLevel = 0;
+    private boolean sukunaIncompleteSureHitUnlocked = false;
+    // Derived (non-persisted) flag: whether the player has unlocked Black Flash Mastery.
+    // Recomputed on the server from the advancement / addon_bf_mastery NBT each sync, and shipped
+    // to the client through the mastery sync packet. It gates the Cleave Covenant display/purchase
+    // ONLY, never the refund/persistence path, so a legitimately purchased covenant is never wiped.
+    private boolean blackFlashMasteryUnlocked = false;
 
     // ===== CORE MASTERY STATE =====
     public double getDomainXP() {
@@ -123,10 +129,13 @@ public class DomainMasteryData {
     }
 
     // ===== XP AND LEVEL FLOW =====
+    // Property points granted to the player each time their Domain Mastery level increases.
+    public static final int POINTS_PER_LEVEL = 2;
+
     private void checkLevelUp() {
         while (this.domainMasteryLevel < 5 && this.domainXP >= (double)DomainMasteryData.getXPRequiredForLevel(this.domainMasteryLevel + 1)) {
             ++this.domainMasteryLevel;
-            ++this.domainPropertyPoints;
+            this.domainPropertyPoints += POINTS_PER_LEVEL;
         }
         this.domainXPToNextLevel = DomainMasteryData.getXPRequiredForLevel(this.domainMasteryLevel + 1);
         this.domainTypeSelected = DomainMasteryData.sanitizeFormSelection(this.domainTypeSelected, this.domainMasteryLevel);
@@ -161,6 +170,7 @@ public class DomainMasteryData {
      */
     public void setDomainTypeSelected(int type) {
         this.domainTypeSelected = DomainMasteryData.sanitizeFormSelection(type, this.domainMasteryLevel);
+        this.refundSukunaIncompleteSureHitIfInvalid();
     }
 
     /**
@@ -171,6 +181,7 @@ public class DomainMasteryData {
     public void setDomainTypeSelected(int type, boolean hasOpenBarrierAdvancement) {
         this.openBarrierAdvancementUnlocked = hasOpenBarrierAdvancement;
         this.domainTypeSelected = DomainMasteryData.sanitizeFormSelection(type, this.domainMasteryLevel, hasOpenBarrierAdvancement);
+        this.refundSukunaIncompleteSureHitIfInvalid();
     }
 
     /**
@@ -188,6 +199,7 @@ public class DomainMasteryData {
     public void setOpenBarrierAdvancementUnlocked(boolean unlocked) {
         this.openBarrierAdvancementUnlocked = unlocked;
         this.domainTypeSelected = DomainMasteryData.sanitizeFormSelection(this.domainTypeSelected, this.domainMasteryLevel, unlocked);
+        this.refundSukunaIncompleteSureHitIfInvalid();
     }
 
     /**
@@ -310,6 +322,82 @@ public class DomainMasteryData {
         return false;
     }
 
+    public boolean isSukunaIncompleteSureHitUnlocked() {
+        return this.sukunaIncompleteSureHitUnlocked && this.isSukunaSureHitSetupValid();
+    }
+
+    /**
+     * Whether the player has unlocked Black Flash Mastery. Threaded in from the server (advancement
+     * or {@code addon_bf_mastery} NBT) and used purely as a display/purchase gate for the Cleave
+     * Covenant.
+     */
+    public boolean isBlackFlashMasteryUnlocked() {
+        return this.blackFlashMasteryUnlocked;
+    }
+
+    /**
+     * Updates the cached Black Flash Mastery unlock flag. Does NOT touch the purchased-covenant
+     * state, so this can never refund or wipe a legitimately forged Cleave Covenant.
+     * @param unlocked whether Black Flash Mastery is unlocked for this player.
+     */
+    public void setBlackFlashMasteryUnlocked(boolean unlocked) {
+        this.blackFlashMasteryUnlocked = unlocked;
+    }
+
+    /**
+     * The Shrine-setup half of the Cleave Covenant requirements (max mastery, Incomplete form, and a
+     * fully-sunk -5 Duration negative). This intentionally EXCLUDES the Black Flash Mastery gate so
+     * the refund/persistence path only reacts to the player actually dismantling their Shrine setup,
+     * never to a transient/unsynced mastery flag.
+     */
+    public boolean isSukunaSureHitSetupValid() {
+        return this.domainMasteryLevel >= 5
+                && this.domainTypeSelected == FORM_INCOMPLETE
+                && this.isNegativeProperty(DomainMasteryProperties.DURATION_EXTEND)
+                && this.negativeLevel == -5;
+    }
+
+    public boolean canShowSukunaIncompleteSureHit() {
+        // Display/purchase gate: requires Black Flash Mastery ON TOP OF the valid Shrine setup.
+        return this.blackFlashMasteryUnlocked && this.isSukunaSureHitSetupValid();
+    }
+
+    public boolean canPurchaseSukunaIncompleteSureHit() {
+        return this.canShowSukunaIncompleteSureHit()
+                && !this.sukunaIncompleteSureHitUnlocked
+                && this.domainPropertyPoints >= 5;
+    }
+
+    public boolean purchaseSukunaIncompleteSureHit() {
+        this.refundSukunaIncompleteSureHitIfInvalid();
+        if (!this.canPurchaseSukunaIncompleteSureHit()) {
+            return false;
+        }
+        if (!this.spendPropertyPoints(5)) {
+            return false;
+        }
+        this.sukunaIncompleteSureHitUnlocked = true;
+        return true;
+    }
+
+    public void refundSukunaIncompleteSureHitIfInvalid() {
+        // Refund only when the SHRINE SETUP itself is dismantled (form/negative changed). The Black
+        // Flash Mastery gate is intentionally NOT consulted here: the mastery flag is derived/synced
+        // and can be momentarily false right after load, and a purchased covenant must never be
+        // wiped just because the flag has not been refreshed yet.
+        if (this.sukunaIncompleteSureHitUnlocked && !this.isSukunaSureHitSetupValid()) {
+            this.sukunaIncompleteSureHitUnlocked = false;
+            this.domainPropertyPoints += 5;
+        }
+    }
+
+    public void clearSukunaIncompleteSureHit() {
+        if (this.sukunaIncompleteSureHitUnlocked) {
+            this.sukunaIncompleteSureHitUnlocked = false;
+            this.domainPropertyPoints += 5;
+        }
+    }
+
     // ===== NEGATIVE MODIFY STATE =====
     public String getNegativeProperty() {
         return this.negativeProperty;
@@ -379,6 +467,7 @@ public class DomainMasteryData {
         this.negativeProperty = prop.name();
         this.negativeLevel = currentNeg - 1;
         this.domainPropertyPoints += prop.getPointCost();
+        this.refundSukunaIncompleteSureHitIfInvalid();
         return true;
     }
 
@@ -404,6 +493,7 @@ public class DomainMasteryData {
         if (this.negativeLevel >= 0) {
             this.clearNegativeState();
         }
+        this.refundSukunaIncompleteSureHitIfInvalid();
         return true;
     }
 
@@ -533,6 +623,7 @@ public class DomainMasteryData {
         this.negativeLevel = Math.max(-5, Math.min(0, this.negativeLevel));
         if (this.negativeLevel == 0 || this.negativeProperty == null || this.negativeProperty.isEmpty()) {
             this.clearNegativeState();
+            this.refundSukunaIncompleteSureHitIfInvalid();
             return;
         }
         try {
@@ -633,15 +724,18 @@ public class DomainMasteryData {
      */
     public void setPropertyLevel(DomainMasteryProperties prop, int level) {
         this.setPropLevel(prop, level);
+        this.refundSukunaIncompleteSureHitIfInvalid();
     }
 
     // ===== NETWORK SYNC =====
-    public void applySync(double xp, int level, int form, int points, int[] propLevels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement) {
+    public void applySync(double xp, int level, int form, int points, int[] propLevels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement, boolean sukunaIncompleteSureHitUnlocked, boolean blackFlashMasteryUnlocked) {
+        this.blackFlashMasteryUnlocked = blackFlashMasteryUnlocked;
         this.domainXP = xp;
         this.domainMasteryLevel = level;
         this.openBarrierAdvancementUnlocked = hasOpenBarrierAdvancement;
         this.domainTypeSelected = DomainMasteryData.sanitizeFormSelection(form, level, hasOpenBarrierAdvancement);
         this.domainPropertyPoints = Math.max(0, points);
+        this.sukunaIncompleteSureHitUnlocked = sukunaIncompleteSureHitUnlocked;
         this.domainXPToNextLevel = DomainMasteryData.getXPRequiredForLevel(this.domainMasteryLevel + 1);
         DomainMasteryProperties[] props = DomainMasteryProperties.values();
         for (int i = 0; i < Math.min(propLevels.length, props.length); ++i) {
@@ -650,6 +744,11 @@ public class DomainMasteryData {
         this.negativeProperty = negativeProperty == null ? "" : negativeProperty;
         this.negativeLevel = negativeLevel;
         this.sanitizeNegativeState();
+        this.refundSukunaIncompleteSureHitIfInvalid();
+    }
+
+    public void applySync(double xp, int level, int form, int points, int[] propLevels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement, boolean sukunaIncompleteSureHitUnlocked) {
+        this.applySync(xp, level, form, points, propLevels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement, sukunaIncompleteSureHitUnlocked, this.blackFlashMasteryUnlocked);
     }
 
     /**
@@ -662,7 +761,7 @@ public class DomainMasteryData {
      * @param hasOpenBarrierAdvancement has open barrier advancement used by this method.
      */
     public void applySync(double xp, int level, int form, int points, int[] propLevels, boolean hasOpenBarrierAdvancement) {
-        this.applySync(xp, level, form, points, propLevels, "", 0, hasOpenBarrierAdvancement);
+        this.applySync(xp, level, form, points, propLevels, "", 0, hasOpenBarrierAdvancement, false, this.blackFlashMasteryUnlocked);
     }
 
     /**
@@ -687,6 +786,7 @@ public class DomainMasteryData {
             return false;
         }
         this.setPropLevel(prop, current + 1);
+        this.refundSukunaIncompleteSureHitIfInvalid();
         return true;
     }
 
@@ -705,6 +805,7 @@ public class DomainMasteryData {
         }
         this.setPropLevel(prop, current - 1);
         this.domainPropertyPoints += prop.getPointCost();
+        this.refundSukunaIncompleteSureHitIfInvalid();
         return true;
     }
 
@@ -724,6 +825,9 @@ public class DomainMasteryData {
         refund += this.propBarrierRef * DomainMasteryProperties.BARRIER_REFINEMENT.getPointCost();
         // Negative modify grants bonus points up front, so a full refund must subtract that borrowed value before restoring the pool.
         refund -= this.getNegativePoints();
+        if (this.sukunaIncompleteSureHitUnlocked) {
+            refund += 5;
+        }
         this.propSlow = 0;
         this.propBlind = 0;
         this.propRctHeal = 0;
@@ -734,6 +838,7 @@ public class DomainMasteryData {
         this.propRadius = 0;
         this.propDuration = 0;
         this.clearNegativeState();
+        this.sukunaIncompleteSureHitUnlocked = false;
         this.domainPropertyPoints = Math.max(0, this.domainPropertyPoints + refund);
     }
 
@@ -785,6 +890,10 @@ public class DomainMasteryData {
         // Both prefixed and legacy keys are written so older saved data and newer addon revisions stay compatible.
         nbt.putString("jjkbrp_negative_property", this.negativeProperty);
         nbt.putInt("jjkbrp_negative_level", this.negativeLevel);
+        nbt.putBoolean("jjkbrp_sukuna_incomplete_surehit_unlocked", this.sukunaIncompleteSureHitUnlocked);
+        // Schema marker: set once the 2-points-per-level economy has been applied/migrated for this
+        // capability, so the one-time top-up in readNBT runs at most once per save.
+        nbt.putBoolean("jjkbrp_points_per_level_v2", true);
         nbt.putString("negativeProperty", this.negativeProperty);
         nbt.putInt("negativeLevel", this.negativeLevel);
         return nbt;
@@ -813,9 +922,17 @@ public class DomainMasteryData {
         this.propBarrierRef = Math.max(0, Math.min(10, nbt.getInt("jjkbrp_prop_barrier_ref")));
         this.negativeProperty = nbt.contains("negativeProperty") ? nbt.getString("negativeProperty") : nbt.getString("jjkbrp_negative_property");
         this.negativeLevel = nbt.contains("negativeLevel") ? nbt.getInt("negativeLevel") : nbt.getInt("jjkbrp_negative_level");
+        this.sukunaIncompleteSureHitUnlocked = nbt.getBoolean("jjkbrp_sukuna_incomplete_surehit_unlocked");
+        // One-time migration to the 2-points-per-level economy: older saves were granted 1 point per
+        // mastery level, so award the missing point for every level already attained. Guarded by a
+        // schema marker so it runs at most once and never double-grants.
+        if (!nbt.getBoolean("jjkbrp_points_per_level_v2") && this.domainMasteryLevel > 0) {
+            this.domainPropertyPoints += this.domainMasteryLevel * (POINTS_PER_LEVEL - 1);
+        }
         this.domainXPToNextLevel = DomainMasteryData.getXPRequiredForLevel(this.domainMasteryLevel + 1);
         this.openBarrierAdvancementUnlocked = false;
         this.sanitizeNegativeState();
+        this.refundSukunaIncompleteSureHitIfInvalid();
     }
     public void clearBlackFlashRuntimeState(net.minecraft.server.level.ServerPlayer player) { }
     public double getClashPowerBonus() { return getBarrierPowerBonus(); }

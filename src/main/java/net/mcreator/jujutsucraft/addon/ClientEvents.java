@@ -187,6 +187,8 @@ public class ClientEvents {
         @SubscribeEvent
         public static void registerEntityRenderers(EntityRenderersEvent.RegisterRenderers event) {
             event.registerEntityRenderer((EntityType) LimbEntityRegistry.SEVERED_LIMB.get(), SeveredLimbRenderer::new);
+            // The shrine collision platform is purely a physics surface; render it as nothing.
+            event.registerEntityRenderer((EntityType) LimbEntityRegistry.SHRINE_PLATFORM.get(), net.minecraft.client.renderer.entity.NoopRenderer::new);
         }
 
         @SubscribeEvent

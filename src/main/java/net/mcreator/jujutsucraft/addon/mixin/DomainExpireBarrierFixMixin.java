@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
+import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModEntities;
@@ -201,6 +202,49 @@ public class DomainExpireBarrierFixMixin {
         if (nbt.getBoolean("jjkbrp_open_form_active")) {
             nbt.putBoolean("jjkbrp_open_form_active", false);
         }
+        // Genuine domain-end transition for a Sukuna Incomplete Domain Shrine surehit session
+        // (Req 2.5 surehit deactivation; Req 4.1/4.6 post-domain Fuga cooldown reset; Req 5.3/5.7
+        // reward + overlay persistence past domain end). This RETURN inject runs AFTER the base-mod
+        // execute() body has zeroed dust_amount and cleared OVERLAY1/OVERLAY2, so any reward overlay
+        // we (re)establish below survives the base-mod domain-end overlay clearing and persists past
+        // domain end until consumed/cleared.
+        //
+        // Coordination with CooldownTrackerEvents.handleSukunaIncompleteSureHitReward (per-tick):
+        // both this path and the per-tick "domain just ended" branch can observe the same end
+        // transition. The one-time reward grant is guarded by the surehit session/had_domain flags,
+        // and BOTH paths clear those flags after handling the end. Whichever path runs first grants
+        // the reward and clears the flags; the other path then sees no session/had_domain flag and
+        // skips the grant. The grant itself is idempotent (a boolean reward flag, a fixed dust fill
+        // to 200, and an idempotent cooldown clear), so the reward is granted exactly once and the
+        // surehit flags are cleared exactly once regardless of ordering.
+        if (entity instanceof ServerPlayer) {
+            ServerPlayer sp = (ServerPlayer)entity;
+            // "A surehit domain was active" is carried by the session/had_domain flags (set together
+            // at activation and re-asserted per tick while the shrine is live). Mirror the per-tick
+            // handler, which gates the grant on had_domain.
+            boolean surehitDomainWasActive = nbt.getBoolean("jjkbrp_sukuna_incomplete_surehit_session")
+                    || nbt.getBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain");
+            boolean fugaUsedInDomain = nbt.getBoolean("jjkbrp_sukuna_incomplete_fuga_used");
+            if (surehitDomainWasActive && !fugaUsedInDomain) {
+                // FugaRewardState.onDomainEndUnused: persist the reward and fill dust, and reset the
+                // Fuga cooldown. Set jjkbrp_sukuna_fuga_dust_locked_full BEFORE fillSukunaFugaDust so
+                // syncDustOverlayFromAmount recognizes the reward and shows the overlay even though
+                // the shrine is no longer active.
+                nbt.putBoolean("jjkbrp_sukuna_fuga_dust_locked_full", true);
+                ModNetworking.clearSukunaFugaCooldown(sp);
+                ModNetworking.fillSukunaFugaDust(sp);
+            }
+            // else: Fuga was used during the domain (or no surehit domain was active) -> grant no
+            // cooldown reset and leave any existing reward/overlay state untouched, matching the
+            // per-tick handler (FugaRewardState.onDomainEndUsed grants nothing new here).
+        }
+        // SurehitState.onDomainEnd: clear the session/active/had_domain flags (and the per-domain
+        // fuga-used marker) so surehit cannot bleed into a later, unrelated domain. Together with the
+        // per-tick end branch this is the ONLY place the surehit flags are cleared.
+        nbt.remove("jjkbrp_sukuna_incomplete_surehit_session");
+        nbt.remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
+        nbt.remove("jjkbrp_sukuna_incomplete_surehit_active");
+        nbt.remove("jjkbrp_sukuna_incomplete_fuga_used");
         if (entity instanceof LivingEntity) {
             LivingEntity le = (LivingEntity)entity;
             DomainAddonUtils.cleanupBFBoost(le);

@@ -2,6 +2,8 @@ package net.mcreator.jujutsucraft.addon;
 
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.RCTLevel3Handler;
+import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.SureHitShrineFx;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.minecraft.advancements.Advancement;
@@ -15,7 +17,9 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.LivingHurtEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -25,9 +29,9 @@ import net.minecraftforge.fml.common.Mod;
  */
 public class CooldownTrackerEvents {
     // Total Black Flash hit threshold required to unlock mastery for most characters.
-    private static final int BF_MASTERY_THRESHOLD = 500;
+    private static final int BF_MASTERY_THRESHOLD = 100;
     // Reduced mastery threshold used for Yuji because his Black Flash identity is stronger.
-    private static final int BF_MASTERY_THRESHOLD_YUJI = 200;
+    private static final int BF_MASTERY_THRESHOLD_YUJI = 50;
     // Legacy probability constant retained alongside the newer percentage-based Black Flash calculation.
     private static final double BF_ROLL_CHANCE = 0.0012;
     // Combat tag timeout in ticks before accumulated Black Flash combat bonus starts decaying.
@@ -46,6 +50,13 @@ public class CooldownTrackerEvents {
     private static final double BF_PERCENT_CAP_YUJI = 30.0;
     // Near-death cooldown reduction, in ticks, granted when Black Flash procs in the supported path.
     private static final int ND_COOLDOWN_REDUCTION = 120;
+    // How many CONSECUTIVE server ticks the live DOMAIN_EXPANSION effect must read absent
+    // before the per-tick handler concludes the Incomplete Domain Shrine genuinely ended.
+    // The base-mod active-tick procedure briefly removes and re-applies the domain effect
+    // during its clash/neutralization checks, so a single absent read is a normal flicker;
+    // requiring several consecutive misses prevents a premature domain-end that would clear
+    // the surehit latch mid-domain (Issue 2).
+    private static final int SUREHIT_END_GRACE_TICKS = 10;
 
     @SubscribeEvent
     /**
@@ -69,6 +80,8 @@ public class CooldownTrackerEvents {
         }
         ServerPlayer player2 = (ServerPlayer)player;
         CompoundTag data = player2.getPersistentData();
+        CooldownTrackerEvents.handleSukunaIncompleteSureHitReward(player2, data);
+        CooldownTrackerEvents.tickStaleStateReconcile(player2, data);
         int bfCd = data.getInt("jjkbrp_bf_cd");
         if (bfCd > 0) {
             data.putInt("jjkbrp_bf_cd", bfCd - 1);
@@ -132,7 +145,7 @@ public class CooldownTrackerEvents {
             } else {
                 int threshold;
                 int totalHits = data.getInt("addon_bf_total_hits");
-                int n = threshold = isYuji ? 200 : 500;
+                threshold = isYuji ? BF_MASTERY_THRESHOLD_YUJI : BF_MASTERY_THRESHOLD;
                 // Mastery unlocks automatically after enough successful Black Flash-related combat milestones, with a lower threshold for Yuji.
                 if (totalHits >= threshold) {
                     data.putBoolean("addon_bf_mastery", true);
@@ -149,6 +162,166 @@ public class CooldownTrackerEvents {
         }
         if (player2.tickCount % 40 == 0) {
             RCTLevel3Handler.checkAndGrantRCTLevel3(player2);
+        }
+    }
+
+    private static void handleSukunaIncompleteSureHitReward(ServerPlayer player, CompoundTag data) {
+        boolean sessionActive = data.getBoolean("jjkbrp_sukuna_incomplete_surehit_session");
+        // The live DOMAIN_EXPANSION effect is the ground truth for "the shrine is still up".
+        // It is far more stable than the full composite isActiveSukunaIncompleteShrine
+        // predicate, which also reads the incomplete-form / runtime-domain-id NBT that other
+        // base/addon paths can momentarily rewrite during a tick.
+        boolean liveDomain = DomainAddonUtils.hasLiveDomainEffect(player);
+        boolean domainActive = DomainAddonUtils.isActiveSukunaIncompleteShrine(player);
+        boolean rewardFlag = data.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full");
+
+        // Req 2.1, 2.2, 2.4: LATCH surehit while the shrine session is established AND a live
+        // domain effect is still present. Re-assert all three flags every tick so a transient
+        // flicker in the composite predicate (a momentary incomplete-form / runtime-domain-id
+        // read, or an incidental cleanup that strips a flag) cannot deactivate surehit
+        // mid-domain. This is the core Issue 2 fix: previously the handler treated
+        // "session set but isActiveSukunaIncompleteShrine() == false" as a domain end and
+        // cleared the flags, which was self-reinforcing (once cleared, the predicate stayed
+        // false forever), so surehit vanished a few ticks after activation.
+        if (domainActive || (sessionActive && liveDomain)) {
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+            // The domain is confirmed live this tick: reset the end-grace counter.
+            data.remove("jjkbrp_sukuna_incomplete_end_grace");
+            // Drive the sure-hit shrine VFX + radius-bounded terrain pulverization here, on the
+            // reliable per-tick path. Doing it here (rather than at the base
+            // MalevolentShrineActiveProcedure HEAD, which the addon masks/redirects and which only
+            // runs while skill_domain==1) guarantees the dramatic shrine effects appear for the
+            // whole domain, mirroring how Closed/Open domains render their barrier/VFX.
+            SureHitShrineFx.tick(player, data);
+            // Req 4.3, 4.4: keep Fuga's cooldown effects absent whenever the reward flag is set.
+            if (rewardFlag) {
+                ModNetworking.clearSukunaFugaCooldown(player);
+            }
+            // Req 5.7, 6.5: re-sync the overlay from the REAL dust_amount (no refill to full),
+            // independent of base-mod domain-end overlay clearing.
+            ModNetworking.syncDustOverlayFromAmount(player);
+            return;
+        }
+
+        if (sessionActive) {
+            // Session is set but the live domain effect read false THIS tick. That is NOT
+            // sufficient to conclude the domain ended: the base-mod active-tick procedure
+            // briefly REMOVES and re-applies the DOMAIN_EXPANSION effect during its clash /
+            // neutralization checks, so a single absent read is a normal mid-domain flicker.
+            // Concluding "domain ended" here was the real Issue 2 killer — it cleared the
+            // session latch and prematurely granted the reward while the domain was still
+            // running, after which surehit could never recover.
+            //
+            // Require the effect to be gone for a few CONSECUTIVE ticks before treating it as
+            // a genuine end. The grace counter is reset every tick the effect is seen (above).
+            int endGrace = data.getInt("jjkbrp_sukuna_incomplete_end_grace") + 1;
+            if (endGrace < SUREHIT_END_GRACE_TICKS) {
+                data.putInt("jjkbrp_sukuna_incomplete_end_grace", endGrace);
+                // Still within the grace window: keep the latch alive, do not grant/clear.
+                data.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
+                data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+                data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+                return;
+            }
+            // Grace exhausted: the domain has genuinely ended.
+            data.remove("jjkbrp_sukuna_incomplete_end_grace");
+            boolean usedFugaDuringDomain = data.getBoolean("jjkbrp_sukuna_incomplete_fuga_used");
+            if (data.getBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain") && !usedFugaDuringDomain) {
+                // Domain just ended with surehit and Fuga unused: grant the one-time reward.
+                // This is a GRANT moment, so dust is filled once here (consistent with the
+                // DomainExpireBarrierFixMixin domain-end path); steady-state ticks only re-sync.
+                ModNetworking.clearSukunaFugaCooldown(player);
+                data.putBoolean("jjkbrp_sukuna_fuga_dust_locked_full", true);
+                ModNetworking.fillSukunaFugaDust(player);
+            }
+            // Req 2.5: clear the surehit session state so surehit cannot bleed into a later domain.
+            data.remove("jjkbrp_sukuna_incomplete_surehit_session");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_active");
+            data.remove("jjkbrp_sukuna_incomplete_fuga_used");
+        } else if (rewardFlag) {
+            // Req 4.3, 4.4: persisted reward past domain end — re-clear the Fuga cooldown effects
+            // every tick so they stay absent for the full Unstable duration.
+            ModNetworking.clearSukunaFugaCooldown(player);
+            // Req 5.7, 6.5: keep the overlay synced from the REAL dust (no refill), independent of
+            // the base-mod domain-end overlay clearing.
+            ModNetworking.syncDustOverlayFromAmount(player);
+        }
+    }
+
+    /**
+     * Req 7.1, 7.5: the 20-tick post-login safety re-check of the Issue 4 stale-state
+     * reconciliation. The login handler ({@code BlueRedPurpleNukeMod.onPlayerLoggedIn}) seeds
+     * {@code jjkbrp_stale_reconcile_ticks = 20} for Sukuna players; while that countdown is
+     * positive this re-runs the shared reconcile + write-back + sync each server tick so a login
+     * that lands a few ticks before the capability/world is fully ready still converges to the
+     * Clean_Baseline within 20 server ticks (1 second).
+     *
+     * <p>The actual reconcile decision is delegated to the pure
+     * {@code StaleStateReconciler} via the shared
+     * {@code BlueRedPurpleNukeMod.reconcileSukunaStaleState} helper, so the login path and this
+     * re-check stay identical and DRY. Only writes back when stale state is present and no
+     * genuinely-active shrine exists; an active shrine is preserved (Req 7.7).</p>
+     *
+     * @param player the server player being ticked.
+     * @param data   the player's persistent data (holds the countdown).
+     */
+    private static void tickStaleStateReconcile(ServerPlayer player, CompoundTag data) {
+        int ticksLeft = data.getInt("jjkbrp_stale_reconcile_ticks");
+        if (ticksLeft <= 0) {
+            return;
+        }
+        // Re-run the same reconcile + write-back + sync the login handler uses. This converges to
+        // the Clean_Baseline even if the capability/world was not ready at the exact login instant.
+        BlueRedPurpleNukeMod.reconcileSukunaStaleState(player);
+        ticksLeft--;
+        if (ticksLeft <= 0) {
+            // Window elapsed: drop the transient countdown key entirely.
+            data.remove("jjkbrp_stale_reconcile_ticks");
+        } else {
+            data.putInt("jjkbrp_stale_reconcile_ticks", ticksLeft);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onLivingDeath(LivingDeathEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            player.getPersistentData().remove("jjkbrp_sukuna_fuga_dust_locked_full");
+            player.getPersistentData().remove("jjkbrp_sukuna_incomplete_fuga_used");
+            player.getPersistentData().remove("jjkbrp_sukuna_incomplete_surehit_session");
+            player.getPersistentData().remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
+            player.getPersistentData().remove("jjkbrp_sukuna_incomplete_surehit_active");
+            player.getPersistentData().remove("jjkbrp_sukuna_fuga_reward_casting");
+            ModNetworking.clearSukunaFugaDustOverlay(player);
+        }
+    }
+
+    /**
+     * Req 6.7 / 3.6: scrub the Fuga dust reward and surehit state from the NEW (post-respawn)
+     * player on a death-respawn clone. Forge/base-mod may copy persistent data and overlay fields
+     * forward across the clone, so the post-respawn session could otherwise carry a stale reward
+     * flag, surehit flags, dust amount, or dust overlay. We clear the new player's keys directly so
+     * the post-respawn session starts with dust_amount = 0, empty OVERLAY1/OVERLAY2, the three
+     * surehit flags cleared, and the reward flag removed. All writes are server-side.
+     * @param event Forge clone event fired on respawn (and dimension change).
+     */
+    @SubscribeEvent
+    public static void onPlayerClone(PlayerEvent.Clone event) {
+        if (!event.isWasDeath()) {
+            return;
+        }
+        if (event.getEntity() instanceof ServerPlayer player) {
+            CompoundTag data = player.getPersistentData();
+            data.remove("jjkbrp_sukuna_fuga_dust_locked_full");
+            data.remove("jjkbrp_sukuna_incomplete_fuga_used");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_session");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_active");
+            data.remove("jjkbrp_sukuna_fuga_reward_casting");
+            // Sets dust_amount = 0 and clears OVERLAY1/OVERLAY2 on the new player.
+            ModNetworking.clearSukunaFugaDustOverlay(player);
         }
     }
 

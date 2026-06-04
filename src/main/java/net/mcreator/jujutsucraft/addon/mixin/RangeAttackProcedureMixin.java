@@ -134,6 +134,17 @@ public class RangeAttackProcedureMixin {
             ci.cancel();
             return;
         }
+        if (data.getBoolean("DomainAttack") && RangeAttackProcedureMixin.jjkblueredpurple$isSpecialSukunaIncompleteSureHit(domainStateSource) && !data.getBoolean("jjkbrp_sukuna_incomplete_surehit_corrected")) {
+            CompoundTag ownerNbt = domainStateSource.getPersistentData();
+            Vec3 center = DomainAddonUtils.getDomainCenter((Entity)domainStateSource);
+            double range = RangeAttackProcedureMixin.jjkblueredpurple$getSukunaIncompleteSureHitRange(world, domainStateSource);
+            data.putDouble("Range", range);
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_corrected", true);
+            ci.cancel();
+            RangeAttackProcedure.execute(world, center.x, center.y, center.z, entity);
+            data.remove("jjkbrp_sukuna_incomplete_surehit_corrected");
+            return;
+        }
         // Keep OG Blue/Red/Purple damage on the original RangeAttack + DamageFix path.
         RangeAttackProcedureMixin.jjkblueredpurple$applyRankDamageScale(world, entity, data);
         // Temporarily swap the shared domain radius so all downstream range checks operate on the mastery-scaled radius instead of the global default.
@@ -172,7 +183,9 @@ public class RangeAttackProcedureMixin {
                           : ownerNbt.contains("y_pos_doma") ? ownerNbt.getDouble("y_pos_doma") : y;
                 double cz = ownerNbt.contains("jjkbrp_open_domain_cz") ? ownerNbt.getDouble("jjkbrp_open_domain_cz")
                           : ownerNbt.contains("z_pos_doma") ? ownerNbt.getDouble("z_pos_doma") : z;
-                double addonOpenRange = DomainAddonUtils.getOpenDomainRange(world, (Entity)domainStateSource);
+                double addonOpenRange = RangeAttackProcedureMixin.jjkblueredpurple$isSpecialSukunaIncompleteSureHit(domainStateSource)
+                        ? RangeAttackProcedureMixin.jjkblueredpurple$getSukunaIncompleteSureHitRange(world, domainStateSource)
+                        : DomainAddonUtils.getOpenDomainRange(world, (Entity)domainStateSource);
                 double addonSureHitRange = addonOpenRange * 0.5;
                 double dx = x - cx;
                 double dy = y - cy;
@@ -373,7 +386,31 @@ public class RangeAttackProcedureMixin {
             return false;
         }
         LivingEntity domainStateSource = RangeAttackProcedureMixin.jjkblueredpurple$resolveDomainStateSource(world, entity, data);
+        if (RangeAttackProcedureMixin.jjkblueredpurple$isSpecialSukunaIncompleteSureHit(domainStateSource)) {
+            return false;
+        }
         return domainStateSource != null && domainStateSource.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get()) && DomainAddonUtils.isIncompleteDomainState(domainStateSource);
+    }
+
+    @Unique
+    private static boolean jjkblueredpurple$isSpecialSukunaIncompleteSureHit(LivingEntity domainStateSource) {
+        if (!DomainAddonUtils.isActiveSukunaIncompleteShrine(domainStateSource)) {
+            return false;
+        }
+        CompoundTag data = domainStateSource.getPersistentData();
+        data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+        data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+        return true;
+    }
+
+    @Unique
+    private static double jjkblueredpurple$getSukunaIncompleteSureHitRange(LevelAccessor world, LivingEntity domainStateSource) {
+        if (domainStateSource == null) {
+            return 40.0;
+        }
+        double baseRadius = DomainAddonUtils.getActualDomainRadius(world, domainStateSource.getPersistentData());
+        double openMultiplier = Math.max(2.5, domainStateSource.getPersistentData().getDouble("jjkbrp_open_range_multiplier"));
+        return baseRadius * openMultiplier;
     }
 
     @Unique

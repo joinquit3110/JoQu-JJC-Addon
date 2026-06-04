@@ -219,12 +219,12 @@ public final class ClientPacketHandler {
      * @param negativeLevel level value used by this operation.
      * @param hasOpenBarrierAdvancement has open barrier advancement used by this method.
      */
-    public static void syncDomainMastery(double xp, int level, int form, int points, int[] propLevels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement) {
+    public static void syncDomainMastery(double xp, int level, int form, int points, int[] propLevels, String negativeProperty, int negativeLevel, boolean hasOpenBarrierAdvancement, boolean sukunaIncompleteSureHitUnlocked, boolean blackFlashMasteryUnlocked) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
             return;
         }
-        mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> data.applySync(xp, level, form, points, propLevels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement));
+        mc.player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> data.applySync(xp, level, form, points, propLevels, negativeProperty, negativeLevel, hasOpenBarrierAdvancement, sukunaIncompleteSureHitUnlocked, blackFlashMasteryUnlocked));
     }
 
     public static void spawnGojoTeleportGhost(double x, double y, double z, float yaw, int lifetime) {

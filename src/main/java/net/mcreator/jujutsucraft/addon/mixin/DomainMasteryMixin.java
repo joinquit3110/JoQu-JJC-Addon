@@ -7,8 +7,10 @@ import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
+import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.clash.ClashSubsystem;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.util.SlashVfxEmitter;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
@@ -16,8 +18,6 @@ import net.mcreator.jujutsucraft.procedures.DomainActiveProcedure;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionOnEffectActiveTickProcedure;
 import net.mcreator.jujutsucraft.procedures.EffectCharactorProcedure;
 import net.mcreator.jujutsucraft.procedures.PlayAnimationProcedure;
-import net.minecraft.commands.CommandSource;
-import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.particles.ParticleOptions;
@@ -38,7 +38,6 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
-import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.joml.Vector3f;
@@ -84,7 +83,7 @@ public abstract class DomainMasteryMixin {
             return;
         }
         LivingEntity caster = (LivingEntity)entity;
-        if (!DomainMasteryMixin.jjkbrp$shouldMaskIncompleteActiveBehavior(caster)) {
+        if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster) || !DomainMasteryMixin.jjkbrp$shouldMaskIncompleteActiveBehavior(caster)) {
             return;
         }
         CompoundTag data = caster.getPersistentData();
@@ -183,14 +182,15 @@ public abstract class DomainMasteryMixin {
         // Keep non-hazardous incomplete active visuals/support, but suppress full-domain active procedures that are sure-hit carriers.
         boolean incomplete = entity instanceof LivingEntity
                 && DomainAddonUtils.isIncompleteDomainState((LivingEntity)entity);
-        if (incomplete) {
+        boolean specialSukunaSureHit = incomplete && DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit((LivingEntity)entity);
+        if (incomplete && !specialSukunaSureHit) {
             entity.getPersistentData().putBoolean("DomainAttack", false);
             if (DomainMasteryMixin.jjkbrp$shouldSuppressIncompleteDomainActive((LivingEntity)entity)) {
                 return;
             }
         }
         DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
-        if (incomplete) {
+        if (incomplete && !specialSukunaSureHit) {
             entity.getPersistentData().putBoolean("DomainAttack", false);
         }
     }
@@ -206,7 +206,8 @@ public abstract class DomainMasteryMixin {
     private static void jjkbrp$skipEffectCharacterForIncomplete(LevelAccessor world, Entity caster, Entity target) {
         LivingEntity livingCaster;
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(caster);
-        if (caster instanceof LivingEntity && DomainAddonUtils.isIncompleteDomainState(livingCaster = (LivingEntity)caster)) {
+        if (caster instanceof LivingEntity && DomainAddonUtils.isIncompleteDomainState(livingCaster = (LivingEntity)caster)
+                && !DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(livingCaster)) {
             return;
         }
         EffectCharactorProcedure.execute((LevelAccessor)world, (Entity)caster, (Entity)target);
@@ -229,8 +230,22 @@ public abstract class DomainMasteryMixin {
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(caster);
         if (effect != null && caster instanceof LivingEntity) {
             LivingEntity livingCaster = (LivingEntity)caster;
-            // Prevent incomplete domains from applying the neutralization effect to other entities through the normal base pathway.
-            if (target != caster && effect.getEffect() == JujutsucraftModMobEffects.NEUTRALIZATION.get() && DomainAddonUtils.isIncompleteDomainState(livingCaster)) {
+            // Prevent incomplete domains from applying the neutralization effect to other
+            // entities through the normal base pathway — EXCEPT the special Sukuna sure-hit
+            // shrine, which is the one incomplete domain that is meant to keep cleaving.
+            //
+            // Issue 2 (the real "cleave only lasts a few ticks" cause): the base-mod
+            // LogicAttackDomainProcedure only lets a domain attack hit a target while that
+            // target has the NEUTRALIZATION effect, which the base mod re-applies for ~20
+            // ticks each cycle. Blocking NEUTRALIZATION for the surehit shrine meant targets
+            // lost it after the initial application and the cleave stopped landing, even
+            // though the surehit flags/DomainAttack stayed true. Allowing NEUTRALIZATION
+            // through for the active surehit shrine keeps the sure-hit cleave connecting for
+            // the full domain duration.
+            if (target != caster
+                    && effect.getEffect() == JujutsucraftModMobEffects.NEUTRALIZATION.get()
+                    && DomainAddonUtils.isIncompleteDomainState(livingCaster)
+                    && !DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(livingCaster)) {
                 return false;
             }
         }
@@ -258,7 +273,15 @@ public abstract class DomainMasteryMixin {
                 data.putBoolean("jjkbrp_incomplete_form_active", true);
             }
             data.remove("jjkbrp_incomplete_session_active");
-            data.putBoolean("DomainAttack", false);
+            if (entity instanceof LivingEntity living && DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(living)) {
+                data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+                data.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
+                data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+                data.putBoolean("DomainAttack", true);
+                data.putBoolean("StartDomainAttack", true);
+            } else {
+                data.putBoolean("DomainAttack", false);
+            }
         }
     }
 
@@ -266,9 +289,24 @@ public abstract class DomainMasteryMixin {
 
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/minecraft/world/entity/LivingEntity;m_21195_(Lnet/minecraft/world/effect/MobEffect;)Z", remap=false), remap=false)
     private static boolean jjkbrp$preserveDomainEffectDuringClash(LivingEntity target, MobEffect effect, LevelAccessor world, double x, double y, double z, Entity caster) {
-        if (effect == JujutsucraftModMobEffects.DOMAIN_EXPANSION.get() && target != null && caster instanceof LivingEntity livingCaster && DomainMasteryMixin.jjkbrp$isActiveClashPair(livingCaster, target)) {
-            JJKBRP$preserveDomainRemoval.set(Boolean.TRUE);
-            return false;
+        if (effect == JujutsucraftModMobEffects.DOMAIN_EXPANSION.get() && target != null) {
+            // Preserve the domain effect during an active clash (the original behavior).
+            if (caster instanceof LivingEntity livingCaster && DomainMasteryMixin.jjkbrp$isActiveClashPair(livingCaster, target)) {
+                JJKBRP$preserveDomainRemoval.set(Boolean.TRUE);
+                return false;
+            }
+            // Issue 2 root-cause fix: the base active-tick procedure removes DOMAIN_EXPANSION
+            // from the caster in its "caster not inside own domain AABB" (!logic_a) branch.
+            // For an active Sukuna Incomplete Domain Shrine that removal triggers the expiry
+            // callback mid-domain, which zeroes skill_domain/select and tears down surehit a
+            // few ticks after activation. Block that removal so the shrine's domain effect is
+            // never transiently dropped; the addon's own leash (checkIncompleteDomainRangeCancel)
+            // still ends the domain when the player genuinely leaves its range, and death /
+            // logout / natural-duration expiry still end it normally.
+            if (DomainAddonUtils.isActiveSukunaIncompleteShrine(target)) {
+                JJKBRP$preserveDomainRemoval.set(Boolean.TRUE);
+                return false;
+            }
         }
         return target.removeEffect(effect);
     }
@@ -276,6 +314,29 @@ public abstract class DomainMasteryMixin {
     @Inject(method={"execute"}, at={@At(value="RETURN")}, remap=false)
     private static void jjkbrp$restorePreservedDomainRemoval(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         JJKBRP$preserveDomainRemoval.remove();
+        // Post-clash surehit invariant (Req: "nếu incomplete domain shrine clash thắng domain khác
+        // thì sau khi thắng nếu còn surehit thì vẫn giữ, nếu không có thì không có").
+        //
+        // The base active-tick procedure resolves a domain-vs-domain clash inside this method. If
+        // the Sukuna Incomplete Shrine WINS, the winner keeps its DOMAIN_EXPANSION effect and keeps
+        // ticking (the loser is the one that gets Failed/DomainDefeated + effect stripped). We
+        // re-stamp the surehit flags here, AFTER clash resolution, but ONLY for a shrine that is
+        // genuinely the special Sukuna sure-hit shrine (durable purchase + incomplete form + live
+        // domain effect). A non-surehit shrine never satisfies jjkbrp$isSpecialSukunaIncompleteSureHit,
+        // so winning a clash can never grant it surehit it did not pay for; and a shrine that lost the
+        // clash no longer has a live domain effect, so it is excluded too. This makes the win-case
+        // preservation explicit instead of relying solely on the per-tick reward handler.
+        if (world == null || world.isClientSide() || !(entity instanceof LivingEntity living)) {
+            return;
+        }
+        if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(living)) {
+            CompoundTag data = living.getPersistentData();
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
+            data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+            data.putBoolean("DomainAttack", true);
+            data.putBoolean("StartDomainAttack", true);
+        }
     }
 
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/minecraft/nbt/CompoundTag;m_128379_(Ljava/lang/String;Z)V", remap=false), remap=false)
@@ -363,6 +424,11 @@ public abstract class DomainMasteryMixin {
         }
         CompoundTag casterNbt = caster.getPersistentData();
         int runtimeDomainId = DomainMasteryMixin.jjkbrp$resolveRuntimeDomainId(casterNbt);
+        if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster)) {
+            casterNbt.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
+            casterNbt.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+            casterNbt.putBoolean("DomainAttack", true);
+        }
         if (DomainMasteryMixin.jjkbrp$shouldReplayDomainSpecificActive(runtimeDomainId, caster) && casterNbt.getBoolean("StartDomainAttack")) {
             DomainActiveProcedure.execute((LevelAccessor)world, x, y, z, (Entity)caster);
         }
@@ -375,7 +441,9 @@ public abstract class DomainMasteryMixin {
             });
         }
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags((Entity)caster);
-        if (DomainAddonUtils.isIncompleteDomainState(caster)) {
+        if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster)) {
+            caster.getPersistentData().putBoolean("DomainAttack", true);
+        } else if (DomainAddonUtils.isIncompleteDomainState(caster)) {
             caster.getPersistentData().putBoolean("DomainAttack", false);
         }
         if (caster instanceof ServerPlayer) {
@@ -397,7 +465,13 @@ public abstract class DomainMasteryMixin {
         // Apply every mastery property after the base active tick so the addon effects layer cleanly on top of the original domain behavior.
         DomainMasteryMixin.applyPropertyEffects(world, caster);
         DomainMasteryMixin.jjkbrp$applyIncompleteZoneOnlyBuff(caster);
-        if (!DomainAddonUtils.isIncompleteDomainState(caster) && world instanceof ServerLevel) {
+        // The radius-scaled Malevolent Shrine slash VFX (jujutsucraft:particle_slash_large) runs for
+        // the COMPLETE (closed) shrine AND for the special Sukuna Incomplete sure-hit shrine, so both
+        // show the same radius-scaled cleave slashes. (The internal domainId==1 gate still limits it
+        // to the Malevolent Shrine, and the surehit shrine bypasses the Failed check inside.)
+        if (world instanceof ServerLevel
+                && (!DomainAddonUtils.isIncompleteDomainState(caster)
+                        || DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster))) {
             DomainMasteryMixin.jjkbrp$supplementMalevolentShrineVFX((ServerLevel)world, caster);
         }
         if (caster instanceof Player) {
@@ -445,6 +519,17 @@ public abstract class DomainMasteryMixin {
     }
 
     @Unique
+    private static boolean jjkbrp$isSpecialSukunaIncompleteSureHit(LivingEntity caster) {
+        if (!DomainAddonUtils.isActiveSukunaIncompleteShrine(caster)) {
+            return false;
+        }
+        CompoundTag data = caster.getPersistentData();
+        data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
+        data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
+        return true;
+    }
+
+    @Unique
     private static boolean jjkbrp$shouldSuppressIncompleteDomainActive(LivingEntity caster) {
         if (caster == null || !DomainAddonUtils.isIncompleteDomainState(caster)) {
             return false;
@@ -489,7 +574,12 @@ public abstract class DomainMasteryMixin {
         double normalizedRadiusMul = Math.max(0.25, radiusMul);
         double scaledRadius = Math.max(1.0, baseRadius * normalizedRadiusMul);
         double range = scaledRadius * 2.0;
-        if (!nbt.getBoolean("Failed") && gameTime % 5L == 0L) {
+        // The OG slash only renders while the domain is not "Failed". The Incomplete shell is treated
+        // as Failed by the base mod, which is exactly why the closed shrine showed the slash but the
+        // incomplete sure-hit shrine did not. Bypass the Failed gate for the active sure-hit shrine so
+        // it shows the same radius-scaled cleave slashes.
+        boolean surehitShrine = DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster);
+        if ((surehitShrine || !nbt.getBoolean("Failed")) && gameTime % 5L == 0L) {
             DomainMasteryMixin.jjkbrp$sendMalevolentShrineSlashVFX(world, center, range, normalizedRadiusMul);
         }
         if (normalizedRadiusMul <= 1.0) {
@@ -531,17 +621,11 @@ public abstract class DomainMasteryMixin {
 
     @Unique
     private static void jjkbrp$sendMalevolentShrineSlashVFX(ServerLevel world, Vec3 center, double range, double radiusMul) {
-        if (world == null || center == null) {
-            return;
-        }
-        double spread = Math.max(0.35, range * 0.25);
-        double densityScale = Math.max(0.08, Math.min(1.0, radiusMul * radiusMul));
-        double softenedCount = 4.0 * range * densityScale / Math.sqrt(Math.max(0.25, radiusMul));
-        int minCount = radiusMul < 0.5 ? 3 : (radiusMul < 0.85 ? 6 : 16);
-        int maxCount = radiusMul < 1.0 ? 36 : 132;
-        int count = (int)Math.round(Math.max(minCount, Math.min(maxCount, softenedCount)));
-        String command = "particle jujutsucraft:particle_slash_large " + center.x + " " + center.y + " " + center.z + " " + spread + " " + spread + " " + spread + " 0.01 " + count + " normal";
-        world.getServer().getCommands().performPrefixedCommand(new CommandSourceStack(CommandSource.NULL, center, Vec2.ZERO, world, 4, "", net.minecraft.network.chat.Component.literal(""), world.getServer(), null).withSuppressedOutput(), command);
+        // The radius-scaled particle_slash_large broadcast + its count/spread math were extracted
+        // into the shared SlashVfxEmitter / SlashVfxPolicy so the Closed/Open call-site path (this
+        // one) and the latch-driven incomplete sure-hit path (SureHitShrineFx) emit a byte-for-byte
+        // identical slash. This call site is otherwise unchanged: same inputs, same broadcast.
+        SlashVfxEmitter.emitScaledSlash(world, center, range, radiusMul);
     }
 
     // ===== CLEANUP ENTITY SUPPORT =====
@@ -1407,6 +1491,14 @@ public abstract class DomainMasteryMixin {
         }
         nbt.putBoolean("jjkbrp_incomplete_cancelled", true);
         player.removeEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get());
+        // Zone-exit clears any persisted Fuga dust reward: zero dust_amount, clear the OVERLAY1/OVERLAY2
+        // overlay (and sync it to the client), then remove the reward flag so the per-tick reconcile
+        // handler in CooldownTrackerEvents does not keep re-showing the overlay after the player left.
+        if (player instanceof ServerPlayer) {
+            ServerPlayer serverPlayer = (ServerPlayer)player;
+            ModNetworking.clearSukunaFugaDustOverlay(serverPlayer);
+            serverPlayer.getPersistentData().remove("jjkbrp_sukuna_fuga_dust_locked_full");
+        }
         double scale = Math.max(1.0, cancelRange / 16.0);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.SMOKE, center.x, center.y + 1.0, center.z, (int)(26.0 * Math.min(scale, 2.0)), 1.4 * scale, 0.7, 1.4 * scale, 0.02);
         world.playSound(null, BlockPos.containing((double)center.x, (double)center.y, (double)center.z), SoundEvents.GENERIC_EXTINGUISH_FIRE, SoundSource.PLAYERS, 1.2f, 0.75f);

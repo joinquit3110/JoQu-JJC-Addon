@@ -184,6 +184,15 @@ public abstract class DomainCreateBarrierMixin {
             }
             nbt.putBoolean("jjkbrp_incomplete_form_active", form == 0);
             nbt.remove("jjkbrp_incomplete_session_active");
+            boolean sukunaIncompleteSureHit = form == DomainMasteryData.FORM_INCOMPLETE
+                    && Math.round(policyDomainId) == 1L
+                    && data.isSukunaIncompleteSureHitUnlocked();
+            nbt.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", sukunaIncompleteSureHit);
+            if (sukunaIncompleteSureHit) {
+                nbt.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
+            } else {
+                nbt.remove("jjkbrp_sukuna_incomplete_surehit_session");
+            }
             nbt.putInt("jjkbrp_domain_form_cast_locked", form);
             // Incomplete domains smooth the startup charge window slightly so the partial cast stabilizes fast enough to enter its special runtime path.
             if (form == 0 && (cnt3 = nbt.getDouble("cnt3")) > 0.0 && cnt3 < 20.0) {

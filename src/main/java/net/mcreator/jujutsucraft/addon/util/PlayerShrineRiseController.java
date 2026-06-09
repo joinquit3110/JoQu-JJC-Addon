@@ -12,11 +12,16 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+
+import java.util.List;
 
 public final class PlayerShrineRiseController {
     public static final String KEY_ENABLED = "jjkbrp_player_shrine_rise";
@@ -41,19 +46,12 @@ public final class PlayerShrineRiseController {
     private static final double INCOMPLETE_PLATFORM_OFFSET = 10.0D;
     private static final double INCOMPLETE_HAND_FORWARD_OFFSET = 3.55D;
 
-    // --- Collision platform tuning (the invisible solid slab the player stands on) ---
-    // Base full width (X/Z) of the walkable slab in blocks, before decoration-scale is applied.
-    // Kept to the structure's standable base footprint rather than the full animated model extent
-    // (the model's huge reaching arm spans ~60 blocks, which would wall off the whole area).
     private static final double PLATFORM_BASE_WIDTH_COMPLETE = 9.0D;
     private static final double PLATFORM_BASE_WIDTH_INCOMPLETE = 8.0D;
-    // Thickness of the slab. The player stands on its TOP face.
     private static final double PLATFORM_THICKNESS = 1.0D;
-    // Height of the slab's TOP face above the shrine origin (entity feet). 0 => deck flush with the
-    // shrine base. Raise this if you want the deck to sit higher on the structure so the rising
-    // shrine visibly lifts a player standing on it.
-    private static final double PLATFORM_DECK_TOP_OFFSET = 0.0D;
-    // Hard clamp on the scaled slab width so an extreme radius multiplier cannot wall off a huge area.
+    private static final double PLATFORM_CARRY_HORIZONTAL_MARGIN = 0.18D;
+    private static final double PLATFORM_CARRY_BELOW_EPSILON = 0.12D;
+    private static final double PLATFORM_CARRY_ABOVE_EPSILON = 0.45D;
     private static final double PLATFORM_MAX_WIDTH = 28.0D;
 
     private PlayerShrineRiseController() {
@@ -165,18 +163,6 @@ public final class PlayerShrineRiseController {
         return entity instanceof EntityMalevolentShrineEntity || entity instanceof EntityMalevolentShrine2Entity;
     }
 
-    /**
-     * Spawns the invisible solid collision slab for a shrine and links it via UUID.
-     *
-     * @param level       server level
-     * @param shrine      the shrine visual entity
-     * @param data        the shrine's persistent data (stores the platform UUID link)
-     * @param incomplete  whether this is the incomplete form
-     * @param x           shrine x at spawn (slab is centered here)
-     * @param shrineY     shrine origin y at spawn (slab top is placed relative to this)
-     * @param z           shrine z at spawn
-     * @param scale       decoration scale applied to the shrine, used to size the slab
-     */
     private static void spawnPlatform(ServerLevel level, Entity shrine, CompoundTag data, boolean incomplete,
                                       double x, double shrineY, double z, double scale) {
         double s = Math.max(0.5D, scale);
@@ -187,18 +173,13 @@ public final class PlayerShrineRiseController {
         ShrinePlatformEntity platform =
                 new ShrinePlatformEntity(LimbEntityRegistry.SHRINE_PLATFORM.get(), (Level)level);
         platform.setPlatformSize(width, thickness);
-        // Position so the slab's TOP face sits at shrineY + deck offset; entity Y is the slab bottom.
-        double deckTop = shrineY + PLATFORM_DECK_TOP_OFFSET * s;
+        double deckTop = shrineY + deckTopOffset(data);
         platform.moveTo(x, deckTop - thickness, z, 0.0F, 0.0F);
         platform.keepAlive(level.getGameTime());
         level.addFreshEntity(platform);
         data.putString(KEY_PLATFORM_UUID, platform.getStringUUID());
     }
 
-    /**
-     * Repositions the shrine's collision slab so its top face tracks the shrine origin Y, and pings
-     * it so it does not self-discard as stale while the shrine is alive.
-     */
     private static void movePlatform(ServerLevel level, Entity shrine, CompoundTag data,
                                      double x, double shrineY, double z) {
         if (!data.contains(KEY_PLATFORM_UUID)) {
@@ -216,10 +197,81 @@ public final class PlayerShrineRiseController {
         }
         double s = Math.max(0.5D, decorationScale(data));
         double thickness = PLATFORM_THICKNESS * s;
-        double deckTop = shrineY + PLATFORM_DECK_TOP_OFFSET * s;
+        double deckTop = shrineY + deckTopOffset(data);
+        AABB oldBox = platform.getBoundingBox();
+        double oldDeckTop = oldBox.maxY;
+        double deltaX = x - platform.getX();
+        double deltaY = deckTop - oldDeckTop;
+        double deltaZ = z - platform.getZ();
+        List<Entity> carriedEntities = deltaY > 1.0E-5D
+                ? findEntitiesStandingOnPlatform(level, shrine, platform, oldBox, oldDeckTop)
+                : List.of();
         platform.moveTo(x, deckTop - thickness, z, 0.0F, 0.0F);
         platform.setDeltaMovement(Vec3.ZERO);
         platform.keepAlive(level.getGameTime());
+        if (!carriedEntities.isEmpty()) {
+            carryEntitiesWithPlatform(carriedEntities, deltaX, deltaY, deltaZ);
+        }
+    }
+
+    private static List<Entity> findEntitiesStandingOnPlatform(ServerLevel level, Entity shrine,
+                                                               ShrinePlatformEntity platform,
+                                                               AABB platformBox, double deckTop) {
+        AABB scanBox = new AABB(
+                platformBox.minX - PLATFORM_CARRY_HORIZONTAL_MARGIN,
+                deckTop - PLATFORM_CARRY_BELOW_EPSILON,
+                platformBox.minZ - PLATFORM_CARRY_HORIZONTAL_MARGIN,
+                platformBox.maxX + PLATFORM_CARRY_HORIZONTAL_MARGIN,
+                deckTop + PLATFORM_CARRY_ABOVE_EPSILON,
+                platformBox.maxZ + PLATFORM_CARRY_HORIZONTAL_MARGIN
+        );
+        return level.getEntities((Entity)null, scanBox, entity -> shouldCarryWithPlatform(entity, shrine, platform, platformBox, deckTop));
+    }
+
+    private static boolean shouldCarryWithPlatform(Entity entity, Entity shrine, ShrinePlatformEntity platform,
+                                                   AABB platformBox, double deckTop) {
+        if (entity == null || entity == shrine || entity == platform || entity instanceof ShrinePlatformEntity) {
+            return false;
+        }
+        if (!entity.isAlive() || entity.isSpectator() || entity.noPhysics || entity.isPassenger()) {
+            return false;
+        }
+        AABB entityBox = entity.getBoundingBox();
+        boolean horizontallyOverlaps = entityBox.maxX > platformBox.minX - PLATFORM_CARRY_HORIZONTAL_MARGIN
+                && entityBox.minX < platformBox.maxX + PLATFORM_CARRY_HORIZONTAL_MARGIN
+                && entityBox.maxZ > platformBox.minZ - PLATFORM_CARRY_HORIZONTAL_MARGIN
+                && entityBox.minZ < platformBox.maxZ + PLATFORM_CARRY_HORIZONTAL_MARGIN;
+        if (!horizontallyOverlaps) {
+            return false;
+        }
+        double feetY = entityBox.minY;
+        return feetY >= deckTop - PLATFORM_CARRY_BELOW_EPSILON
+                && feetY <= deckTop + PLATFORM_CARRY_ABOVE_EPSILON;
+    }
+
+    private static void carryEntitiesWithPlatform(List<Entity> entities, double deltaX, double deltaY, double deltaZ) {
+        Vec3 delta = new Vec3(deltaX, deltaY, deltaZ);
+        for (Entity entity : entities) {
+            if (entity == null || !entity.isAlive() || entity.noPhysics || entity.isPassenger()) {
+                continue;
+            }
+            entity.move(MoverType.PISTON, delta);
+            Vec3 motion = entity.getDeltaMovement();
+            if (motion.y < 0.0D) {
+                entity.setDeltaMovement(motion.x, 0.0D, motion.z);
+            }
+            entity.fallDistance = 0.0F;
+            if (entity instanceof ServerPlayer player) {
+                player.teleportTo(player.getX(), player.getY(), player.getZ());
+            }
+        }
+    }
+
+    private static double deckTopOffset(CompoundTag data) {
+        if (data == null || !data.contains(KEY_PLATFORM_OFFSET)) {
+            return 0.0D;
+        }
+        return Math.max(0.0D, data.getDouble(KEY_PLATFORM_OFFSET));
     }
 
     private static void moveShrine(Entity shrine, double x, double y, double z) {
@@ -339,11 +391,6 @@ public final class PlayerShrineRiseController {
     private static Vec3 frontVector(float yaw) {
         double radians = Math.toRadians(yaw + 90.0F);
         return new Vec3(Math.cos(radians), 0.0D, Math.sin(radians));
-    }
-
-    private static Vec3 rightVector(float yaw) {
-        Vec3 front = frontVector(yaw);
-        return new Vec3(-front.z, 0.0D, front.x);
     }
 
     private static double smoothStep(double progress) {

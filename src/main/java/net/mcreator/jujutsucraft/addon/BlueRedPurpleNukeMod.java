@@ -1,7 +1,6 @@
 package net.mcreator.jujutsucraft.addon;
 
 import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.logging.LogUtils;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -104,7 +103,6 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.joml.Vector3f;
-import org.slf4j.Logger;
 
 @Mod(value="jjkblueredpurple")
 /**
@@ -112,7 +110,6 @@ import org.slf4j.Logger;
  */
 // ===== MOD BOOTSTRAP =====
 public class BlueRedPurpleNukeMod {
-    private static final Logger LOGGER = LogUtils.getLogger();
     // Maximum Blue linger lifetime in ticks before the stationary orb expires naturally.
     private static final int LINGER_DURATION = 200;
     // Radius used to detect valid Red and Blue overlap for Hollow Purple fusion.
@@ -381,7 +378,6 @@ public class BlueRedPurpleNukeMod {
         DomainMasteryCommands.register(dispatcher);
         YutaFakePlayerCommands.register(dispatcher);
         dispatcher.register(Commands.literal("jjkbrp_bf_reset_timing_cd").requires(src -> src.hasPermission(0)).executes(ctx -> BlueRedPurpleNukeMod.resetBlackFlashTimingCooldown(ctx.getSource())));
-        dispatcher.register(Commands.literal("jjkbrp_platform_test").requires(src -> src.hasPermission(0)).executes(ctx -> BlueRedPurpleNukeMod.testShrinePlatform(ctx.getSource())));
         dispatcher.register(Commands.literal("jjkbrp_bf_test_effects").requires(src -> src.hasPermission(0))
                 .then(Commands.literal("completion").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashCompletionEffects(ctx.getSource())))
                 .then(Commands.literal("blackflash").executes(ctx -> BlueRedPurpleNukeMod.testBlackFlashHudFeedback(ctx.getSource(), true, true)))
@@ -393,32 +389,6 @@ public class BlueRedPurpleNukeMod {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         ClashSubsystem.getInstance().onServerStopping(event.getServer());
-    }
-
-    /**
-     * Diagnostic: spawns a wide invisible solid platform ~2.5 blocks above the player so we can
-     * verify the collision entity actually carries a walkable AABB in this modpack (independent of
-     * the shrine spawn path). In creative, fly up and try to stand on it. It self-cleans via the
-     * platform's stale-grace timer once it stops being kept alive.
-     */
-    private static int testShrinePlatform(CommandSourceStack source) {
-        ServerPlayer player = source.getPlayer();
-        if (player == null || !(player.level() instanceof ServerLevel level)) {
-            return 0;
-        }
-        net.mcreator.jujutsucraft.addon.util.ShrinePlatformEntity platform =
-                new net.mcreator.jujutsucraft.addon.util.ShrinePlatformEntity(
-                        net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry.SHRINE_PLATFORM.get(), level);
-        platform.setPlatformSize(8.0F, 1.0F);
-        double y = player.getY() + 2.5D;
-        platform.moveTo(player.getX(), y, player.getZ(), 0.0F, 0.0F);
-        platform.keepAlive(level.getGameTime());
-        boolean added = level.addFreshEntity(platform);
-        source.sendSuccess(() -> Component.literal("[jjkbrp] platform spawned=" + added
-                + " at y=" + String.format("%.2f", y)
-                + " id=" + platform.getId()
-                + " bb=" + platform.getBoundingBox()), false);
-        return 1;
     }
 
     @SubscribeEvent
@@ -821,7 +791,6 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         if (resetReached && !BF_STATE_IDLE.equals(state)) {
-            LOGGER.warn("[BlackFlashState] transition player={} {}->IDLE reason=charge_reset cnt6={} skill={}", new Object[]{player.getName().getString(), state, cnt6, skillTag});
             BlueRedPurpleNukeMod.closeBlackFlashPendingWithFailure(player, data, "charge_reset");
             BlueRedPurpleNukeMod.clearBlackFlashCastGates(data);
             BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
@@ -854,7 +823,6 @@ public class BlueRedPurpleNukeMod {
             long elapsed = player.serverLevel().getGameTime() - data.getLong("addon_bf_timing_start_tick");
             float serverNeedle = BlueRedPurpleNukeMod.computeBlackFlashNeedle(elapsed, 0.0f, BlueRedPurpleNukeMod.getBlackFlashTimingPeriodTicks(data));
             boolean serverTimingSuccess = BlueRedPurpleNukeMod.isBlackFlashNeedleInRedArc(serverNeedle, BlueRedPurpleNukeMod.frac(data.getFloat("addon_bf_timing_red_start")), Math.max(0.01f, data.getFloat("addon_bf_timing_red_size")), BF_TIMING_EDGE_TOLERANCE);
-            LOGGER.warn("[BlackFlashReleaseDiag] server detected OG PRESS_Z release edge player={} state={} nonce={} needle={} elapsed={} success={}", new Object[]{player.getName().getString(), state, data.getLong("addon_bf_timing_nonce"), serverNeedle, elapsed, serverTimingSuccess});
             BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, serverNeedle, (float)elapsed, data.getLong("addon_bf_timing_nonce"), serverTimingSuccess);
             return;
         }
@@ -932,7 +900,6 @@ public class BlueRedPurpleNukeMod {
     private static void startBlackFlashTiming(ServerPlayer player, CompoundTag data) {
         String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
         if (!BF_STATE_IDLE.equals(state) || data.getBoolean("addon_bf_no_retrigger_until_cnt6_drop")) {
-            LOGGER.warn("[BlackFlashReleaseDiag] blocked timing start player={} state={} cnt6={} skill={} noRetrigger={}", new Object[]{player.getName().getString(), state, data.getDouble("cnt6"), data.getDouble("skill"), data.getBoolean("addon_bf_no_retrigger_until_cnt6_drop")});
             return;
         }
         BlueRedPurpleNukeMod.setBlackFlashState(data, BF_STATE_RING_ACTIVE);
@@ -956,7 +923,6 @@ public class BlueRedPurpleNukeMod {
         if (!data.getBoolean("addon_bf_charge_announced")) {
             data.putBoolean("addon_bf_charge_announced", true);
         }
-        LOGGER.warn("[BlackFlashTimingDiag] START nonce={} state={} flow={} redStart={} redSize={} period={} startTick={}", new Object[]{data.getLong("addon_bf_timing_nonce"), BlueRedPurpleNukeMod.getBlackFlashState(data), flow, data.getFloat("addon_bf_timing_red_start"), data.getFloat("addon_bf_timing_red_size"), data.getFloat("addon_bf_timing_period_ticks"), data.getLong("addon_bf_timing_start_tick")});
         ModNetworking.sendBlackFlashSync(player);
     }
 
@@ -983,9 +949,6 @@ public class BlueRedPurpleNukeMod {
         boolean charging = data.getBoolean("addon_bf_charging");
         boolean sameNonce = clientNonce != 0L && clientNonce == serverNonce;
         if (!releasedFromCharge || !BF_STATE_RING_ACTIVE.equals(state) || !charging) {
-            String rejectReason = !releasedFromCharge ? "not_released_from_charge" : (!BF_STATE_RING_ACTIVE.equals(state) ? "state_" + state.toLowerCase(Locale.ROOT) : "not_charging");
-            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason={} nonce={} clientNeedle={} state={} age={}", new Object[]{rejectReason, clientNonce != 0L ? clientNonce : serverNonce, clientNeedle, state, BlueRedPurpleNukeMod.getBlackFlashTimingAge(player, data)});
-            LOGGER.warn("[BlackFlashReleaseDiag] invalid/stale release rejected player={} state={} releasedFromCharge={} charging={} clientNonce={} serverNonce={} sameNonce={}", new Object[]{player.getName().getString(), state, releasedFromCharge, charging, clientNonce, serverNonce, sameNonce});
             if (BF_STATE_RING_ACTIVE.equals(state) && !releasedFromCharge) {
                 BlueRedPurpleNukeMod.handleBlackFlashFlowFailure(player, data, "not_released_from_charge");
                 BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "not_released_from_charge");
@@ -998,8 +961,6 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         if (clientNonce != serverNonce || serverNonce == 0L) {
-            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason=nonce_mismatch nonce={} clientNeedle={} state={} age={}", new Object[]{clientNonce, clientNeedle, state, BlueRedPurpleNukeMod.getBlackFlashTimingAge(player, data)});
-            LOGGER.warn("[BlackFlashReleaseDiag] stale release packet sync-clear player={} state={} clientNonce={} serverNonce={} charging={}", new Object[]{player.getName().getString(), state, clientNonce, serverNonce, charging});
             BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "release_nonce_mismatch");
             BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
             ModNetworking.sendBlackFlashSync(player);
@@ -1013,8 +974,6 @@ public class BlueRedPurpleNukeMod {
         boolean clientElapsedProvided = !Float.isNaN(clientElapsedTicks) && !Float.isInfinite(clientElapsedTicks) && clientElapsedTicks >= 0.0f;
         float observedReleaseElapsed = clientElapsedProvided ? clientElapsedTicks : (float)elapsed;
         if (observedReleaseElapsed >= 0.0f && observedReleaseElapsed < (float)BF_TIMING_MIN_RELEASE_AGE_TICKS) {
-            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason=too_early nonce={} clientNeedle={} clientElapsed={} state={} age={}", new Object[]{serverNonce, clientNeedle, clientElapsedTicks, state, elapsed});
-            LOGGER.warn("[BlackFlashReleaseDiag] early release ignored player={} nonce={} age={} observedReleaseElapsed={} minAge={} redStart={} redSize={}", new Object[]{player.getName().getString(), serverNonce, elapsed, observedReleaseElapsed, BF_TIMING_MIN_RELEASE_AGE_TICKS, redStart, redSize});
             BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, "release_too_early");
             BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
             BlueRedPurpleNukeMod.armBlackFlashResolvedCastGate(data, nowTick);
@@ -1034,17 +993,11 @@ public class BlueRedPurpleNukeMod {
         float clientElapsedNeedle = clientElapsedProvided ? BlueRedPurpleNukeMod.computeBlackFlashNeedle(clientElapsedTicks, periodTicks) : normalizedClientNeedle;
         boolean clientElapsedInsideRed = clientElapsedProvided && BlueRedPurpleNukeMod.isBlackFlashNeedleInRedArc(clientElapsedNeedle, redStart, redSize, clientSelfCheckTolerance);
         float drift = clientProvided ? BlueRedPurpleNukeMod.circularDistance(normalizedClientNeedle, serverNeedle) : 1.0f;
-        float packetNeedleElapsedDrift = clientProvided && clientElapsedProvided ? BlueRedPurpleNukeMod.circularDistance(normalizedClientNeedle, clientElapsedNeedle) : 0.0f;
-        boolean packetNeedleMatchesElapsed = !clientProvided || !clientElapsedProvided || packetNeedleElapsedDrift <= BF_TIMING_PACKET_NEEDLE_TOLERANCE;
         boolean elapsedPlausible = !clientElapsedProvided || clientElapsedTicks <= (float)elapsed + Math.max(2.0f, oneWayLatencyTicks + 2.0f);
         boolean clientSelfConsistent = clientTimingSuccess == clientVisiblyInsideRed;
-        boolean driftExtreme = drift > BF_TIMING_EXTREME_DRIFT_TOLERANCE;
         boolean clientVisibleSuccess = clientProvided && clientTimingSuccess && clientVisiblyInsideRed && clientSelfConsistent;
         boolean serverTimingAccept = serverInsideRed && (!clientProvided || drift <= BF_TIMING_CLIENT_DRIFT_TOLERANCE || clientElapsedInsideRed);
         boolean success = !staleByAge && elapsedPlausible && (clientVisibleSuccess || clientElapsedInsideRed || serverTimingAccept);
-        String reason = success ? (clientVisibleSuccess ? "client_visible_window" : (clientElapsedInsideRed ? "client_elapsed_window" : "server_window")) : (staleByAge ? "stale_age" : (!elapsedPlausible ? "client_elapsed_implausible" : (!clientProvided ? "no_client_needle" : (!clientTimingSuccess && !clientElapsedInsideRed && !serverInsideRed ? "outside_all_windows" : (!clientSelfConsistent ? "client_success_mismatch" : "window_rejected")))));
-        LOGGER.warn("[BlackFlashTimingDiag] {} reason={} nonce={} clientNeedle={} clientElapsed={} state={} age={} latencyMs={}", new Object[]{success ? "RELEASE_ACCEPT" : "RELEASE_REJECT", reason, serverNonce, normalizedClientNeedle, clientElapsedTicks, state, elapsed, player.latency});
-        LOGGER.warn("[BlackFlashState] release player={} nonce={} {}->{} success={} clientTimingSuccess={} clientNeedle={} clientElapsed={} clientElapsedNeedle={} clientVisiblyInsideRed={} clientElapsedInsideRed={} clientSelfConsistent={} packetNeedleMatchesElapsed={} elapsedPlausible={} serverNeedle={} serverInsideRed={} serverTimingAccept={} drift={} driftExtreme={} packetNeedleElapsedDrift={} latencyTicks={} redStart={} redSize={}", new Object[]{player.getName().getString(), serverNonce, state, success ? BF_STATE_WAITING_HIT : BF_STATE_LOCKED_UNTIL_RESET, success, clientTimingSuccess, normalizedClientNeedle, clientElapsedTicks, clientElapsedNeedle, clientVisiblyInsideRed, clientElapsedInsideRed, clientSelfConsistent, packetNeedleMatchesElapsed, elapsedPlausible, serverNeedle, serverInsideRed, serverTimingAccept, drift, driftExtreme, packetNeedleElapsedDrift, oneWayLatencyTicks, redStart, redSize});
         BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
         data.putBoolean("addon_bf_timing_resolved", true);
         data.putBoolean("addon_bf_released", true);
@@ -1211,7 +1164,6 @@ public class BlueRedPurpleNukeMod {
         if (player == null || !BlueRedPurpleNukeMod.isBlackFlashGuaranteeActive(player)) {
             return;
         }
-        LOGGER.warn("[BlackFlashReleaseDiag] direct guarantee confirm source={} player={}", new Object[]{source, player.getName().getString()});
         BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, source);
     }
 
@@ -1233,7 +1185,6 @@ public class BlueRedPurpleNukeMod {
         if (age < 0L || age > (long)BF_GUARANTEE_TIMEOUT_TICKS) {
             return;
         }
-        LOGGER.warn("[BlackFlashReleaseDiag] combat guarantee confirm source={} player={} target={} age={} nonce={}", new Object[]{source, player.getName().getString(), target.getType().toString(), age, data.getLong("addon_bf_guarantee_nonce")});
         BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, source);
     }
 
@@ -1250,7 +1201,6 @@ public class BlueRedPurpleNukeMod {
         data.putLong("addon_bf_recent_hit_tick", nowTick);
         data.putInt("addon_bf_recent_hit_entity_id", target.getId());
         data.putString("addon_bf_recent_hit_source", source == null ? "" : source);
-        LOGGER.warn("[BlackFlashReleaseDiag] recent server hit recorded player={} target={} tick={} state={} source={}", new Object[]{player.getName().getString(), target.getType().toString(), nowTick, state, source});
     }
 
     private static boolean tryConfirmRecentBlackFlashHit(ServerPlayer player, CompoundTag data, long timingStartTick, long nowTick, long serverNonce, String source) {
@@ -1264,7 +1214,6 @@ public class BlueRedPurpleNukeMod {
         if (!BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) || !data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || data.getLong("addon_bf_guarantee_nonce") != serverNonce) {
             return false;
         }
-        LOGGER.warn("[BlackFlashReleaseDiag] confirm recent server hit player={} nonce={} hitAge={} hitSource={} hitEntityId={}", new Object[]{player.getName().getString(), serverNonce, nowTick - hitTick, data.getString("addon_bf_recent_hit_source"), data.getInt("addon_bf_recent_hit_entity_id")});
         return BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, source);
     }
 
@@ -1342,9 +1291,6 @@ public class BlueRedPurpleNukeMod {
                 best = candidate;
             }
         }
-        if (best != null) {
-            LOGGER.warn("[BlackFlashReleaseDiag] fallback_owner_near_target player={} target={} distSq={}", new Object[]{best.getName().getString(), target.getType().toString(), bestDist});
-        }
         return best;
     }
 
@@ -1363,15 +1309,12 @@ public class BlueRedPurpleNukeMod {
         boolean stateActive = BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) && data.getBoolean("addon_bf_guaranteed") && data.getBoolean("addon_bf_waiting_hit") && data.contains("addon_bf_release_tick") && confirmedNonce != 0L;
         boolean ageValid = confirmedAge >= 0L && confirmedAge <= (long)BF_GUARANTEE_TIMEOUT_TICKS;
         if (!stateActive || !ageValid || lastConfirmedNonce == confirmedNonce) {
-            LOGGER.warn("[BlackFlashReleaseDiag] suppress duplicate/stale guarantee confirm source={} player={} nonce={} lastConfirmed={} age={} state={} stateActive={} ageValid={} guaranteed={} waitingHit={} flow={}", new Object[]{source, player.getName().getString(), confirmedNonce, lastConfirmedNonce, confirmedAge, BlueRedPurpleNukeMod.getBlackFlashState(data), stateActive, ageValid, data.getBoolean("addon_bf_guaranteed"), data.getBoolean("addon_bf_waiting_hit"), data.getInt("addon_bf_flow")});
             return false;
         }
         data.putLong("addon_bf_last_confirmed_nonce", confirmedNonce);
         BlueRedPurpleNukeMod.clearBlackFlashGuarantee(player);
         data.putBoolean("addon_bf_timed_feedback_sent", true);
         data.putBoolean("addon_bf_expire_feedback_sent", true);
-        LOGGER.warn("[BlackFlashTimingDiag] HIT_CONFIRM nonce={} source={} event={} state={} age={}", new Object[]{confirmedNonce, source, source, BlueRedPurpleNukeMod.getBlackFlashState(data), confirmedAge});
-        LOGGER.warn("[BlackFlashReleaseDiag] confirmed guarantee hit source={} player={} nonce={} age={} flowBefore={}", new Object[]{source, player.getName().getString(), confirmedNonce, confirmedAge, data.getInt("addon_bf_flow")});
         BlueRedPurpleNukeMod.advanceBlackFlashFlow(player, data);
         data.putBoolean("addon_bf_released", false);
         data.putBoolean("addon_bf_waiting_hit", false);
@@ -1404,11 +1347,8 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         if (!data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || data.getLong("addon_bf_release_tick") != releaseTick || data.getLong("addon_bf_guarantee_nonce") != guaranteeNonce) {
-            LOGGER.warn("[BlackFlashReleaseDiag] skip stale guarantee expiry player={} age={} nonce={} waitingHit={} guaranteed={}", new Object[]{player.getName().getString(), age, guaranteeNonce, data.getBoolean("addon_bf_waiting_hit"), data.getBoolean("addon_bf_guaranteed")});
             return;
         }
-        LOGGER.warn("[BlackFlashTimingDiag] TIMEOUT_FAIL nonce={} age={} state={}", new Object[]{guaranteeNonce, age, BlueRedPurpleNukeMod.getBlackFlashState(data)});
-        LOGGER.warn("[BlackFlashReleaseDiag] fail_reason=timeout_no_hit_confirm player={} age={} nonce={} waitingHit={} timedFeedbackSent={}", new Object[]{player.getName().getString(), age, guaranteeNonce, data.getBoolean("addon_bf_waiting_hit"), data.getBoolean("addon_bf_timed_feedback_sent")});
         if (!data.getBoolean("addon_bf_expire_feedback_sent")) {
             data.putBoolean("addon_bf_expire_feedback_sent", true);
             ModNetworking.sendBlackFlashFeedback(player, false, false);
@@ -1455,7 +1395,6 @@ public class BlueRedPurpleNukeMod {
 
     private static void handleBlackFlashFlowFailure(ServerPlayer player, CompoundTag data, String reason) {
         if (data.getInt("addon_bf_flow") > 0 || data.getBoolean("addon_bf_charging") || data.getBoolean("addon_bf_guaranteed")) {
-            LOGGER.warn("[BlackFlashFlow] reset player={} reason={} flow={}", new Object[]{player.getName().getString(), reason, data.getInt("addon_bf_flow")});
             data.putInt("addon_bf_flow", 0);
             data.putInt("addon_bf_flow_cd", BF_FLOW_COOLDOWN_TICKS);
             data.putBoolean("addon_bf_guaranteed", false);
@@ -1630,7 +1569,6 @@ public class BlueRedPurpleNukeMod {
         BlockPos protectedPos = protectedSupportBlock != null ? protectedSupportBlock.immutable() : origin.immutable();
         Vec3 backward = BlueRedPurpleNukeMod.getBlackFlashBlessingBackwardDirection(player);
         Vec3 side = new Vec3(-backward.z, 0.0, backward.x).normalize();
-        LOGGER.warn("[BlackFlashBlessingDir] player={} yaw={} backward=({}, {}) side=({}, {}) origin={}", new Object[]{player.getName().getString(), player.getYRot(), backward.x, backward.z, side.x, side.z, origin});
         BlackFlashBlessingWaveSession session = new BlackFlashBlessingWaveSession(level.dimension(), player.getUUID(), origin.immutable(), protectedPos, center, backward, side, level.getGameTime());
         synchronized (BF_BLESSING_WAVE_SESSIONS) {
             BF_BLESSING_WAVE_SESSIONS.add(session);
@@ -1857,24 +1795,17 @@ public class BlueRedPurpleNukeMod {
         }
         String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
         if (BF_STATE_RING_ACTIVE.equals(state) && data.getBoolean("addon_bf_charging")) {
-            LOGGER.warn("[BlackFlashTimingDiag] RELEASE_REJECT reason={} nonce={} clientNeedle={} state={} age={}", new Object[]{reason, data.getLong("addon_bf_timing_nonce"), Float.NaN, state, BlueRedPurpleNukeMod.getBlackFlashTimingAge(player, data)});
             BlueRedPurpleNukeMod.sendBlackFlashFailureOnce(player, data, reason);
-        } else if (BF_STATE_WAITING_HIT.equals(state) && data.getBoolean("addon_bf_waiting_hit") && data.getBoolean("addon_bf_guaranteed")) {
-            long releaseTick = data.contains("addon_bf_release_tick") ? data.getLong("addon_bf_release_tick") : player.serverLevel().getGameTime();
-            LOGGER.warn("[BlackFlashTimingDiag] HOLD_WAITING_HIT reason={} nonce={} age={} state={}", new Object[]{reason, data.getLong("addon_bf_guarantee_nonce"), player.serverLevel().getGameTime() - releaseTick, state});
         }
     }
 
     private static void sendBlackFlashFailureOnce(ServerPlayer player, CompoundTag data, String reason) {
-        LOGGER.warn("[BlackFlashReleaseDiag] fail_reason={} player={} nonce={} state={} charging={} waitingHit={} guaranteed={}", new Object[]{reason, player.getName().getString(), data.getLong("addon_bf_timing_nonce"), BlueRedPurpleNukeMod.getBlackFlashState(data), data.getBoolean("addon_bf_charging"), data.getBoolean("addon_bf_waiting_hit"), data.getBoolean("addon_bf_guaranteed")});
         long nonce = data.getLong("addon_bf_timing_nonce");
         if (nonce != 0L && data.getLong("addon_bf_last_confirmed_nonce") == nonce) {
-            LOGGER.warn("[BlackFlashReleaseDiag] suppress failure after confirmed black flash player={} nonce={} reason={}", new Object[]{player.getName().getString(), nonce, reason});
             return;
         }
         long lastFailNonce = data.getLong("addon_bf_last_fail_feedback_nonce");
         if (nonce != 0L && lastFailNonce == nonce) {
-            LOGGER.warn("[BlackFlashReleaseDiag] suppress duplicate failure feedback player={} nonce={} reason={}", new Object[]{player.getName().getString(), nonce, reason});
             return;
         }
         data.putLong("addon_bf_last_fail_feedback_nonce", nonce);
@@ -3644,12 +3575,10 @@ public class BlueRedPurpleNukeMod {
             if (!lockedByThisBlue && d <= BLUE_FULL_LOCK_ENTER_RADIUS) {
                 BlueRedPurpleNukeMod.beginBlueFullChargeTargetLock(serverLevel, entity, blueLockUuid);
                 lockedByThisBlue = true;
-                LOGGER.debug("[BlueFullChargeDiag] Locking target={} blue={} distToOrb={} distToLock={} motionBefore={}", new Object[]{entity.getName().getString(), blueLockUuid, d, lockPos.distanceTo(entityCenter), entity.getDeltaMovement()});
             }
             if (lockedByThisBlue) {
                 BlueRedPurpleNukeMod.refreshBlueFullChargeTargetLock(entity.getPersistentData(), gameTime);
                 if (d > Math.max(BLUE_FULL_LOCK_RELEASE_RADIUS, BLUE_FULL_LOCK_ENTER_RADIUS + 0.4)) {
-                    LOGGER.debug("[BlueFullChargeDiag] Releasing target={} blue={} distToOrb={} motion={}", new Object[]{entity.getName().getString(), blueLockUuid, d, entity.getDeltaMovement()});
                     BlueRedPurpleNukeMod.releaseBlueFullChargeTarget(entity);
                 } else {
                     BlueRedPurpleNukeMod.applyBlueFullChargeLockMotion(entity, lockPos, owner);
@@ -3794,9 +3723,6 @@ public class BlueRedPurpleNukeMod {
         blendedMotion = BlueRedPurpleNukeMod.applyBlueFullChargeOwnerAvoidance(owner, target, lockPos, blendedMotion);
         target.setDeltaMovement(BlueRedPurpleNukeMod.limitVectorLength(blendedMotion, BLUE_FULL_LOCK_MAX_SPEED));
         target.hurtMarked = true;
-        if (target.tickCount % 20 == 0 && lockDistance > 0.35) {
-            LOGGER.debug("[BlueFullChargeDiag] Holding target={} distToLock={} motion={}", new Object[]{target.getName().getString(), lockDistance, target.getDeltaMovement()});
-        }
     }
 
     /**

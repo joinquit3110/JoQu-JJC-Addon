@@ -5,9 +5,9 @@ license="All Rights Reserved"
 [[mods]]
 modId="jjkblueredpurple"
 version="${mod_version}"
-displayName="Nguyen Hung's Infinity Addon"
-authors="Nguyen Hung"
-description='''Nguyen Hung's Infinity Addon for JujutsuCraft - Blue linger + Red teleport-behind + Purple Nuke combo'''
+displayName="${mod_name}"
+authors="${mod_authors}"
+description='''${mod_description}'''
 
 [[dependencies.jjkblueredpurple]]
 modId="forge"

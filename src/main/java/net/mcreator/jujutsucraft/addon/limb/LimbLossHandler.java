@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.limb;
 
-import com.mojang.logging.LogUtils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -36,7 +35,6 @@ import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import org.slf4j.Logger;
 
 /**
  * Central server-side handler for limb severing, regeneration, and sync events.
@@ -47,8 +45,6 @@ import org.slf4j.Logger;
  */
 @Mod.EventBusSubscriber(modid="jjkblueredpurple")
 public class LimbLossHandler {
-    /** Logger used for debug and info traces around limb events. */
-    private static final Logger LOGGER = LogUtils.getLogger();
     /** Shared random source for sever rolls, limb selection, and throw variance. */
     private static final Random RNG = new Random();
 
@@ -121,7 +117,6 @@ public class LimbLossHandler {
                     // Players without the RCT advancement only use 20% of the calculated chance.
                     chance *= 0.2f;
                 }
-                LOGGER.debug("[Limb] Player {} actual damage {}/{} HP (post-armor), hpAfter={}, bigHit={}, lowHp={}, dropsLow={}, lethal={}, chance={}, hasRCT={}", new Object[]{sp.getName().getString(), Float.valueOf(actualDamage), Float.valueOf(maxHp), Float.valueOf(hpAfter), bigHit, wasLowHp, dropsToLowHp, lethalHit, Float.valueOf(chance), hasRCTSkill});
             }
             if (RNG.nextFloat() > chance) {
                 return;
@@ -130,7 +125,6 @@ public class LimbLossHandler {
             if (toSever == null) {
                 return;
             }
-            LOGGER.info("[Limb] Severing {} from {}", (Object)toSever, (Object)entity.getName().getString());
             LimbLossHandler.severLimb(entity, data, toSever, event.getSource());
         });
     }
@@ -142,12 +136,10 @@ public class LimbLossHandler {
         fake.getPersistentData().putInt(YutaFakePlayerEntity.KEY_HIT_COUNT, nextHit);
         if (rctMode && nextHit % 2 == 0) {
             YutaCopyStore.onLimbRegrown(fake, LimbType.RIGHT_ARM.getSerializedName());
-            LOGGER.info("[Yuta Fake] RCT regrew test limb for {}", (Object)fake.getName().getString());
             return;
         }
         YutaCopyStore.spawnLimbCopyItem(fake, LimbType.RIGHT_ARM.getSerializedName(), technique, 0.0D, true, false);
         fake.getPersistentData().putBoolean("jjkaddon_fake_source", true);
-        LOGGER.info("[Yuta Fake] Dropped test limb CT {} for {}", (Object)((int)Math.round(technique)), (Object)fake.getName().getString());
     }
 
     // ===== LIMB SELECTION =====

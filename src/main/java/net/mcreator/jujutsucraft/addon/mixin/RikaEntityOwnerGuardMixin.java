@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import net.mcreator.jujutsucraft.entity.Rika2Entity;
 import net.mcreator.jujutsucraft.entity.RikaEntity;
 import net.minecraft.nbt.CompoundTag;
@@ -9,7 +8,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -26,9 +24,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = {RikaEntity.class, Rika2Entity.class}, remap = false)
 public class RikaEntityOwnerGuardMixin {
-    @Unique
-    private static final Logger JJKBRP$LOGGER = LogUtils.getLogger();
-
     @Inject(method = {"m_6075_"}, at = {@At(value = "HEAD")}, remap = false)
     private void jjkbrp$restoreOwnerBeforeBaseRikaTick(CallbackInfo ci) {
         Entity rika = (Entity)(Object)this;
@@ -88,9 +83,6 @@ public class RikaEntityOwnerGuardMixin {
         }
 
         boolean clearedTarget = RikaEntityOwnerGuardMixin.jjkbrp$clearFriendlyTarget(rika, owner, friend);
-        if ((changed || clearedTarget) && rika.tickCount % 20 == 0) {
-            JJKBRP$LOGGER.debug("[RikaOwnerGuard] phase={} rika={} owner={} restored={} clearedTarget={} friend={} ownerUuid={}", phase, rika.getUUID(), owner.getGameProfile().getName(), changed, clearedTarget, friend, expectedOwnerUuid);
-        }
     }
 
     @Unique

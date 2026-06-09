@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import java.util.Objects;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
@@ -23,7 +22,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.slf4j.Logger;
 
 /**
  * Barrier placement mixin for `DomainExpansionBattleProcedure.execute()`.
@@ -36,8 +34,6 @@ import org.slf4j.Logger;
  */
 @Mixin(value={DomainExpansionBattleProcedure.class}, remap=false)
 public abstract class DomainBarrierMixin {
-    @Unique
-    private static final Logger LOGGER = LogUtils.getLogger();
     @Unique
     private static final ThreadLocal<Entity> JJKBRP$currentCaster = new ThreadLocal<>();
     @Unique

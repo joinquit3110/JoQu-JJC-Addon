@@ -1,7 +1,6 @@
 package net.mcreator.jujutsucraft.addon;
 
 import com.mojang.blaze3d.platform.InputConstants;
-import com.mojang.logging.LogUtils;
 import java.util.Objects;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -14,11 +13,9 @@ import net.minecraftforge.client.gui.overlay.ForgeGui;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.glfw.GLFW;
-import org.slf4j.Logger;
 
 @Mod.EventBusSubscriber(modid="jjkblueredpurple", value={Dist.CLIENT}, bus=Mod.EventBusSubscriber.Bus.MOD)
 public class BlackFlashHudOverlay {
-    private static final Logger LOGGER = LogUtils.getLogger();
     private static boolean lastAnyUseDown = false;
     private static boolean lastOgStartTechniqueDown = false;
     private static long lastReleasePacketMs = 0L;
@@ -80,9 +77,6 @@ public class BlackFlashHudOverlay {
     public static void onRawKeyInput(int keyCode, int action) {
         boolean isSkillKey = BlackFlashHudOverlay.isJujutsuSkillUseKey(keyCode);
         boolean releaseSessionValid = BlackFlashHudOverlay.hasValidLocalReleaseSession();
-        if (isSkillKey) {
-            LOGGER.warn("[BlackFlashKeyDiag] rawKeyInput keyCode={} action={} isSkill={} releaseSessionValid={} cacheCharging={} cacheMastery={} localResolved={}", new Object[]{keyCode, action, isSkillKey, releaseSessionValid, ClientPacketHandler.ClientBlackFlashCache.charging, ClientPacketHandler.ClientBlackFlashCache.mastery, ClientPacketHandler.ClientBlackFlashCache.localReleaseResolved});
-        }
         if (action == GLFW.GLFW_PRESS && isSkillKey) rawMainSkillDown = true;
         if (action == GLFW.GLFW_RELEASE && isSkillKey) {
             rawMainSkillDown = false;
@@ -110,7 +104,6 @@ public class BlackFlashHudOverlay {
         boolean charging = BlackFlashHudOverlay.hasValidLocalReleaseSession();
         long nonce = ClientPacketHandler.ClientBlackFlashCache.timingNonce;
         long now = System.currentTimeMillis();
-        LOGGER.warn("[BlackFlashReleaseDiag] tryRelease source={} mastery={} cacheCharging={} awaitingAck={} localResolved={} charging={} nonce={} debounceOk={}", new Object[]{source, ClientPacketHandler.ClientBlackFlashCache.mastery, ClientPacketHandler.ClientBlackFlashCache.charging, ClientPacketHandler.ClientBlackFlashCache.awaitingReleaseAck, ClientPacketHandler.ClientBlackFlashCache.localReleaseResolved, charging, nonce, now - lastReleasePacketMs > 80L});
         if (!charging || nonce == 0L || now - lastReleasePacketMs <= 80L) return;
         float computedNeedle = ClientPacketHandler.getBlackFlashClientNeedle();
         float clientElapsedTicks = ClientPacketHandler.getBlackFlashClientElapsedTicks();
@@ -121,7 +114,6 @@ public class BlackFlashHudOverlay {
         float clientReleaseTolerance = Math.max(BlueRedPurpleNukeMod.BF_TIMING_EDGE_TOLERANCE, 0.018f);
         boolean clientTimingSuccess = BlueRedPurpleNukeMod.isBlackFlashNeedleInRedArc(needle, redStart, redSize, clientReleaseTolerance);
         if (ClientPacketHandler.markBlackFlashReleasedLocally(needle, nonce)) {
-            LOGGER.warn("[BlackFlashReleaseDiag] local release detected source={} nonce={} needle={} computedNeedle={} clientElapsedTicks={} renderedNeedleFresh={} renderedNeedle={} clientTimingSuccess={} redStart={} redSize={} tolerance={} renderedAgeMs={} rawSkillUseDown={} reverseTechniqueKeyDown={} fallbackMainSkillKeyDown={} keyUseDown={} mouseRightDown={}", new Object[]{source, nonce, needle, computedNeedle, clientElapsedTicks, renderedNeedleFresh, lastRenderedNeedle, clientTimingSuccess, redStart, redSize, clientReleaseTolerance, now - lastRenderedNeedleMs, rawMainSkillDown, BlackFlashHudOverlay.isNamedKeyMappingDown(mc, "key.jujutsucraft.key_reverse_cursed_technique"), BlackFlashHudOverlay.isNamedKeyMappingDown(mc, "key.jujutsucraft.key_use_main_skill"), mc.options.keyUse.isDown(), BlackFlashHudOverlay.isMouseButtonDown(mc, GLFW.GLFW_MOUSE_BUTTON_RIGHT)});
             ModNetworking.sendBlackFlashRelease(needle, clientElapsedTicks, nonce, clientTimingSuccess);
             lastReleasePacketMs = now;
         }
@@ -141,8 +133,6 @@ public class BlackFlashHudOverlay {
 
     private static void tickPendingReleaseAckTimeout() {
         if ((ClientPacketHandler.ClientBlackFlashCache.awaitingReleaseAck || ClientPacketHandler.ClientBlackFlashCache.localReleaseResolved) && ClientPacketHandler.ClientBlackFlashCache.localReleaseStartMs > 0L && System.currentTimeMillis() - ClientPacketHandler.ClientBlackFlashCache.localReleaseStartMs > RELEASE_ACK_TIMEOUT_MS) {
-            LOGGER.warn("[BlackFlashTimingDiag] CLIENT_PENDING_TIMEOUT nonce={}", new Object[]{ClientPacketHandler.ClientBlackFlashCache.localReleaseNonce});
-            LOGGER.warn("[BlackFlashReleaseDiag] client release ack timeout nonce={} timeoutMs={} cacheCharging={} timingNonce={}", new Object[]{ClientPacketHandler.ClientBlackFlashCache.localReleaseNonce, RELEASE_ACK_TIMEOUT_MS, ClientPacketHandler.ClientBlackFlashCache.charging, ClientPacketHandler.ClientBlackFlashCache.timingNonce});
             ClientPacketHandler.failBlackFlashPendingFeedback();
         }
     }

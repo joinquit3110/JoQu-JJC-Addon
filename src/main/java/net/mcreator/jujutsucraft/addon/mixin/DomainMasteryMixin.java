@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import java.util.Comparator;
 import java.util.List;
 import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
@@ -9,6 +8,7 @@ import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.clash.ClashSubsystem;
+import net.mcreator.jujutsucraft.addon.logic.SlashVfxPolicy;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.util.SlashVfxEmitter;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
@@ -41,7 +41,6 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.joml.Vector3f;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -56,10 +55,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={DomainExpansionOnEffectActiveTickProcedure.class}, remap=false)
 public abstract class DomainMasteryMixin {
-    // Logger used for incomplete-domain and open-domain runtime diagnostics.
-    // Marks this helper member as mixin-unique so it cannot collide with names inside the target class.
-    @Unique
-    private static final Logger LOGGER = LogUtils.getLogger();
     @Unique
     private static final ThreadLocal<CompoundTag> JJKBRP$maskedIncompleteRuntime = new ThreadLocal();
     @Unique
@@ -465,10 +460,8 @@ public abstract class DomainMasteryMixin {
         // Apply every mastery property after the base active tick so the addon effects layer cleanly on top of the original domain behavior.
         DomainMasteryMixin.applyPropertyEffects(world, caster);
         DomainMasteryMixin.jjkbrp$applyIncompleteZoneOnlyBuff(caster);
-        // The radius-scaled Malevolent Shrine slash VFX (jujutsucraft:particle_slash_large) runs for
-        // the COMPLETE (closed) shrine AND for the special Sukuna Incomplete sure-hit shrine, so both
-        // show the same radius-scaled cleave slashes. (The internal domainId==1 gate still limits it
-        // to the Malevolent Shrine, and the surehit shrine bypasses the Failed check inside.)
+        // Closed/open shrine slash uses this call-site path. Special incomplete shrine enters for
+        // mastery-radius outer accent particles; its slash is emitted by SureHitShrineFx.
         if (world instanceof ServerLevel
                 && (!DomainAddonUtils.isIncompleteDomainState(caster)
                         || DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster))) {
@@ -571,60 +564,45 @@ public abstract class DomainMasteryMixin {
         long gameTime = world.getGameTime();
         Vec3 center = DomainAddonUtils.getDomainCenter((Entity)caster);
         double baseRadius = nbt.contains("jjkbrp_base_domain_radius") ? nbt.getDouble("jjkbrp_base_domain_radius") : 16.0;
-        double normalizedRadiusMul = Math.max(0.25, radiusMul);
+        double normalizedRadiusMul = SlashVfxPolicy.normalizedRadiusMul(radiusMul);
         double scaledRadius = Math.max(1.0, baseRadius * normalizedRadiusMul);
-        double range = scaledRadius * 2.0;
-        // The OG slash only renders while the domain is not "Failed". The Incomplete shell is treated
-        // as Failed by the base mod, which is exactly why the closed shrine showed the slash but the
-        // incomplete sure-hit shrine did not. Bypass the Failed gate for the active sure-hit shrine so
-        // it shows the same radius-scaled cleave slashes.
+        double range = SlashVfxPolicy.scaledRange(baseRadius, radiusMul);
         boolean surehitShrine = DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster);
-        if ((surehitShrine || !nbt.getBoolean("Failed")) && gameTime % 5L == 0L) {
+        if (!surehitShrine && !nbt.getBoolean("Failed") && SlashVfxPolicy.isCadenceTick(gameTime)) {
             DomainMasteryMixin.jjkbrp$sendMalevolentShrineSlashVFX(world, center, range, normalizedRadiusMul);
         }
         if (normalizedRadiusMul <= 1.0) {
             return;
         }
-        // Particle density scales with how much extra volume the scaled domain occupies
-        // compared with the unscaled one. Volume ratio is (radiusMul ^ 3) - 1 for the spillover
-        // beyond the base radius. We pick a low coefficient so the VFX feels denser without
-        // turning into a particle wall: at 1.5x radius the extra spillover is ~2.4x base volume,
-        // and at 2.0x it is ~7x base volume. Mapping these directly to ~6 / ~18 extra electric
-        // sparks per emission keeps the visuals readable on common GPUs.
         double volumeSpill = Math.max(0.0, Math.pow(normalizedRadiusMul, 3.0) - 1.0);
         int extraCount = (int)Math.round(Math.min(12.0, Math.max(2.0, volumeSpill * 1.4)));
-        // Throttle the emission cadence further when the radius is very large so the
-        // total particle rate per second stays bounded: 1.15x emits every 3 ticks,
-        // 1.5x every 4 ticks, 2.0x every 6 ticks.
         long emissionPeriod = normalizedRadiusMul < 1.35 ? 4L : (normalizedRadiusMul < 1.75 ? 5L : 7L);
         if (gameTime % emissionPeriod != 0L) {
             return;
         }
+        double sparkInner = scaledRadius * 0.72D;
+        double sparkSpan = scaledRadius * 0.26D;
         for (int i = 0; i < extraCount; ++i) {
-            double ox = (Math.random() - 0.5) * range * 0.5;
-            double oy = (Math.random() - 0.5) * range * 0.25;
-            double oz = (Math.random() - 0.5) * range * 0.5;
-            DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.ELECTRIC_SPARK, center.x + ox, center.y + 1.0 + oy, center.z + oz, 1, 0.6, 0.3, 0.6, 0.03);
+            double angle = world.random.nextDouble() * Math.PI * 2.0D;
+            double r = sparkInner + Math.sqrt(world.random.nextDouble()) * sparkSpan;
+            double px = center.x + Math.cos(angle) * r;
+            double py = center.y + 1.0D + (world.random.nextDouble() - 0.5D) * Math.min(6.0D, scaledRadius * 0.28D);
+            double pz = center.z + Math.sin(angle) * r;
+            DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.ELECTRIC_SPARK, px, py, pz, 1, 0.6, 0.3, 0.6, 0.03);
         }
-        // Crits scale at half the spark rate so they remain accent-only and never out-emit
-        // the primary spark layer.
         int sparkCount = Math.max(1, extraCount / 5);
         for (int i = 0; i < sparkCount; ++i) {
-            double angle = Math.random() * Math.PI * 2.0;
-            double r = Math.random() * range * 0.4;
+            double angle = world.random.nextDouble() * Math.PI * 2.0D;
+            double r = scaledRadius * (0.68D + world.random.nextDouble() * 0.27D);
             double px = center.x + Math.cos(angle) * r;
             double pz = center.z + Math.sin(angle) * r;
-            double py = center.y + 0.5 + Math.random() * 3.0;
+            double py = center.y + 0.5D + world.random.nextDouble() * 3.0D;
             DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.CRIT, px, py, pz, 2, 0.8, 0.4, 0.8, 0.05);
         }
     }
 
     @Unique
     private static void jjkbrp$sendMalevolentShrineSlashVFX(ServerLevel world, Vec3 center, double range, double radiusMul) {
-        // The radius-scaled particle_slash_large broadcast + its count/spread math were extracted
-        // into the shared SlashVfxEmitter / SlashVfxPolicy so the Closed/Open call-site path (this
-        // one) and the latch-driven incomplete sure-hit path (SureHitShrineFx) emit a byte-for-byte
-        // identical slash. This call site is otherwise unchanged: same inputs, same broadcast.
         SlashVfxEmitter.emitScaledSlash(world, center, range, radiusMul);
     }
 
@@ -806,8 +784,8 @@ public abstract class DomainMasteryMixin {
         }
         OpenVfxPreset preset = DomainMasteryMixin.presetForDomain(domainId);
         double baseRange = DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, nbt);
-        double vfxScale = Math.max(1.0, baseRange / 16.0);
-        double blindRange = Math.max(12.0, baseRange * 3.0);
+        double vfxScale = Math.max(0.1, baseRange / 16.0);
+        double blindRange = Math.max(3.0, baseRange * 3.0);
         Vector3f fogColor = preset.fogColor();
         float dustScale = preset.dustScale();
         DomainMasteryMixin.jjkbrp$playReferenceSound(world, cx, cy, cz, "jujutsucraft:wind_chime", 3.0f, 1.0f);
@@ -836,7 +814,7 @@ public abstract class DomainMasteryMixin {
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)new DustParticleOptions(fogColor, dustScale + 0.25f), player.getX(), player.getY() + 1.0, player.getZ(), (int)(14.0 * Math.min(vfxScale, 2.2)), 0.95 * vfxScale, 0.5, 0.95 * vfxScale, 0.0);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.CLOUD, player.getX(), player.getY() + 0.2, player.getZ(), (int)(10.0 * Math.min(vfxScale, 2.0)), 0.8 * vfxScale, 0.25, 0.8 * vfxScale, 0.01);
         PlayAnimationProcedure.execute((LevelAccessor)world, (Entity)player);
-        int ringCount = (int)(50.0 * Math.min(vfxScale, 2.5));
+        int ringCount = Math.max(4, (int)(50.0 * Math.min(vfxScale, 2.5)));
         for (int i2 = 0; i2 < ringCount; ++i2) {
             double angle = (double)i2 / (double)ringCount * Math.PI * 2.0;
             double r = baseRange * 0.1 + Math.random() * baseRange * 0.2;
@@ -961,8 +939,9 @@ public abstract class DomainMasteryMixin {
      */
     private static OpenFogProfile jjkbrp$fogProfileForDomain(int domainId, double openRange, OpenVfxPreset preset, float intensityScale) {
         float densityScale = 0.95f + (float)Math.max(0, preset.ringDensity() - 5) * 0.1f + Math.max(0.0f, intensityScale - 1.0f) * 0.35f + (float)Math.floorMod(domainId, 4) * 0.08f;
-        int perimeterCount = Math.max(20, Math.min(72, Math.round((float)(openRange * (double)0.46f * (double)densityScale))));
-        int interiorCount = Math.max(8, Math.min(30, Math.round((4.0f + (float)preset.ringDensity()) * densityScale)));
+        float rangeScale = Math.max(0.1f, Math.min(1.0f, (float)(openRange / 40.0)));
+        int perimeterCount = Math.max(6, Math.min(72, Math.round((float)(openRange * (double)0.46f * (double)densityScale))));
+        int interiorCount = Math.max(2, Math.min(30, Math.round((4.0f + (float)preset.ringDensity()) * densityScale * rangeScale)));
         float radiusFactor = 0.7f + (float)Math.floorMod(domainId, 5) * 0.035f;
         float heightFactor = 0.85f + (float)Math.floorMod(domainId + preset.innerInterval(), 4) * 0.1f;
         float driftStrength = 0.05f + (float)Math.floorMod(domainId + preset.pulseInterval(), 3) * 0.025f;
@@ -1075,7 +1054,7 @@ public abstract class DomainMasteryMixin {
         double cx = center.x;
         double cy = center.y;
         double cz = center.z;
-        double archScale = Math.max(1.0, openRange / 40.0);
+        double archScale = Math.max(0.1, openRange / 40.0);
         switch (arch) {
             case "REFINED": {
                 if (gameTime % 6L != 0L) break;
@@ -1128,9 +1107,9 @@ public abstract class DomainMasteryMixin {
         double centerX = center.x;
         double centerY = center.y;
         double centerZ = center.z;
-        double curtainHeight = Math.max(10.0, Math.min(24.0, openRange * 1.05));
-        int segmentCount = Math.max(24, Math.min(56, (int)Math.round(openRange * (0.8 + (double)densityScale * 0.18))));
-        int layerCount = Math.max(6, Math.min(12, (int)Math.ceil(curtainHeight / 2.0)));
+        double curtainHeight = Math.max(2.0, Math.min(24.0, openRange * 1.05));
+        int segmentCount = Math.max(8, Math.min(56, (int)Math.round(openRange * (0.8 + (double)densityScale * 0.18))));
+        int layerCount = Math.max(2, Math.min(12, (int)Math.ceil(curtainHeight / 2.0)));
         double boundaryRadius = openRange * (collapsing ? 0.96 : 1.0);
         double driftScale = collapsing ? 0.18 : 0.08;
         float dustScale = preset.dustScale() + (collapsing ? 0.45f : 0.3f) * densityScale;
@@ -1168,11 +1147,11 @@ public abstract class DomainMasteryMixin {
         double centerX = center.x;
         double centerY = center.y;
         double centerZ = center.z;
-        double shellRadius = Math.max(4.0, openRange * (collapsing ? 0.98 : 1.0));
+        double shellRadius = Math.max(1.0, openRange * (collapsing ? 0.98 : 1.0));
         double minElevation = -0.5654866776461628;
         double maxElevation = 1.5393804002589986;
-        int verticalBands = Math.max(7, Math.min(15, (int)Math.round(6.0 + (double)densityScale * 2.0 + shellRadius / 5.0)));
-        int baseSegments = Math.max(24, Math.min(96, (int)Math.round(shellRadius * (0.85 + (double)densityScale * 0.18))));
+        int verticalBands = Math.max(3, Math.min(15, (int)Math.round(2.0 + (double)densityScale * 2.0 + shellRadius / 5.0)));
+        int baseSegments = Math.max(8, Math.min(96, (int)Math.round(shellRadius * (0.85 + (double)densityScale * 0.18))));
         int accentStep = Math.max(2, 6 - Math.max(1, preset.ringDensity() / 3));
         float shellDustScale = preset.dustScale() + (collapsing ? 0.42f : 0.28f) * densityScale;
         ParticleOptions shellAccent = collapsing ? ParticleTypes.SMOKE : preset.ringParticle();
@@ -1203,8 +1182,8 @@ public abstract class DomainMasteryMixin {
                 DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)shellAccent, px, py, pz, 1, inwardX * 0.1, collapsing ? -0.02 : 0.03 + inwardY * 0.04, inwardZ * 0.1, 0.0);
             }
         }
-        int meridianCount = Math.max(10, Math.min(18, 8 + preset.ringDensity()));
-        int meridianSteps = Math.max(8, verticalBands + 3);
+        int meridianCount = Math.max(4, Math.min(18, 4 + preset.ringDensity()));
+        int meridianSteps = Math.max(4, verticalBands + 2);
         for (int meridian = 0; meridian < meridianCount; ++meridian) {
             double angle = Math.PI * 2 * (double)meridian / (double)meridianCount;
             for (int step = 0; step < meridianSteps; ++step) {
@@ -1255,15 +1234,16 @@ public abstract class DomainMasteryMixin {
         float baseDustScale = preset.dustScale() + 0.14f * intensityScale;
         float accentDustScale = baseDustScale + 0.18f;
         int accentStep = Math.max(2, 7 - Math.max(1, preset.ringDensity() / 2));
-        int volumeCount = Math.max(18, Math.min(84, perimeterCount / 2 + interiorCount));
-        int accentVolumeCount = Math.max(10, Math.min(44, interiorCount + perimeterCount / 6));
-        DomainAddonUtils.sendLongDistanceParticles(world, fog.floorParticle(), centerX, centerY + 0.12, centerZ, Math.max(14, perimeterCount / 4), openRange * 0.34, 0.16 * (double)fog.heightFactor(), openRange * 0.34, 0.0);
+        int volumeCount = Math.max(4, Math.min(84, perimeterCount / 2 + interiorCount));
+        int accentVolumeCount = Math.max(2, Math.min(44, interiorCount + perimeterCount / 6));
+        DomainAddonUtils.sendLongDistanceParticles(world, fog.floorParticle(), centerX, centerY + 0.12, centerZ, Math.max(3, perimeterCount / 4), openRange * 0.34, 0.16 * (double)fog.heightFactor(), openRange * 0.34, 0.0);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)new DustParticleOptions(fog.baseColor(), baseDustScale + 0.12f), centerX, centerY + 0.72 + 0.18 * (double)fog.heightFactor(), centerZ, volumeCount, openRange * 0.38, 0.75 + 0.35 * (double)fog.heightFactor(), openRange * 0.38, 0.0);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)new DustParticleOptions(fog.accentColor(), accentDustScale + 0.1f), centerX, centerY + 1.1 + 0.12 * (double)fog.heightFactor(), centerZ, accentVolumeCount, openRange * 0.28, 0.55 + 0.25 * (double)fog.heightFactor(), openRange * 0.28, 0.0);
-        DomainAddonUtils.sendLongDistanceParticles(world, fog.accentParticle(), centerX, centerY + 0.95, centerZ, Math.max(6, accentVolumeCount / 2), openRange * 0.2, 0.5, openRange * 0.2, 0.0);
+        DomainAddonUtils.sendLongDistanceParticles(world, fog.accentParticle(), centerX, centerY + 0.95, centerZ, Math.max(2, accentVolumeCount / 2), openRange * 0.2, 0.5, openRange * 0.2, 0.0);
+        double hazeJitter = Math.max(0.15, openRange * 0.08);
         for (index = 0; index < perimeterCount; ++index) {
             angle = Math.PI * 2 * (double)index / (double)perimeterCount;
-            radius = hazeRadius + (Math.random() - 0.5) * 2.6;
+            radius = hazeRadius + (Math.random() - 0.5) * hazeJitter;
             px = centerX + Math.cos(angle) * radius;
             pz = centerZ + Math.sin(angle) * radius;
             py = centerY + 0.05 + Math.random() * (0.45 + 0.35 * (double)fog.heightFactor());
@@ -1306,9 +1286,9 @@ public abstract class DomainMasteryMixin {
         double centerX = center.x;
         double centerY = center.y;
         double centerZ = center.z;
-        double pulseScale = Math.max(1.0, openRange / 40.0) * (double)intensityScale;
-        DomainAddonUtils.sendLongDistanceParticles(world, preset.pulseParticle(), centerX, centerY + (double)caster.getBbHeight(), centerZ, Math.max(10, (int)(10.0 * Math.min(pulseScale, 3.0))), 1.7 * pulseScale, caster.getBbHeight(), 1.7 * pulseScale, 0.04);
-        DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)new DustParticleOptions(preset.fogColor(), Math.max(0.9f, preset.dustScale() + 0.15f * intensityScale)), centerX, centerY + 1.0, centerZ, Math.max(12, (int)(12.0 * Math.min(pulseScale, 3.0))), 3.2 * pulseScale, 1.2, 3.2 * pulseScale, 0.0);
+        double pulseScale = Math.max(0.1, openRange / 40.0) * (double)intensityScale;
+        DomainAddonUtils.sendLongDistanceParticles(world, preset.pulseParticle(), centerX, centerY + (double)caster.getBbHeight(), centerZ, Math.max(2, (int)(10.0 * Math.min(pulseScale, 3.0))), 1.7 * pulseScale, caster.getBbHeight(), 1.7 * pulseScale, 0.04);
+        DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)new DustParticleOptions(preset.fogColor(), Math.max(0.9f, preset.dustScale() + 0.15f * intensityScale)), centerX, centerY + 1.0, centerZ, Math.max(3, (int)(12.0 * Math.min(pulseScale, 3.0))), 3.2 * pulseScale, 1.2, 3.2 * pulseScale, 0.0);
     }
 
     /**
@@ -1334,7 +1314,7 @@ public abstract class DomainMasteryMixin {
         double visualRange = DomainAddonUtils.getOpenDomainVisualRange((LevelAccessor)world, (Entity)caster);
         DomainMasteryMixin.applyArchetypeSignature(world, caster, center, visualRange, gameTime);
         if (preset.ringInterval() > 0 && gameTime % (long)preset.ringInterval() == 0L) {
-            int groundRingCount = Math.max(16, preset.ringDensity() * 3);
+            int groundRingCount = Math.max(4, Math.min(32, (int)Math.round(shellRadius * Math.max(1.5, (double)preset.ringDensity() * 0.35))));
             for (int i = 0; i < groundRingCount; ++i) {
                 double angle = (double)i / (double)groundRingCount * Math.PI * 2.0;
                 double r = shellRadius + (Math.random() - 0.5) * 0.85;
@@ -1343,9 +1323,10 @@ public abstract class DomainMasteryMixin {
                 double py = centerY + Math.random() * 2.5;
                 DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)new DustParticleOptions(preset.fogColor(), preset.dustScale() + 0.3f), px, py, pz, 1, 0.1, 0.3, 0.1, 0.0);
             }
-            int columnHeight = Math.max(6, Math.min(14, (int)Math.round(shellRadius * 0.6)));
-            for (int i = 0; i < 8; ++i) {
-                double angle = (double)i * Math.PI / 4.0;
+            int columnHeight = Math.max(2, Math.min(14, (int)Math.round(shellRadius * 0.6)));
+            int columnCount = Math.max(4, Math.min(8, (int)Math.round(shellRadius)));
+            for (int i = 0; i < columnCount; ++i) {
+                double angle = (double)i * Math.PI * 2.0 / (double)columnCount;
                 double r = shellRadius;
                 double px = centerX + r * Math.cos(angle);
                 double pz = centerZ + r * Math.sin(angle);
@@ -1365,7 +1346,7 @@ public abstract class DomainMasteryMixin {
             DomainMasteryMixin.jjkbrp$spawnOpenDomainGroundHaze(world, caster, center, visualRange, preset, domainId, 1.0f);
         }
         if (preset.innerInterval() > 0 && gameTime % (long)preset.innerInterval() == 0L) {
-            double innerScale = Math.max(1.0, visualRange / 40.0);
+            double innerScale = Math.max(0.1, visualRange / 40.0);
             double ox = (Math.random() - 0.5) * 6.0 * innerScale;
             double oy = Math.random() * ((double)caster.getBbHeight() + 2.0);
             double oz = (Math.random() - 0.5) * 6.0 * innerScale;
@@ -1434,14 +1415,14 @@ public abstract class DomainMasteryMixin {
         nbt.remove("jjkbrp_domain_just_opened");
         nbt.remove("jjkbrp_domain_grace_ticks");
         DomainAddonUtils.cleanupBFBoost((LivingEntity)player);
-        double cancelScale = Math.max(1.0, actualRadius / 16.0);
+        double cancelScale = Math.max(0.1, actualRadius / 16.0);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.EXPLOSION_EMITTER, cx, cy + 1.0, cz, (int)(3.0 * cancelScale), 0.7 * cancelScale, 0.7, 0.7 * cancelScale, 0.0);
         DomainMasteryMixin.jjkbrp$spawnOpenDomainBoundaryCurtain(world, (LivingEntity)player, center, shellRadius, preset, true, 1.85f);
         DomainMasteryMixin.jjkbrp$spawnOpenDomainParticleBarrier(world, (LivingEntity)player, center, shellRadius, preset, true, 1.95f);
         DomainMasteryMixin.jjkbrp$emitOpenDomainCorePulse(world, (LivingEntity)player, center, visualRange, preset, 1.65f);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.SMOKE, cx, cy + 1.0, cz, (int)(55.0 * Math.min(cancelScale, 2.0)), 2.0 * cancelScale, 1.1, 2.0 * cancelScale, 0.02);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.REVERSE_PORTAL, cx, cy + 1.0, cz, (int)(70.0 * Math.min(cancelScale, 2.0)), 2.2 * cancelScale, 1.1, 2.2 * cancelScale, 0.05);
-        int ringCount = Math.max(24, (int)(shellRadius * 1.5));
+        int ringCount = Math.max(6, (int)(shellRadius * 1.5));
         for (int i = 0; i < ringCount; ++i) {
             double angle = Math.PI * 2 * (double)i / (double)ringCount;
             double ringR = shellRadius * (0.9 + Math.random() * 0.08);
@@ -1499,7 +1480,7 @@ public abstract class DomainMasteryMixin {
             ModNetworking.clearSukunaFugaDustOverlay(serverPlayer);
             serverPlayer.getPersistentData().remove("jjkbrp_sukuna_fuga_dust_locked_full");
         }
-        double scale = Math.max(1.0, cancelRange / 16.0);
+        double scale = Math.max(0.1, cancelRange / 16.0);
         DomainAddonUtils.sendLongDistanceParticles(world, (ParticleOptions)ParticleTypes.SMOKE, center.x, center.y + 1.0, center.z, (int)(26.0 * Math.min(scale, 2.0)), 1.4 * scale, 0.7, 1.4 * scale, 0.02);
         world.playSound(null, BlockPos.containing((double)center.x, (double)center.y, (double)center.z), SoundEvents.GENERIC_EXTINGUISH_FIRE, SoundSource.PLAYERS, 1.2f, 0.75f);
     }

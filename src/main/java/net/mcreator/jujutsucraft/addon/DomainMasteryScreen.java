@@ -1091,7 +1091,7 @@ extends Screen {
         int barrierPower = adjustedEffectiveLevel(DomainMasteryProperties.BARRIER_POWER, changedProp, deltaLevel);
         int barrierRef = adjustedEffectiveLevel(DomainMasteryProperties.BARRIER_REFINEMENT, changedProp, deltaLevel);
         int radiusLevel = adjustedEffectiveLevel(DomainMasteryProperties.RADIUS_BOOST, changedProp, deltaLevel);
-        double radius = 22.0 * Math.max(0.25, 1.0 + radiusLevel * 0.12);
+        double radius = 22.0 * Math.max(0.1, 1.0 + radiusLevel * 0.12);
         double base = 10.0;
         double hp = 1.0;
         double duration = 1.0;

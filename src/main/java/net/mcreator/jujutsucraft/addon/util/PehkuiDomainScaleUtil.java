@@ -6,7 +6,7 @@ import virtuoel.pehkui.api.ScaleData;
 import virtuoel.pehkui.api.ScaleTypes;
 
 public final class PehkuiDomainScaleUtil {
-    private static final float MIN_DECORATION_SCALE = 0.5F;
+    private static final float MIN_DECORATION_SCALE = 0.1F;
     private static final float MAX_DECORATION_SCALE = 3.0F;
 
     private PehkuiDomainScaleUtil() {

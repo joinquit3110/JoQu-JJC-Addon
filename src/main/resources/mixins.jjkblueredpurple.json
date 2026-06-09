@@ -2,8 +2,8 @@
   "required": true,
   "minVersion": "0.8",
   "package": "net.mcreator.jujutsucraft.addon.mixin",
+  "plugin": "net.mcreator.jujutsucraft.addon.mixin.JjkbrpMixinPlugin",
   "compatibilityLevel": "JAVA_17",
-  "refmap": "mixins.jjkblueredpurple.refmap.json",
   "mixins": [
     "RedEntityMixin",
     "BlueEntityMixin",
@@ -46,6 +46,6 @@
     "RikaEntityOwnerGuardMixin"
   ],
   "injectors": {
-    "defaultRequire": 1
+    "defaultRequire": 0
   }
 }

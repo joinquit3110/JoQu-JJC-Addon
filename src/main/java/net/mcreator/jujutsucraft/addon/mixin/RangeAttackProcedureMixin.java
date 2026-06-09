@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.advancements.Advancement;
@@ -41,7 +40,6 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.registries.ForgeRegistries;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -96,8 +94,6 @@ public class RangeAttackProcedureMixin {
     // Logger used for periodic domain-state diagnostics around ranged attacks.
     // Marks this helper member as mixin-unique so it cannot collide with names inside the target class.
     @Unique
-    private static final Logger LOGGER = LogUtils.getLogger();
-
 
     // ===== HEAD INJECTION =====
     /**
@@ -113,21 +109,13 @@ public class RangeAttackProcedureMixin {
     @Inject(method={"execute"}, at={@At(value="HEAD")}, cancellable=true, remap=false)
     private static void jjkblueredpurple$boostBlackFlash(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         Player ownerPlayer;
-        boolean sourceHasDomain;
         if (entity == null) {
             return;
         }
         CompoundTag data = entity.getPersistentData();
         LivingEntity domainStateSource = RangeAttackProcedureMixin.jjkblueredpurple$resolveDomainStateSource(world, entity, data);
         CompoundTag domainStateData = domainStateSource != null ? domainStateSource.getPersistentData() : data;
-        boolean entityOpen = RangeAttackProcedureMixin.jjkblueredpurple$isOpenDomainState(data);
         boolean sourceOpen = domainStateSource != null && DomainAddonUtils.isOpenDomainState(domainStateSource);
-        boolean entityIncomplete = RangeAttackProcedureMixin.jjkblueredpurple$isIncompleteDomainState(data);
-        boolean sourceIncomplete = domainStateSource != null && DomainAddonUtils.isIncompleteDomainState(domainStateSource);
-        boolean bl = sourceHasDomain = domainStateSource != null && domainStateSource.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get());
-        if (data.getBoolean("DomainAttack") && domainStateSource != null && entity.tickCount % 20 == 0 && (!entityOpen && sourceOpen || !entityIncomplete && sourceIncomplete)) {
-            LOGGER.debug("[GojoDomainDiag] RangeAttack state mismatch attackEntity={} source={} domainAttack={} entityOpen={} sourceOpen={} entityIncomplete={} sourceIncomplete={} sourceHasDomain={} damage={} range={} ownerUuidPresent={}", new Object[]{entity.getClass().getSimpleName(), domainStateSource.getName().getString(), data.getBoolean("DomainAttack"), entityOpen, sourceOpen, entityIncomplete, sourceIncomplete, sourceHasDomain, data.contains("Damage") ? data.getDouble("Damage") : -1.0, data.contains("Range") ? data.getDouble("Range") : -1.0, !data.getString("OWNER_UUID").isEmpty()});
-        }
         // Incomplete domains intentionally lose sure-hit behavior, so the entire ranged attack procedure is cancelled before the base logic can fire.
         if (RangeAttackProcedureMixin.jjkblueredpurple$isIncompleteDomainAttack(world, entity, data)) {
             RangeAttackProcedureMixin.jjkblueredpurple$replayIncompleteShrineVisualHit(world, x, y, z, entity, data, domainStateSource);

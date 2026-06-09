@@ -47,8 +47,6 @@ public final class ClientPacketHandler {
      */
     public static void updateBlackFlash(float bfPercent, boolean mastery, boolean charging, long timingStartTick, float timingPeriodTicks, float timingRedStart, float timingRedSize, long timingNonce, int flow, int flowCooldown, long serverNowTick, int latencyMs) {
         Minecraft mc = Minecraft.getInstance();
-        long previousNonce = ClientBlackFlashCache.timingNonce;
-        boolean wasAwaitingReleaseAck = ClientBlackFlashCache.awaitingReleaseAck;
         boolean sameLocalReleaseNonce = ClientBlackFlashCache.localReleaseResolved && ClientBlackFlashCache.localReleaseNonce == timingNonce;
         boolean localReleasedThisSession = sameLocalReleaseNonce;
         boolean newSession = charging && !localReleasedThisSession && (!ClientBlackFlashCache.charging || ClientBlackFlashCache.timingNonce != timingNonce);
@@ -91,7 +89,6 @@ public final class ClientPacketHandler {
                 // A charging=false sync with the same nonce is the server acknowledgement that the release
                 // left the ring phase. Close the local RELEASED/ring state immediately; explicit feedback
                 // packets may then show RELEASED, BLACK FLASH, or FAILED without leaving a pending timeout path.
-                System.out.println("[BlackFlashTimingDiag] CLIENT_RELEASE_ACK_SYNC nonce=" + ClientBlackFlashCache.localReleaseNonce + " previousNonce=" + previousNonce);
                 ClientBlackFlashCache.awaitingReleaseAck = false;
                 ClientBlackFlashCache.localReleaseResolved = false;
                 ClientBlackFlashCache.localReleaseNonce = 0L;
@@ -121,7 +118,6 @@ public final class ClientPacketHandler {
         ClientBlackFlashCache.awaitingReleaseAck = true;
         ClientBlackFlashCache.charging = false;
         ClientBlackFlashCache.clientTimingStartTick = Long.MIN_VALUE;
-        System.out.println("[BlackFlashTimingDiag] LOCAL_RELEASE nonce=" + timingNonce + " needle=" + ClientBlackFlashCache.localReleaseNeedle);
         showBlackFlashPendingFeedback();
         return true;
     }
@@ -154,7 +150,6 @@ public final class ClientPacketHandler {
 
     public static void failBlackFlashPendingFeedback() {
         if (ClientBlackFlashCache.awaitingReleaseAck || ClientBlackFlashCache.localReleaseResolved) {
-            System.out.println("[BlackFlashTimingDiag] CLIENT_PENDING_TIMEOUT nonce=" + ClientBlackFlashCache.localReleaseNonce);
             showBlackFlashFeedback(false, false);
             ClientBlackFlashCache.awaitingReleaseAck = false;
             ClientBlackFlashCache.localReleaseResolved = false;

@@ -97,8 +97,9 @@ public final class DomainRadiusUtils {
     public static void restoreAfterSuppressed(LevelAccessor world, Double original, double radiusMultiplier) {
         if (original != null) {
             try {
-                // Clamp the multiplier to at least 1.0 so restoration never shrinks below the original.
-                JujutsucraftModVariables.MapVariables.get((LevelAccessor)world).DomainExpansionRadius = original * Math.max(1.0, radiusMultiplier);
+                // Restore the actual scaled radius. Radius mastery can shrink as well as grow, so do
+                // not clamp the multiplier back to 1.0 here.
+                JujutsucraftModVariables.MapVariables.get((LevelAccessor)world).DomainExpansionRadius = Math.max(1.0, original * Math.max(0.1, radiusMultiplier));
             }
             catch (Exception exception) {
                 // Ignore map-variable access failures because the caller cannot recover here anyway.

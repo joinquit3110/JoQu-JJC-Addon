@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.util;
 
-import com.mojang.logging.LogUtils;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.UUID;
@@ -20,7 +19,6 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import org.slf4j.Logger;
 
 /**
  * Central utility class for domain-related runtime state in the addon.
@@ -65,9 +63,6 @@ public class DomainAddonUtils {
      * resolved once and reused.</p>
      */
     private static final Method LONG_DISTANCE_PARTICLE_METHOD = DomainAddonUtils.resolveLongDistanceParticleMethod();
-
-    /** Shared logger used for domain diagnostics, especially owner-resolution tracing. */
-    private static final Logger LOGGER = LogUtils.getLogger();
 
     /**
      * Removes temporary BF boost bookkeeping created during domain logic.
@@ -232,8 +227,9 @@ public class DomainAddonUtils {
                 radiusMultiplier = 1.0;
             }
 
-            // Prevent extremely small or negative persisted multipliers from collapsing the domain.
-            radiusMultiplier = Math.max(0.5, radiusMultiplier);
+            // Prevent invalid persisted multipliers from collapsing the domain, while still allowing
+            // radius mastery to shrink visuals/gameplay below the default size.
+            radiusMultiplier = Math.max(0.1, radiusMultiplier);
             return Math.max(1.0, baseRadius * radiusMultiplier);
         }
         try {
@@ -419,8 +415,7 @@ public class DomainAddonUtils {
      * Resolves the owner of a projectile or helper entity from persisted metadata.
      *
      * <p>The method first tries the authoritative UUID path, then falls back to the less reliable
-     * {@code NameRanged_ranged} marker used by some original mod projectiles. Diagnostic logging is
-     * rate-limited by {@link #shouldLogOwnerResolution(Entity)}.</p>
+     * {@code NameRanged_ranged} marker used by some original mod projectiles.</p>
      *
      * @param world the world that should contain the owner
      * @param projectileOrOrb the entity carrying owner-identification data
@@ -436,20 +431,11 @@ public class DomainAddonUtils {
         CompoundTag data = projectileOrOrb.getPersistentData();
         String ownerUUID = data.getString(TAG_OWNER_UUID);
         if (!ownerUUID.isBlank() && (owner2 = DomainAddonUtils.resolveOwnerByUuid(serverLevel, ownerUUID)) != null) {
-            if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb)) {
-                LOGGER.debug("[GojoDomainDiag] Resolved owner via OWNER_UUID entity={} owner={} ownerUuid={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), owner2.getName().getString(), ownerUUID});
-            }
             return owner2;
         }
         double ownerNameRanged = data.getDouble(TAG_NAME_RANGED_RANGED);
         if (ownerNameRanged != 0.0 && (owner = DomainAddonUtils.resolveOwnerByNameRanged(serverLevel, projectileOrOrb, ownerNameRanged)) != null) {
-            if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb)) {
-                LOGGER.debug("[GojoDomainDiag] Resolved owner via NameRanged_ranged entity={} owner={} nameRanged_ranged={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), owner.getName().getString(), ownerNameRanged});
-            }
             return owner;
-        }
-        if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb) && (!ownerUUID.isBlank() || ownerNameRanged != 0.0)) {
-            LOGGER.debug("[GojoDomainDiag] Failed to resolve owner entity={} ownerUuidPresent={} nameRanged_ranged={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), !ownerUUID.isBlank(), ownerNameRanged});
         }
         return null;
     }
@@ -475,9 +461,6 @@ public class DomainAddonUtils {
 
         // Any recognized domain form counts as active owner-domain participation.
         boolean bl = ownerDomainActive = ownerOpen || ownerIncomplete || ownerClosed;
-        if (DomainAddonUtils.shouldLogOwnerResolution(projectileOrOrb)) {
-            LOGGER.debug("[GojoDomainDiag] Owner domain state entity={} owner={} open={} incomplete={} closed={} active={}", new Object[]{projectileOrOrb.getClass().getSimpleName(), owner.getName().getString(), ownerOpen, ownerIncomplete, ownerClosed, ownerDomainActive});
-        }
         return ownerDomainActive;
     }
 
@@ -528,17 +511,6 @@ public class DomainAddonUtils {
             return candidate;
         }
         return null;
-    }
-
-    /**
-     * Determines whether diagnostic owner-resolution logging should run this tick.
-     *
-     * @param projectileOrOrb the entity being inspected
-     * @return {@code true} every 20 ticks for non-null entities, otherwise {@code false}
-     */
-    private static boolean shouldLogOwnerResolution(Entity projectileOrOrb) {
-        // Log once per second to avoid spamming server output while still preserving diagnostics.
-        return projectileOrOrb != null && projectileOrOrb.tickCount % 20 == 0;
     }
 
     /**
@@ -859,14 +831,14 @@ public class DomainAddonUtils {
      *
      * @param world the world context used for radius lookup
      * @param entity the entity whose open-domain shell radius should be resolved
-     * @return the shell radius, clamped to a minimum of {@code 8.0}
+     * @return the shell radius, clamped only to a small safety minimum
      */
     public static double getOpenDomainShellRadius(LevelAccessor world, Entity entity) {
         if (entity == null) {
             return 16.0;
         }
         double baseRadius = DomainAddonUtils.getActualDomainRadius(world, entity.getPersistentData());
-        return Math.max(8.0, baseRadius);
+        return Math.max(1.0, baseRadius);
     }
 
     /**

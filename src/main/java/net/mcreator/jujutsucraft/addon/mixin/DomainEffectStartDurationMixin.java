@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
@@ -11,7 +10,6 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -24,8 +22,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value={DomainExpansionEffectStartedappliedProcedure.class}, remap=false)
 public class DomainEffectStartDurationMixin {
     // Logger used for diagnostics emitted by this mixin.
-    private static final Logger LOGGER = LogUtils.getLogger();
-
     /**
      * Injects after the first domain-effect application to correct the starting duration so it matches mastery-controlled duration bonuses.
      * @param entity entity involved in the current mixin operation.
@@ -58,8 +54,6 @@ public class DomainEffectStartDurationMixin {
                 return;
             }
             int baseDuration = DomainEffectStartDurationMixin.jjkbrp$resolveBaseDurationTicks(player);
-            // Log the adjusted starting duration so mastery-driven duration fixes can be verified during testing.
-            LOGGER.info("[DomainMastery] Backstop Duration: player={}, base={}, bonus={}, final={}", new Object[]{player.getScoreboardName(), baseDuration, data.getDurationBonusTicks(), expectedDuration});
             if (expectedDuration == inst.getDuration()) {
                 nbt.putBoolean("jjkbrp_duration_extended", true);
                 nbt.putInt("jjkbrp_expected_domain_duration", expectedDuration);

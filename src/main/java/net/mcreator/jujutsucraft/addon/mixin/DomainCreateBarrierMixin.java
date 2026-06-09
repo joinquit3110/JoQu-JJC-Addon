@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import java.lang.reflect.Field;
 import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
@@ -24,7 +23,6 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.LevelAccessor;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -37,10 +35,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={DomainExpansionCreateBarrierProcedure.class}, remap=false)
 public abstract class DomainCreateBarrierMixin {
-    // Logger used for mastery-driven duration diagnostics during barrier startup.
-    private static final Logger LOGGER = LogUtils.getLogger();
-
-
     // ===== BARRIER STARTUP INJECTION =====
     /**
      * Injects at barrier startup to sanitize domain form selection, write runtime form metadata, apply policy multipliers, and snapshot the real radius for later phases.
@@ -240,7 +234,6 @@ public abstract class DomainCreateBarrierMixin {
             int bonusTicks = data.getDurationBonusTicks();
             int finalDuration = DomainCreateBarrierMixin.jjkbrp$resolveDomainDurationTicks(player, data, baseDuration, effectInstance.getAmplifier());
             nbt.putInt("jjkbrp_expected_domain_duration", finalDuration);
-            LOGGER.info("[DomainMastery] Duration: player={}, base={}, bonus={}, final={}", new Object[]{player.getScoreboardName(), baseDuration, bonusTicks, finalDuration});
         });
         int targetAmplifier = effectInstance.getAmplifier();
         int effectiveForm = nbt.getInt("jjkbrp_domain_form_effective");

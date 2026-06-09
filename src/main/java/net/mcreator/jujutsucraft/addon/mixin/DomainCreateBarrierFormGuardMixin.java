@@ -1,11 +1,9 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionCreateBarrierProcedure;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.LevelAccessor;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -48,8 +46,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value = {DomainExpansionCreateBarrierProcedure.class}, remap = false)
 public abstract class DomainCreateBarrierFormGuardMixin {
-    private static final Logger LOGGER = LogUtils.getLogger();
-
     /**
      * Injects right before each {@code DomainExpansionBattleProcedure.execute(...)}
      * invocation from within the create barrier procedure to make sure the
@@ -110,8 +106,5 @@ public abstract class DomainCreateBarrierFormGuardMixin {
             return;
         }
         nbt.putDouble("cnt2", targetCnt2);
-        LOGGER.debug(
-                "[DomainCreateBarrierFormGuard] aligned cnt2 entity={} form={} previous={} corrected={}",
-                entity.getName().getString(), form, currentCnt2, targetCnt2);
     }
 }

@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.yuta;
 
-import com.mojang.logging.LogUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -55,7 +54,6 @@ import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.registries.ForgeRegistries;
-import org.slf4j.Logger;
 
 @Mod.EventBusSubscriber(modid = "jjkblueredpurple")
 public final class YutaCopyStore {
@@ -83,7 +81,6 @@ public final class YutaCopyStore {
     private static final String KEY_TEN_SHADOWS_PENDING_RECORD = "jjkaddon_yuta_ts_pending_record";
     private static final String KEY_TEN_SHADOWS_PENDING_NUM = "jjkaddon_yuta_ts_pending_num";
     private static final String KEY_TEN_SHADOWS_PENDING_SEEN = "jjkaddon_yuta_ts_pending_seen";
-    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MOB_COPY_USES = 5;
     private static final int MIN_COPY_COOLDOWN_TICKS = 200;
     private static final double HAND_DROP_CHANCE = 0.10D;
@@ -132,7 +129,6 @@ public final class YutaCopyStore {
     public static ItemStack createLimbCopyItem(LivingEntity owner, String partName, double technique1, double technique2, boolean temporary) {
         boolean hand = shouldCreateHand(partName);
         ItemStack stack = new ItemStack(hand ? ModItems.YUTA_HAND.get() : ModItems.YUTA_FINGER.get());
-        LOGGER.info("[Yuta Copy] Created {} catalyst from source='{}' part='{}' ct1={} ct2={} temporary={} handChance={}", hand ? "hand" : "finger", owner.getName().getString(), partName, technique1, technique2, temporary, HAND_DROP_CHANCE);
         CompoundTag tag = stack.getOrCreateTag();
         String eventId = UUID.randomUUID().toString();
         tag.putBoolean(ITEM_MARKER, true);
@@ -164,10 +160,8 @@ public final class YutaCopyStore {
         double ct1 = resolveCopyTechnique(source, true);
         double ct2 = resolveCopyTechnique(source, false);
         if (!isTechniqueCopyable(ct1) && !isTechniqueCopyable(ct2)) {
-            LOGGER.info("[Yuta Copy] No catalyst for source='{}': no copyable CT resolved (ct1={} ct2={} skill={} effect={} entityType={} class={}).", source.getName().getString(), ct1, ct2, source.getPersistentData().getDouble("skill"), source.getPersistentData().getDouble("effect"), source.getType().toString(), source.getClass().getSimpleName());
             return;
         }
-        LOGGER.info("[Yuta Copy] Valid Yuta mob kill resolved 100% catalyst drop: Yuta='{}' source='{}' ct1={} ct2={} entityType={} class={}", yuta.getName().getString(), source.getName().getString(), ct1, ct2, source.getType().toString(), source.getClass().getSimpleName());
         ItemStack stack = createLimbCopyItem(source, "cursed_technique", ct1, ct2, false);
         CompoundTag tag = stack.getOrCreateTag();
         tag.putBoolean("jjkaddon_mob_kill_source", true);
@@ -179,7 +173,6 @@ public final class YutaCopyStore {
         ItemEntity drop = new ItemEntity(level, source.getX(), source.getY() + 0.6D, source.getZ(), stack);
         drop.setDeltaMovement((level.random.nextDouble() - 0.5D) * 0.2D, 0.25D, (level.random.nextDouble() - 0.5D) * 0.2D);
         level.addFreshEntity(drop);
-        LOGGER.info("[Yuta Copy] Dropped mob catalyst for Yuta='{}' source='{}' ct1={} ct2={} uses={} successChance=100%", yuta.getName().getString(), source.getName().getString(), ct1, ct2, MOB_COPY_USES);
     }
 
     private static double resolveCopyTechnique(LivingEntity source, boolean primary) {
@@ -192,7 +185,6 @@ public final class YutaCopyStore {
 
         double fromMobType = techniqueFromMobType(source);
         if (isKnownCopyableTechnique(fromMobType)) {
-            LOGGER.info("[Yuta Copy] Resolved CT by exact mob-type fallback for source='{}' class={} entityType={} registry={} ct={}", source.getName().getString(), source.getClass().getSimpleName(), source.getType().toString(), entityRegistryPath(source), fromMobType);
             return normalizedTechniqueId(fromMobType);
         }
 
@@ -205,9 +197,6 @@ public final class YutaCopyStore {
         double fromDomain = techniqueFromRuntimeSkill(skillDomain);
         if (isKnownCopyableTechnique(fromDomain) && runtimeTechniqueMatchesExactMobType(source, fromDomain)) {
             return normalizedTechniqueId(fromDomain);
-        }
-        if (isKnownCopyableTechnique(fromSkill) || isKnownCopyableTechnique(fromDomain) || isKnownCopyableTechnique(data.getDouble("effect"))) {
-            LOGGER.info("[Yuta Copy] Ignored unsafe runtime CT for source='{}' class={} registry={} skill={} effect={} skill_domain={} resolvedSkill={} resolvedDomain={}", source.getName().getString(), source.getClass().getSimpleName(), entityRegistryPath(source), skill, data.getDouble("effect"), skillDomain, fromSkill, fromDomain);
         }
         return 0.0D;
     }
@@ -290,9 +279,6 @@ public final class YutaCopyStore {
                 best = player;
             }
         }
-        if (best != null) {
-            LOGGER.info("[Yuta Copy] Best contributor for source='{}' is Yuta='{}' damage={} required={}", victim.getName().getString(), best.getName().getString(), bestDamage, required);
-        }
         return best;
     }
 
@@ -358,7 +344,6 @@ public final class YutaCopyStore {
         String key = MOB_COPY_DAMAGE_PREFIX + yuta.getUUID();
         float total = data.getFloat(key) + event.getAmount();
         data.putFloat(key, total);
-        LOGGER.debug("[Yuta Copy] Tracked assist damage Yuta='{}' source='{}' added={} total={}", yuta.getName().getString(), victim.getName().getString(), event.getAmount(), total);
     }
 
     @SubscribeEvent(priority = EventPriority.LOW)
@@ -375,8 +360,6 @@ public final class YutaCopyStore {
             }
             if (yuta != null) {
                 spawnMobKillCopyItem(yuta, victim);
-            } else {
-                LOGGER.info("[Yuta Copy] No mob catalyst for source='{}': no Yuta killer/contributor met damage threshold.", victim.getName().getString());
             }
             return;
         }
@@ -550,7 +533,6 @@ public final class YutaCopyStore {
         boolean eligible = part.contains("arm") || part.contains("hand");
         double roll = RANDOM.nextDouble();
         boolean hand = eligible && roll < HAND_DROP_CHANCE;
-        LOGGER.info("[Yuta Copy] Catalyst roll part='{}' eligibleHand={} roll={} threshold={} result={}", partName, eligible, roll, HAND_DROP_CHANCE, hand ? "hand" : "finger");
         return hand;
     }
 
@@ -904,7 +886,6 @@ public final class YutaCopyStore {
             int moveSelectId = rec.contains("moveSelectId") ? rec.getInt("moveSelectId") : 5;
             double expectedSkill = runtimeSkill(techniqueId, moveSelectId);
             if (Math.abs(rec.getDouble("skill") - expectedSkill) > 0.001D || Math.abs(rec.getDouble("runtimeSkill") - expectedSkill) > 0.001D) {
-                LOGGER.info("[Yuta Copy] Repaired copied record runtime mapping player={} record={} technique={} moveSelect={} oldSkill={} newSkill={}", player.getGameProfile().getName(), rec.getString("recordUuid"), techniqueId, moveSelectId, rec.getDouble("skill"), expectedSkill);
                 rec.putDouble("skill", expectedSkill);
                 rec.putDouble("runtimeSkill", expectedSkill);
                 rec.putDouble("effect", techniqueId);
@@ -1032,8 +1013,6 @@ public final class YutaCopyStore {
             return false;
         }
         CompoundTag chosen = candidates.get(RANDOM.nextInt(candidates.size()));
-        int chosenMoveSelectId = chosen.contains("moveSelectId") ? chosen.getInt("moveSelectId") : 5;
-        LOGGER.info("[Yuta Copy] Domain sword cast player={} recordUuid={} techniqueId={} moveSelectId={} candidates={}", player.getGameProfile().getName(), chosen.getString("recordUuid"), chosen.getDouble("techniqueId"), chosenMoveSelectId, candidates.size());
         return activateRecord(player, Optional.of(chosen), true);
     }
 
@@ -1070,7 +1049,6 @@ public final class YutaCopyStore {
             if (recalled > 0) {
                 markCopiedTenShadowsPending(player, rec, copiedTenShadowsNum, true);
                 player.displayClientMessage(Component.literal("§d[Rika] Recalled Ten Shadows: " + copiedTenShadowsMoveName + "."), true);
-                LOGGER.info("[Yuta Copy] Recalled copied Ten Shadows player={} moveSelect={} shikigamiNum={} recalled={}", player.getGameProfile().getName(), copiedTenShadowsMoveSelectId, copiedTenShadowsNum, recalled);
                 return true;
             }
             clearStaleCopiedTenShadowsState(player, copiedTenShadowsNum);
@@ -1355,7 +1333,6 @@ public final class YutaCopyStore {
         if (data.getDouble("NUM_TenShadowsTechnique") < 0.0D || data.getDouble("NUM_TenShadowsTechnique") > 2.0D) {
             data.putDouble("NUM_TenShadowsTechnique", 0.0D);
         }
-        LOGGER.debug("[Yuta Copy] Prepared copied Ten Shadows state player={} moveSelect={} shikigamiNum={} numActive={}", player.getGameProfile().getName(), moveSelectId, tenShadowsNum, data.getDouble("NUM_TenShadowsTechnique"));
     }
 
 
@@ -1495,7 +1472,6 @@ public final class YutaCopyStore {
             long now = player.level().getGameTime();
             player.getPersistentData().putLong(cooldownKey(rec), now + (long)normalizedCooldown(rec));
             clearCopiedTenShadowsPending(player, recordUuid);
-            LOGGER.debug("[Yuta Copy] Applied deferred Ten Shadows cooldown player={} record={} shikigamiNum={}", player.getGameProfile().getName(), recordUuid, tenShadowsNum);
             return;
         }
         clearCopiedTenShadowsPending(player, recordUuid);

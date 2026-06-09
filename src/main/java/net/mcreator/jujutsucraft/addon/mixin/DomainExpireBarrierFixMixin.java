@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -34,7 +33,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -47,7 +45,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={DomainExpansionEffectExpiresProcedure.class}, remap=false)
 public class DomainExpireBarrierFixMixin {
-    private static final Logger LOGGER = LogUtils.getLogger();
     /**
      * Runs before the base expiry procedure to preserve the runtime state needed by addon cleanup while temporarily disabling failure flags that would skip restoration.
      * @param world world access used by the current mixin callback.
@@ -126,15 +123,6 @@ public class DomainExpireBarrierFixMixin {
             boolean rearmedDomainDefeated = defeatedBeforeHook || !failedBeforeHook;
             nbt.putBoolean("Failed", failedBeforeHook);
             nbt.putBoolean("DomainDefeated", rearmedDomainDefeated);
-            LOGGER.debug("[DomainExpireCleanup] forced closed cleanup caster={} failedBeforeHook={} defeatedBeforeHook={} rearmedFailed={} rearmedDomainDefeated={} centerPresent={} cnt1={} cnt3={}",
-                    caster.getName().getString(),
-                    failedBeforeHook,
-                    defeatedBeforeHook,
-                    nbt.getBoolean("Failed"),
-                    nbt.getBoolean("DomainDefeated"),
-                    nbt.contains("x_pos_doma"),
-                    nbt.getDouble("cnt1"),
-                    nbt.getDouble("cnt3"));
         }
         boolean hadOpenForm = nbt.getBoolean("jjkbrp_open_form_active");
         double finalRestoreRadius = DomainExpireBarrierFixMixin.jjkbrp$resolveEffectiveRadius((LevelAccessor)sl, nbt);

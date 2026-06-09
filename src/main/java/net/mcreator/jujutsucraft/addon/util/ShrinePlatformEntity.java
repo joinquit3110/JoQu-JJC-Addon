@@ -13,45 +13,18 @@ import net.minecraft.world.entity.Pose;
 import net.minecraft.world.level.Level;
 import net.minecraftforge.network.NetworkHooks;
 
-/**
- * Invisible, server-authoritative solid platform that gives the Malevolent Shrine a real walkable
- * collision surface.
- *
- * <p>The shrine visual entities ({@code EntityMalevolentShrineEntity} /
- * {@code EntityMalevolentShrine2Entity}) have a tiny registered hitbox (4x10 / 8x6) relative to
- * their enormous, heavily-rotated models (~40-62 blocks wide, tens of blocks tall). A single entity
- * AABB therefore cannot match the model, so making the shrine itself collidable only produces an
- * invisible "pole" near its feet that shoves the player sideways instead of letting them stand on
- * the structure.</p>
- *
- * <p>This entity sidesteps that limitation: it is a thin, wide solid slab the player stands on TOP
- * of. {@link PlayerShrineRiseController} spawns one per shrine, sizes it to the shrine footprint
- * (scaled by the domain decoration scale), and moves it every tick so its top surface tracks the
- * rising/settled shrine. Because it carries a real collision AABB on both server and client, the
- * local player's own movement prediction can stand on it and it lifts the player as it rises.</p>
- *
- * <p>It renders with a {@code NoopRenderer} (invisible), takes no damage, never moves on its own,
- * and self-discards shortly after the controller stops refreshing it (i.e. when the shrine is
- * removed and the domain ends).</p>
- */
+/** Invisible solid slab moved by {@link PlayerShrineRiseController} under the shrine deck. */
 public class ShrinePlatformEntity extends Entity {
-    /** Synced full width (X/Z footprint) of the collision slab, in blocks. */
     private static final EntityDataAccessor<Float> DATA_WIDTH =
             SynchedEntityData.defineId(ShrinePlatformEntity.class, EntityDataSerializers.FLOAT);
-    /** Synced height (thickness) of the collision slab, in blocks. */
     private static final EntityDataAccessor<Float> DATA_HEIGHT =
             SynchedEntityData.defineId(ShrinePlatformEntity.class, EntityDataSerializers.FLOAT);
 
-    /** Smallest allowed slab dimension so the AABB never collapses to zero. */
     private static final float MIN_DIM = 0.2F;
-    /** Ticks without a controller keep-alive ping before the orphaned platform removes itself. */
     private static final long STALE_GRACE_TICKS = 30L;
-    /** Hard lifetime cap (server ticks) as a final safety net against leaks. */
     private static final long MAX_LIFETIME_TICKS = 24000L;
 
-    /** Last server gametime the owning controller refreshed this platform. */
     private long lastKeepAliveTick = Long.MIN_VALUE;
-    /** Server gametime this platform was created, for the hard lifetime cap. */
     private long spawnTick = Long.MIN_VALUE;
 
     public ShrinePlatformEntity(EntityType<?> type, Level level) {
@@ -67,12 +40,6 @@ public class ShrinePlatformEntity extends Entity {
         this.entityData.define(DATA_HEIGHT, 1.0F);
     }
 
-    /**
-     * Sets the collision slab footprint and thickness, then refreshes the bounding box.
-     *
-     * @param width  full X/Z footprint in blocks
-     * @param height slab thickness in blocks
-     */
     public void setPlatformSize(float width, float height) {
         float w = Math.max(MIN_DIM, width);
         float h = Math.max(MIN_DIM, height);
@@ -85,7 +52,6 @@ public class ShrinePlatformEntity extends Entity {
         this.refreshDimensions();
     }
 
-    /** Records a controller keep-alive ping so the platform knows its shrine is still active. */
     public void keepAlive(long gameTime) {
         if (this.spawnTick == Long.MIN_VALUE) {
             this.spawnTick = gameTime;
@@ -108,7 +74,6 @@ public class ShrinePlatformEntity extends Entity {
 
     public void tick() {
         super.tick();
-        // The platform never moves or falls on its own; the controller repositions it each shrine tick.
         this.setDeltaMovement(0.0D, 0.0D, 0.0D);
         if (this.level().isClientSide()) {
             return;
@@ -124,17 +89,14 @@ public class ShrinePlatformEntity extends Entity {
         }
     }
 
-    /** Makes the slab a hard, walkable obstacle (SRG m_5829_). */
     public boolean canBeCollidedWith() {
         return true;
     }
 
-    /** Keeps the platform from being shoved by entities that walk into it. */
     public boolean isPushable() {
         return false;
     }
 
-    /** Hidden from ray-trace / attacks so it never blocks interaction with the shrine or targets. */
     public boolean isPickable() {
         return false;
     }

@@ -54,7 +54,7 @@ public final class SureHitShrineFx {
         if (player == null || !(player.level() instanceof ServerLevel level)) {
             return;
         }
-        double radius = Math.max(8.0, DomainAddonUtils.getActualDomainRadius(level, data));
+        double radius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius(level, data));
         Vec3 center = SureHitShrineFx.resolveCenter(player, data);
         SureHitShrineFx.spawnVfx(level, player.tickCount, center, radius);
         // Radius-scaled cleave "slash splash" (jujutsucraft:particle_slash_large), driven from this
@@ -103,8 +103,7 @@ public final class SureHitShrineFx {
         double baseRadius = data.contains("jjkbrp_base_domain_radius") ? data.getDouble("jjkbrp_base_domain_radius") : 16.0;
         double normalizedRadiusMul = SlashVfxPolicy.normalizedRadiusMul(radiusMul);
         double range = SlashVfxPolicy.scaledRange(baseRadius, radiusMul);
-        // Reuse the shared broadcast so Closed/Open and incomplete emit a byte-for-byte identical
-        // slash; the slash center matches the existing ambient VFX anchor.
+        // Reuse the shared emitter so incomplete, closed, and open shrine forms share radius scaling.
         SlashVfxEmitter.emitScaledSlash(level, center, range, normalizedRadiusMul);
     }
 
@@ -154,8 +153,8 @@ public final class SureHitShrineFx {
      * cleave slash (jujutsucraft:particle_slash_large) is emitted separately by
      * {@link #tickSlash(ServerPlayer, ServerLevel, CompoundTag, Vec3)} on this same driver, reusing
      * the shared {@link SlashVfxEmitter} / {@link SlashVfxPolicy} path so Closed/Open and the
-     * incomplete sure-hit shrine look identical; this method only adds the ambient smoke/ash
-     * atmosphere unique to the sure-hit shrine and is left unchanged by the slash fix.
+     * incomplete sure-hit shrine use the same slash scaling; this method only adds the ambient
+     * smoke/ash atmosphere unique to the sure-hit shrine.
      */
     private static void spawnVfx(ServerLevel level, long tick, Vec3 center, double radius) {
         // Ambient cursed-dust field every 5 ticks across the whole shrine volume.

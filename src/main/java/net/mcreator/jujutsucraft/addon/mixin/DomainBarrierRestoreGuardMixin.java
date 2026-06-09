@@ -1,6 +1,5 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
-import com.mojang.logging.LogUtils;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.procedures.JujutsuBarrierUpdateTickProcedure;
 import java.util.UUID;
@@ -12,7 +11,6 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -25,8 +23,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // Binds this addon mixin to the original target class so only the selected procedure or entity behavior is altered.
 @Mixin(value={JujutsuBarrierUpdateTickProcedure.class}, remap=false)
 public class DomainBarrierRestoreGuardMixin {
-    private static final Logger LOGGER = LogUtils.getLogger();
-
     /**
      * Injects at the head of the barrier-restore tick and cancels restoration when the scanned block still belongs to a live addon-managed domain.
      * @param world world access used by the current mixin callback.
@@ -60,22 +56,6 @@ public class DomainBarrierRestoreGuardMixin {
             boolean adoptedMatch = DomainBarrierRestoreGuardMixin.jjkbrp$isWithinAdoptedBarrierRadius(casterNbt, blockPos);
             if (!primaryMatch && !adoptedMatch) continue;
             if (restoreBlockOwnerUuid != null && !restoreBlockOwnerUuid.isEmpty() && !caster.getUUID().toString().equals(restoreBlockOwnerUuid)) continue;
-            double adoptedRadius = casterNbt.getDouble("jjkbrp_adopted_radius");
-            double adoptedCx = casterNbt.getDouble("jjkbrp_adopted_cx");
-            double adoptedCy = casterNbt.getDouble("jjkbrp_adopted_cy");
-            double adoptedCz = casterNbt.getDouble("jjkbrp_adopted_cz");
-            LOGGER.debug("[DomainBarrierRestoreGuard] blocked restore at ({}, {}, {}) because caster={} open={} incomplete={} adoptedBarrier={} primaryMatch={} adoptedMatch={} radius={} center=({}, {}, {}) adoptedRadius={} adoptedCenter=({}, {}, {})",
-                    x, y, z,
-                    caster.getName().getString(),
-                    DomainAddonUtils.isOpenDomainState(caster),
-                    DomainAddonUtils.isIncompleteDomainState(caster),
-                    casterNbt.getBoolean("jjkbrp_adopted_barrier"),
-                    primaryMatch,
-                    adoptedMatch,
-                    actualRadius,
-                    center.x, center.y, center.z,
-                    adoptedRadius,
-                    adoptedCx, adoptedCy, adoptedCz);
             ci.cancel();
             return;
         }

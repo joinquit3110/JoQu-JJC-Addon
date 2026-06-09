@@ -54,6 +54,9 @@ if not defined JAR_FILE (
 
 for %%G in ("!JAR_FILE!") do set "JAR_NAME=%%~nxG"
 
+echo [INFO] Dang xoa jar addon cu trong "%MODS_DIR%"...
+del /q "%MODS_DIR%\jjkblueredpurple-*.jar" "%MODS_DIR%\JoQus-JJC-Addon-*.jar" 2>nul
+
 echo [INFO] Dang copy "!JAR_FILE!" sang "%MODS_DIR%"...
 copy /Y "!JAR_FILE!" "%MODS_DIR%\" >nul
 if errorlevel 1 (

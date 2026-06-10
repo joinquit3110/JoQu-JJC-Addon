@@ -7,12 +7,14 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.LongSupplier;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashOutcome;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashSession;
 import net.mcreator.jujutsucraft.addon.clash.resolve.ClashResolver;
 import net.mcreator.jujutsucraft.addon.util.DomainForm;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -47,21 +49,29 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
 
     @Override
     public void sendInitial(ClashSession session) {
-        sendInternal(session);
-        notifyViewers(session, "Domain Clash started");
-        lastSendStates.put(
-            session.sessionId,
-            new LastSendState(session.clashPowerA(), session.clashPowerB(), serverTickSupplier.getAsLong())
-        );
+        if (sendInternal(session)) {
+            notifyViewers(session, "Domain Clash started");
+            lastSendStates.put(
+                session.sessionId,
+                new LastSendState(session.clashPowerA(), session.clashPowerB(), serverTickSupplier.getAsLong())
+            );
+        } else {
+            lastSendStates.remove(session.sessionId);
+        }
     }
 
     @Override
     public void sendSampled(ClashSession session) {
+        if (!isHudEnabled(session)) {
+            dispatchSnapshot(session, ClashOutcome.CANCELLED);
+            lastSendStates.remove(session.sessionId);
+            return;
+        }
         long now = serverTickSupplier.getAsLong();
         LastSendState state = lastSendStates.get(session.sessionId);
         if (state != null) {
             long ticksSince = now - state.lastSendTick;
-            if (ticksSince < SAMPLING_INTERVAL_TICKS_DEFAULT) {
+            if (ticksSince < sampleInterval(session)) {
                 return;
             }
         }
@@ -77,22 +87,34 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
 
     @Override
     public void sendFinal(ClashSession session) {
-        sendInternal(session);
-        notifyViewers(session, session.outcome() == null ? "Domain Clash ended" : "Domain Clash result: " + session.outcome().name());
+        if (sendInternal(session)) {
+            notifyViewers(session, session.outcome() == null ? "Domain Clash ended" : "Domain Clash result: " + session.outcome().name());
+        }
         lastSendStates.remove(session.sessionId);
     }
 
     @Override
     public void sendCancelled(ClashSession session) {
-        sendInternal(session);
-        notifyViewers(session, "Domain Clash cancelled");
+        dispatchSnapshot(session, ClashOutcome.CANCELLED);
+        if (isHudEnabled(session)) {
+            notifyViewers(session, "Domain Clash cancelled");
+        }
         lastSendStates.remove(session.sessionId);
     }
 
     private void notifyViewers(ClashSession session, String text) {
     }
 
-    private void sendInternal(ClashSession session) {
+    private boolean sendInternal(ClashSession session) {
+        if (!isHudEnabled(session)) {
+            dispatchSnapshot(session, ClashOutcome.CANCELLED);
+            return false;
+        }
+        dispatchSnapshot(session, null);
+        return true;
+    }
+
+    private void dispatchSnapshot(ClashSession session, ClashOutcome forcedOutcome) {
         LivingEntity a = session.casterA.get();
         LivingEntity b = session.casterB.get();
         if (!(a instanceof ServerPlayer) && !(b instanceof ServerPlayer)) {
@@ -103,12 +125,12 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
         int domainIdA = getDomainId(a);
         int domainIdB = getDomainId(b);
 
-        dispatchForParticipant(session, a, b, session.pair.a(), session.pair.b(), session.clashPowerA(), session.clashPowerB(), formIdA, domainIdA, formIdB, domainIdB);
-        dispatchForParticipant(session, b, a, session.pair.b(), session.pair.a(), session.clashPowerB(), session.clashPowerA(), formIdB, domainIdB, formIdA, domainIdA);
-        dispatchForNearbyViewers(session, a, b, formIdA, domainIdA, formIdB, domainIdB);
+        dispatchForParticipant(session, a, b, session.pair.a(), session.pair.b(), session.clashPowerA(), session.clashPowerB(), formIdA, domainIdA, formIdB, domainIdB, forcedOutcome);
+        dispatchForParticipant(session, b, a, session.pair.b(), session.pair.a(), session.clashPowerB(), session.clashPowerA(), formIdB, domainIdB, formIdA, domainIdA, forcedOutcome);
+        dispatchForNearbyViewers(session, a, b, formIdA, domainIdA, formIdB, domainIdB, forcedOutcome);
     }
 
-    private void dispatchForNearbyViewers(ClashSession session, LivingEntity a, LivingEntity b, int formIdA, int domainIdA, int formIdB, int domainIdB) {
+    private void dispatchForNearbyViewers(ClashSession session, LivingEntity a, LivingEntity b, int formIdA, int domainIdA, int formIdB, int domainIdB, ClashOutcome forcedOutcome) {
         LivingEntity anchor = a != null ? a : b;
         if (anchor == null || anchor.level().isClientSide()) {
             return;
@@ -134,7 +156,7 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
                 domainIdB,
                 getDisplayName(a),
                 getDisplayName(b),
-                session.outcome()
+                forcedOutcome != null ? forcedOutcome : session.outcome()
             );
             ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), pkt);
         }
@@ -151,7 +173,8 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
         int selfFormId,
         int selfDomainId,
         int otherFormId,
-        int otherDomainId
+        int otherDomainId,
+        ClashOutcome forcedOutcome
     ) {
         if (!(entity instanceof ServerPlayer player)) {
             return;
@@ -169,9 +192,34 @@ public class ClashSyncNetwork implements ClashResolver.SyncSink {
             otherDomainId,
             getDisplayName(entity),
             getDisplayName(otherEntity),
-            outcomeForParticipant(session, selfUuid)
+            forcedOutcome != null ? forcedOutcome : outcomeForParticipant(session, selfUuid)
         );
         ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), pkt);
+    }
+
+    private static boolean isHudEnabled(ClashSession session) {
+        ServerLevel level = resolveLevel(session);
+        return level == null || AddonGameRules.domainClashHud(level);
+    }
+
+    private static int sampleInterval(ClashSession session) {
+        ServerLevel level = resolveLevel(session);
+        return AddonGameRules.positiveInt(level, AddonGameRules.DOMAIN_CLASH_SAMPLE_INTERVAL_TICKS, SAMPLING_INTERVAL_TICKS_DEFAULT);
+    }
+
+    private static ServerLevel resolveLevel(ClashSession session) {
+        if (session == null) {
+            return null;
+        }
+        LivingEntity a = session.casterA.get();
+        if (a != null && a.level() instanceof ServerLevel level) {
+            return level;
+        }
+        LivingEntity b = session.casterB.get();
+        if (b != null && b.level() instanceof ServerLevel level) {
+            return level;
+        }
+        return null;
     }
 
     private static ClashOutcome outcomeForParticipant(ClashSession session, UUID selfUuid) {

@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.init.JujutsucraftModItems;
 import net.mcreator.jujutsucraft.procedures.CopiedCursedTechniqueRightclickedProcedure;
@@ -19,8 +20,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class CopiedCursedTechniqueRightclickedProcedureMixin {
     @Inject(method = {"execute"}, at = {@At(value = "HEAD")}, cancellable = true, remap = false)
     private static void jjkbrp$disableVanillaPlayerYutaCopiedUse(LevelAccessor world, double x, double y, double z, Entity entity, ItemStack itemstack, CallbackInfo ci) {
-        if (entity instanceof ServerPlayer player && YutaCopyStore.isActiveYuta(player)) {
-            if (itemstack != null && itemstack.is(JujutsucraftModItems.SWORD_OKKOTSU_YUTA.get()) && YutaCopyStore.hasValidRikaOrDomain(player)) {
+        if (entity instanceof ServerPlayer player && AddonGameRules.yutaCopy(player) && YutaCopyStore.isActiveYuta(player)) {
+            if (AddonGameRules.yutaDomainSword(player) && itemstack != null && itemstack.is(JujutsucraftModItems.SWORD_OKKOTSU_YUTA.get()) && YutaCopyStore.hasValidRikaOrDomain(player)) {
                 YutaCopyStore.activateDomainSwordCopy(player);
                 YutaCopyStore.cleanupVanillaPlayerCopy(player);
                 ci.cancel();

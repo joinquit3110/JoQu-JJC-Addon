@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.clash.ClashRegistry;
 import net.mcreator.jujutsucraft.addon.clash.ClashDurationRules;
 import net.mcreator.jujutsucraft.addon.clash.ClashSubsystem;
@@ -35,6 +36,9 @@ public final class ClashDetector {
     }
 
     public void tick(ServerLevel level, long serverTick) {
+        if (!AddonGameRules.domainClash(level)) {
+            return;
+        }
         Objects.requireNonNull(level, "level");
 
         List<LivingEntity> activeCandidates = new ArrayList<>();
@@ -74,7 +78,7 @@ public final class ClashDetector {
             radii.add(clashRadius(candidate, mapRadius));
             casters.add(candidate);
         }
-        createSessionsForOverlappingPairs(uuids, centers, radii, casters, serverTick);
+        createSessionsForOverlappingPairs(level, uuids, centers, radii, casters, serverTick);
 
         for (ClashSession session : new ArrayList<>(registry.activeSessions())) {
             if (session.resolved()) {
@@ -102,6 +106,7 @@ public final class ClashDetector {
     }
 
     void createSessionsForOverlappingPairs(
+        ServerLevel level,
         List<UUID> uuids,
         List<Vec3> centers,
         List<Double> radii,
@@ -120,7 +125,7 @@ public final class ClashDetector {
                 if (!OverlapCalculator.overlaps(centers.get(i), radii.get(i), centers.get(j), radii.get(j))) {
                     continue;
                 }
-                int durationTicks = ClashDurationRules.durationTicks(DomainForm.resolve(casters.get(i)), DomainForm.resolve(casters.get(j)));
+                int durationTicks = ClashDurationRules.durationTicks(level, DomainForm.resolve(casters.get(i)), DomainForm.resolve(casters.get(j)));
                 ClashSession created = registry.create(pair, casters.get(i), casters.get(j), serverTick, durationTicks);
                 if (created != null) {
                     relocateParticipantsIntoSharedDomain(casters.get(i), casters.get(j), centers.get(i), centers.get(j));

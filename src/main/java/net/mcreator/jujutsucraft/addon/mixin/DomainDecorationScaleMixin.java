@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.util.PehkuiDomainScaleUtil;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
@@ -47,6 +48,9 @@ public abstract class DomainDecorationScaleMixin {
     private void jjkbrp$scaleDomainDecorationOnTick(CallbackInfo ci) {
         Entity self = (Entity)(Object)this;
         if (self.level().isClientSide() || !jjkbrp$isDomainDecoration(self)) {
+            return;
+        }
+        if (!AddonGameRules.domainRadiusRules(self.level())) {
             return;
         }
         if (self.getPersistentData().getBoolean("jjkbrp_pehkui_domain_scaled")) {

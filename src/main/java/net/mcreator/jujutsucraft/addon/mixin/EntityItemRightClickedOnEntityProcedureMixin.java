@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.entity.EntityItemEntity;
 import net.mcreator.jujutsucraft.init.JujutsucraftModItems;
@@ -25,7 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class EntityItemRightClickedOnEntityProcedureMixin {
     @Inject(method = {"execute"}, at = {@At(value = "HEAD")}, cancellable = true, remap = false)
     private static void jjkbrp$disableVanillaDomainDecorationCopy(LevelAccessor world, Entity entity, Entity sourceentity, CallbackInfo ci) {
-        if (!(sourceentity instanceof ServerPlayer player) || !YutaCopyStore.isActiveYuta(player)) {
+        if (!(sourceentity instanceof ServerPlayer player) || !AddonGameRules.yutaDomainSword(player) || !YutaCopyStore.isActiveYuta(player)) {
             return;
         }
         if (isDomainSwordDecoration(entity)) {

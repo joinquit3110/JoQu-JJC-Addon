@@ -3,6 +3,7 @@ package net.mcreator.jujutsucraft.addon.limb;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.limb.LimbCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.limb.LimbData;
 import net.mcreator.jujutsucraft.addon.limb.LimbType;
@@ -53,11 +54,17 @@ public class LimbGameplayHandler {
      */
     public static void applyLimbDebuffs(LivingEntity entity, LimbData data) {
         LimbGameplayHandler.removeAllModifiers(entity);
+        if (!AddonGameRules.limbDebuffs(entity)) {
+            if (entity instanceof ServerPlayer sp) {
+                sp.getPersistentData().remove("jjkbrp_strike_damage_penalty");
+            }
+            return;
+        }
         int missingArms = data.countSeveredArms();
         int missingLegs = data.countSeveredLegs();
         if (missingArms > 0) {
             // One arm removes 25% strike damage; both arms remove 50%.
-            float damagePenalty = missingArms >= 2 ? 0.5f : 0.25f;
+            float damagePenalty = (missingArms >= 2 ? 0.5f : 0.25f) * AddonGameRules.percentFloat(entity, AddonGameRules.LIMB_ARM_DAMAGE_PENALTY_PERCENT, 100);
             AttributeInstance atkDmg = entity.getAttribute(Attributes.ATTACK_DAMAGE);
             if (atkDmg != null) {
                 atkDmg.removeModifier(RIGHT_ARM_ATTACK_UUID);
@@ -71,7 +78,7 @@ public class LimbGameplayHandler {
         }
         if (missingLegs > 0) {
             // One missing leg heavily slows movement; two missing legs nearly immobilize the player.
-            double speedPenalty = missingLegs >= 2 ? -0.95 : -0.6;
+            double speedPenalty = (missingLegs >= 2 ? -0.95 : -0.6) * AddonGameRules.percent(entity, AddonGameRules.LIMB_LEG_SLOW_PENALTY_PERCENT, 100);
             AttributeInstance attr = entity.getAttribute(Attributes.MOVEMENT_SPEED);
             if (attr != null) {
                 attr.removeModifier(LEG_SPEED_UUID);
@@ -103,6 +110,10 @@ public class LimbGameplayHandler {
      * @param data current limb capability data
      */
     public static void refreshDebuffs(LivingEntity entity, LimbData data) {
+        if (!AddonGameRules.limbDebuffs(entity)) {
+            LimbGameplayHandler.removeAllModifiers(entity);
+            return;
+        }
         if (data.hasSeveredLimbs()) {
             LimbGameplayHandler.applyLimbDebuffs(entity, data);
         } else {
@@ -125,6 +136,10 @@ public class LimbGameplayHandler {
         }
         Player player = (Player)entity;
         if (player.level().isClientSide) {
+            return;
+        }
+        if (!AddonGameRules.limbDebuffs(player)) {
+            LimbGameplayHandler.removeAllModifiers(player);
             return;
         }
         LimbCapabilityProvider.get((LivingEntity)player).ifPresent(data -> {

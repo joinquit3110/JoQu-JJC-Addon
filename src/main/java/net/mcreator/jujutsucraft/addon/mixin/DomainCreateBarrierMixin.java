@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.lang.reflect.Field;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
@@ -55,6 +56,9 @@ public abstract class DomainCreateBarrierMixin {
         if (world.isClientSide()) {
             return;
         }
+        if (!AddonGameRules.domainMastery(player)) {
+            return;
+        }
         player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> {
             double cnt3;
             CompoundTag nbt;
@@ -64,7 +68,7 @@ public abstract class DomainCreateBarrierMixin {
             data.setOpenBarrierAdvancementUnlocked(hasOpenAdvancement);
             int originalForm = data.getDomainTypeSelected();
             // Sanitize the selected form at cast time so stale client selections cannot force forms the player has not actually unlocked.
-            int form = DomainMasteryData.sanitizeFormSelection(originalForm, masteryLevel, hasOpenAdvancement);
+            int form = AddonGameRules.domainForms(player) ? DomainMasteryData.sanitizeFormSelection(originalForm, masteryLevel, hasOpenAdvancement) : 1;
             if (form != originalForm) {
                 data.setDomainTypeSelected(form, hasOpenAdvancement);
                 if (player instanceof ServerPlayer) {
@@ -84,23 +88,23 @@ public abstract class DomainCreateBarrierMixin {
             // Resolve the policy record once and store every runtime multiplier in NBT so later mixins can reuse the exact same tuned values.
             DomainFormPolicy.Policy policy = DomainFormPolicy.policyOf(policyDomainId);
             boolean useBaseOpenRangePath = domainId > 0.0 && DomainCreateBarrierMixin.jjkbrp$useBaseOpenRangePath(domainId);
-            double openRangeMultiplier = Math.max(2.5, policy.openRangeMultiplier());
+            double openRangeMultiplier = Math.max(2.5, policy.openRangeMultiplier()) * AddonGameRules.percent(world, AddonGameRules.DOMAIN_OPEN_RANGE_PERCENT, 100);
             if (!useBaseOpenRangePath) {
-                openRangeMultiplier = 2.5;
+                openRangeMultiplier = 2.5 * AddonGameRules.percent(world, AddonGameRules.DOMAIN_OPEN_RANGE_PERCENT, 100);
             }
             // Persist every startup multiplier into runtime NBT because downstream mixins read these keys during active ticks and cleanup.
             DomainAddonUtils.clearIncompleteDomainData(nbt);
             nbt.putDouble("jjkbrp_incomplete_penalty_per_tick", policy.incompletePenaltyPerTick());
             nbt.putDouble("jjkbrp_open_range_multiplier", openRangeMultiplier);
-            nbt.putDouble("jjkbrp_open_surehit_multiplier", policy.openSureHitMultiplier());
+            nbt.putDouble("jjkbrp_open_surehit_multiplier", policy.openSureHitMultiplier() * AddonGameRules.percent(world, AddonGameRules.DOMAIN_OPEN_SUREHIT_PERCENT, 100));
             nbt.putDouble("jjkbrp_open_ce_drain_multiplier", policy.openCeDrainMultiplier());
-            nbt.putDouble("jjkbrp_open_duration_multiplier", policy.openDurationMultiplier());
+            nbt.putDouble("jjkbrp_open_duration_multiplier", policy.openDurationMultiplier() * AddonGameRules.percent(world, AddonGameRules.DOMAIN_DURATION_PERCENT, 100));
             nbt.putString("jjkbrp_domain_archetype", policy.archetype().name());
             if (domainId > 0.0) {
                 nbt.putDouble("jjkbrp_domain_id_runtime", (double)Math.round(domainId));
             }
             nbt.putDouble("jjkbrp_barrier_refinement", policy.barrierRefinement());
-            double radiusBonus = data.getRadiusRuntimeMultiplier();
+            double radiusBonus = AddonGameRules.domainRadiusRules(world) ? data.getRadiusRuntimeMultiplier() * AddonGameRules.percent(world, AddonGameRules.DOMAIN_RADIUS_PERCENT, 100) : 1.0D;
             try {
                 JujutsucraftModVariables.MapVariables mapVars = JujutsucraftModVariables.MapVariables.get((LevelAccessor)world);
                 double origRadius = mapVars.DomainExpansionRadius;
@@ -218,9 +222,9 @@ public abstract class DomainCreateBarrierMixin {
         Player player;
         block16: {
             block15: {
-                if (!(entity instanceof Player)) break block15;
+        if (!(entity instanceof Player)) break block15;
                 player = (Player)entity;
-                if (!world.isClientSide()) break block16;
+                if (!world.isClientSide() && AddonGameRules.domainDurationRules(player)) break block16;
             }
             return livingEntity.addEffect(effectInstance);
         }
@@ -481,7 +485,7 @@ public abstract class DomainCreateBarrierMixin {
     private static int jjkbrp$resolveDomainDurationTicks(Player player, DomainMasteryData data, int baseDuration, int effectAmplifier) {
         double openDurationMultiplier;
         boolean openEffect;
-        int finalDuration = data.resolveFinalDurationTicks(baseDuration);
+        int finalDuration = AddonGameRules.domainDurationRules(player) ? data.resolveFinalDurationTicks(baseDuration) : baseDuration;
         boolean bl = openEffect = effectAmplifier > 0 || player.getPersistentData().getBoolean("jjkbrp_open_form_active");
         if (openEffect && (openDurationMultiplier = player.getPersistentData().getDouble("jjkbrp_open_duration_multiplier")) > 0.0) {
             finalDuration = Math.max(1, (int)Math.round((double)finalDuration * openDurationMultiplier));

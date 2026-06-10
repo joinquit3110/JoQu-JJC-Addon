@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.LimbCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.limb.LimbData;
@@ -62,6 +63,9 @@ public class LimbLossHandler {
             return;
         }
         if (entity instanceof YutaFakePlayerEntity fake) {
+            if (!AddonGameRules.yutaFakePlayer(fake.level())) {
+                return;
+            }
             event.setAmount(Math.min(event.getAmount(), 40.0f));
             if (fake.getHealth() - event.getAmount() < 40.0f) {
                 fake.setHealth(Math.min(fake.getMaxHealth(), 200.0f));
@@ -70,6 +74,9 @@ public class LimbLossHandler {
             return;
         }
         if (!(entity instanceof Player)) {
+            return;
+        }
+        if (!AddonGameRules.limbSevering(entity)) {
             return;
         }
         float actualDamage = event.getAmount();
@@ -110,6 +117,7 @@ public class LimbLossHandler {
             }
             // The sever chance is hard-capped at 85% even for extreme hits.
             chance = Math.min(chance, 0.85f);
+            chance *= AddonGameRules.percentFloat(entity, AddonGameRules.LIMB_SEVER_CHANCE_PERCENT, 100);
             if (entity instanceof ServerPlayer) {
                 ServerPlayer sp = (ServerPlayer)entity;
                 boolean hasRCTSkill = LimbLossHandler.hasRCTAdvancement(sp);
@@ -193,6 +201,9 @@ public class LimbLossHandler {
      */
     public static void severLimb(LivingEntity entity, LimbData data, LimbType type, DamageSource source) {
         ServerPlayer sp;
+        if (entity == null || data == null || !AddonGameRules.limbSevering(entity)) {
+            return;
+        }
         boolean hasRCT = entity.hasEffect((MobEffect)JujutsucraftModMobEffects.REVERSE_CURSED_TECHNIQUE.get());
         if (entity instanceof ServerPlayer) {
             sp = (ServerPlayer)entity;
@@ -213,10 +224,12 @@ public class LimbLossHandler {
                 data.setState(type, LimbState.SEVERED);
                 LimbSounds.playHeadSeverSound(entity);
                 LimbParticles.spawnSeverBloodBurst(entity, type);
-                LimbLossHandler.spawnSeveredLimbEntity(entity, type);
+                if (AddonGameRules.limbDrops(entity)) {
+                    LimbLossHandler.spawnSeveredLimbEntity(entity, type);
+                }
                 entity.setHealth(0.0f);
-                data.setSeverCooldownTicks(40);
-                data.setBloodDripTicks(200);
+                data.setSeverCooldownTicks(AddonGameRules.nonNegativeInt(entity, AddonGameRules.LIMB_SEVER_COOLDOWN_TICKS, 40));
+                data.setBloodDripTicks(AddonGameRules.nonNegativeInt(entity, AddonGameRules.LIMB_BLOOD_DRIP_TICKS, 200));
                 LimbSyncPacket.sendToTrackingPlayers(entity, data);
                 return;
             }
@@ -228,8 +241,8 @@ public class LimbLossHandler {
             data.setState(type, LimbState.SEVERED);
         }
         // Standard sever aftermath uses a 40-tick sever cooldown and 200 ticks of blood dripping.
-        data.setSeverCooldownTicks(40);
-        data.setBloodDripTicks(200);
+        data.setSeverCooldownTicks(AddonGameRules.nonNegativeInt(entity, AddonGameRules.LIMB_SEVER_COOLDOWN_TICKS, 40));
+        data.setBloodDripTicks(AddonGameRules.nonNegativeInt(entity, AddonGameRules.LIMB_BLOOD_DRIP_TICKS, 200));
         LimbSounds.playSeverSound(entity);
         LimbParticles.spawnSeverBloodBurst(entity, type);
         if (source != null && source.getDirectEntity() != null) {
@@ -237,13 +250,15 @@ public class LimbLossHandler {
             Vec3 dir = entity.position().subtract(source.getDirectEntity().position()).normalize();
             LimbParticles.spawnBloodSpray(entity, type, dir);
         }
-        SeveredLimbEntity detached = LimbLossHandler.spawnSeveredLimbEntity(entity, type);
-        if (entity instanceof ServerPlayer) {
+        SeveredLimbEntity detached = AddonGameRules.limbDrops(entity) ? LimbLossHandler.spawnSeveredLimbEntity(entity, type) : null;
+        if (entity instanceof ServerPlayer && detached != null && AddonGameRules.yutaLimbCopy(entity)) {
             YutaCopyStore.attachPlayerLimbCopyData(entity, type.getSerializedName(), detached);
-        } else {
+        } else if (AddonGameRules.limbDrops(entity) && AddonGameRules.yutaLimbCopy(entity)) {
             YutaCopyStore.spawnLimbCopyItem(entity, type.getSerializedName());
         }
-        LimbGameplayHandler.applyLimbDebuffs(entity, data);
+        if (AddonGameRules.limbDebuffs(entity)) {
+            LimbGameplayHandler.applyLimbDebuffs(entity, data);
+        }
         LimbSyncPacket.sendToTrackingPlayers(entity, data);
         if (entity instanceof ServerPlayer) {
             sp = (ServerPlayer)entity;
@@ -289,6 +304,20 @@ public class LimbLossHandler {
         if (entity.level().isClientSide) {
             return;
         }
+        if (!AddonGameRules.limbSystem(entity)) {
+            if (entity.tickCount % 20 == 0) {
+                LimbCapabilityProvider.get(entity).ifPresent(data -> {
+                    if (!data.hasSeveredLimbs()) {
+                        return;
+                    }
+                    LimbSyncPacket.sendToTrackingPlayers(entity, data);
+                    if (entity instanceof ServerPlayer sp) {
+                        LimbSyncPacket.sendToPlayer(sp, entity, data);
+                    }
+                });
+            }
+            return;
+        }
         LimbCapabilityProvider.get(entity).ifPresent(data -> {
             if (!data.hasSeveredLimbs() && data.getBloodDripTicks() <= 0) {
                 return;
@@ -325,6 +354,9 @@ public class LimbLossHandler {
         if (entity == null) {
             return;
         }
+        if (!AddonGameRules.limbRegeneration(entity)) {
+            return;
+        }
         if (!entity.isAlive() || entity.isDeadOrDying() || entity.isRemoved() || entity.getHealth() <= 0.0f) {
             return;
         }
@@ -333,10 +365,13 @@ public class LimbLossHandler {
             return;
         }
         boolean inZone = entity.hasEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
-        float f = regenRate = inZone ? 0.04f : 0.02f;
+        float f = regenRate = (inZone ? 0.04f : 0.02f) * AddonGameRules.percentFloat(entity, AddonGameRules.LIMB_REGEN_RATE_PERCENT, 100);
+        if (inZone) {
+            regenRate *= AddonGameRules.percentFloat(entity, AddonGameRules.LIMB_ZONE_REGEN_PERCENT, 100);
+        }
         if (inZone && entity.tickCount % 10 == 0 && (maxHp = entity.getMaxHealth()) > 0.0f) {
             // Zone grants both faster limb restoration and a small periodic health refill.
-            entity.setHealth(Math.min(maxHp, entity.getHealth() + 1.0f));
+            entity.setHealth(Math.min(maxHp, entity.getHealth() + AddonGameRules.percentFloat(entity, AddonGameRules.LIMB_ZONE_REGEN_PERCENT, 100)));
         }
         boolean changed = false;
         for (LimbType type : LimbType.values()) {
@@ -413,6 +448,11 @@ public class LimbLossHandler {
             return;
         }
         ServerPlayer sp = (ServerPlayer)player;
+        if (!AddonGameRules.limbSystem(sp)) {
+            LimbCapabilityProvider.get((LivingEntity)sp).ifPresent(data -> LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data));
+            ModNetworking.sendNearDeathCdSync(sp);
+            return;
+        }
         LimbCapabilityProvider.get((LivingEntity)sp).ifPresent(data -> {
             LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data);
             if (data.hasSeveredLimbs()) {
@@ -434,6 +474,15 @@ public class LimbLossHandler {
             return;
         }
         ServerPlayer sp = (ServerPlayer)player;
+        if (!AddonGameRules.limbSystem(sp)) {
+            LimbCapabilityProvider.get((LivingEntity)sp).ifPresent(data -> {
+                LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data);
+                if (data.hasSeveredLimbs()) {
+                    LimbSyncPacket.sendToTrackingPlayers((LivingEntity)sp, data);
+                }
+            });
+            return;
+        }
         LimbCapabilityProvider.get((LivingEntity)sp).ifPresent(data -> {
             LimbSyncPacket.sendToPlayer(sp, (LivingEntity)sp, data);
             if (data.hasSeveredLimbs()) {

@@ -3,6 +3,8 @@ package net.mcreator.jujutsucraft.addon;
 import java.util.List;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryScreen;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
+import net.mcreator.jujutsucraft.addon.AddonGameRulesScreen;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.SkillWheelScreen;
 import net.minecraft.client.Minecraft;
@@ -25,6 +27,10 @@ public final class ClientPacketHandler {
      */
     public static void openSkillWheel(List<List<ModNetworking.WheelTechniqueEntry>> pages, double currentSelect) {
         Minecraft.getInstance().setScreen((Screen)new SkillWheelScreen(pages, currentSelect));
+    }
+
+    public static void syncAddonGameRules(List<AddonGameRules.RuleSnapshot> rules) {
+        AddonGameRules.updateClientSyncedRules(rules);
     }
 
     /**
@@ -201,6 +207,16 @@ public final class ClientPacketHandler {
      */
     public static void openDomainMasteryScreen() {
         Minecraft.getInstance().setScreen((Screen)new DomainMasteryScreen());
+    }
+
+    public static void openAddonGameRulesScreen(List<AddonGameRules.RuleSnapshot> rules) {
+        AddonGameRules.updateClientSyncedRules(rules);
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen instanceof AddonGameRulesScreen screen) {
+            screen.updateRules(rules);
+            return;
+        }
+        mc.setScreen((Screen)new AddonGameRulesScreen(rules));
     }
 
     /**

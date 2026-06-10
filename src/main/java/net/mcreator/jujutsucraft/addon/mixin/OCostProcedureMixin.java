@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainCostUtils;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.OCostProcedure;
@@ -29,6 +30,9 @@ public class OCostProcedureMixin {
             return;
         }
         Player player = (Player)entity;
+        if (!AddonGameRules.domainCostRules(player)) {
+            return;
+        }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         if (!DomainCostUtils.isDomainTechniqueSelected(vars)) {
             return;

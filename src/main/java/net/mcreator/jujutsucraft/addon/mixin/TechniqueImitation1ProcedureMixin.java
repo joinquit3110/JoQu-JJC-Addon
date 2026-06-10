@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.procedures.TechniqueImitation1Procedure;
 import net.minecraft.server.level.ServerPlayer;
@@ -19,7 +20,7 @@ public class TechniqueImitation1ProcedureMixin {
     private static void jjkbrp$disablePlayerYutaVanillaCursedSpeechLoudspeaker(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         if (entity instanceof ServerPlayer) {
             ServerPlayer player = (ServerPlayer)entity;
-            if (YutaCopyStore.isActiveYuta(player)) {
+            if (AddonGameRules.yutaCopy(player) && YutaCopyStore.isActiveYuta(player)) {
                 YutaCopyStore.cleanupVanillaPlayerCopy(player);
                 ci.cancel();
             }

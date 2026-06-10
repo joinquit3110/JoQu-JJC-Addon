@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.logic.FugaDustLogic;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
@@ -38,6 +39,9 @@ public abstract class AIFlameArrowSukunaDustMixin {
         }
         LivingEntity owner = DomainAddonUtils.resolveOwnerEntity(world, entity);
         if (!(owner instanceof ServerPlayer player)) {
+            return;
+        }
+        if (!AddonGameRules.sukunaFugaReward(player)) {
             return;
         }
         // Gate on the Sukuna (charId == 1) + Fuga (select id 7) identity (Req 3.7),

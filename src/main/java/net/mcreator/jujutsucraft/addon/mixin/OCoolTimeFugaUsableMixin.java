@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.logic.FugaDustLogic;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.OCoolTimeProcedure;
@@ -40,6 +41,9 @@ public class OCoolTimeFugaUsableMixin {
             return;
         }
         Player player = (Player)entity;
+        if (!AddonGameRules.sukunaFugaReward(player)) {
+            return;
+        }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null)
                 .orElse(new JujutsucraftModVariables.PlayerVariables());
         int charId = (int) Math.round(vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique);

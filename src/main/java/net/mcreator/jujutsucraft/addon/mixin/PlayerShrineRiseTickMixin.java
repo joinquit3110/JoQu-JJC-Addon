@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.PlayerShrineRiseController;
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,6 +18,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class PlayerShrineRiseTickMixin {
     @Inject(method = {"m_6075_"}, at = {@At(value = "TAIL")}, remap = false)
     private void jjkbrp$tickPlayerShrineRise(CallbackInfo ci) {
-        PlayerShrineRiseController.tick((Entity)(Object)this);
+        Entity self = (Entity)(Object)this;
+        if (!AddonGameRules.domainForms(self)) {
+            return;
+        }
+        PlayerShrineRiseController.tick(self);
     }
 }

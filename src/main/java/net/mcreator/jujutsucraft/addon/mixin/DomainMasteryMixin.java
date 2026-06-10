@@ -2,6 +2,7 @@ package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.util.Comparator;
 import java.util.List;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainFormPolicy;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
@@ -78,6 +79,9 @@ public abstract class DomainMasteryMixin {
             return;
         }
         LivingEntity caster = (LivingEntity)entity;
+        if (!AddonGameRules.domainMastery(caster)) {
+            return;
+        }
         if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster) || !DomainMasteryMixin.jjkbrp$shouldMaskIncompleteActiveBehavior(caster)) {
             return;
         }
@@ -172,6 +176,10 @@ public abstract class DomainMasteryMixin {
     // Redirects the targeted invocation so the addon can selectively replace that single call without copying the whole original method.
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/mcreator/jujutsucraft/procedures/DomainActiveProcedure;execute(Lnet/minecraft/world/level/LevelAccessor;DDDLnet/minecraft/world/entity/Entity;)V", remap=false), remap=false)
     private static void jjkbrp$runDomainActiveProcedure(LevelAccessor world, double x, double y, double z, Entity entity) {
+        if (!AddonGameRules.enabled(world, AddonGameRules.DOMAIN_MASTERY_ENABLED)) {
+            DomainActiveProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
+            return;
+        }
         // Re-stamp runtime form flags first because several older base procedure paths can partially clear the incomplete-domain markers.
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(entity);
         // Keep non-hazardous incomplete active visuals/support, but suppress full-domain active procedures that are sure-hit carriers.
@@ -199,6 +207,10 @@ public abstract class DomainMasteryMixin {
     // Redirects the targeted invocation so the addon can selectively replace that single call without copying the whole original method.
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/mcreator/jujutsucraft/procedures/EffectCharactorProcedure;execute(Lnet/minecraft/world/level/LevelAccessor;Lnet/minecraft/world/entity/Entity;Lnet/minecraft/world/entity/Entity;)V", remap=false), remap=false)
     private static void jjkbrp$skipEffectCharacterForIncomplete(LevelAccessor world, Entity caster, Entity target) {
+        if (!AddonGameRules.enabled(world, AddonGameRules.DOMAIN_MASTERY_ENABLED)) {
+            EffectCharactorProcedure.execute((LevelAccessor)world, (Entity)caster, (Entity)target);
+            return;
+        }
         LivingEntity livingCaster;
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(caster);
         if (caster instanceof LivingEntity && DomainAddonUtils.isIncompleteDomainState(livingCaster = (LivingEntity)caster)
@@ -222,6 +234,9 @@ public abstract class DomainMasteryMixin {
     // Redirects the targeted invocation so the addon can selectively replace that single call without copying the whole original method.
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/minecraft/world/entity/LivingEntity;m_7292_(Lnet/minecraft/world/effect/MobEffectInstance;)Z", remap=false), remap=false)
     private static boolean jjkbrp$skipNeutralizationForIncomplete(LivingEntity target, MobEffectInstance effect, LevelAccessor world, double x, double y, double z, Entity caster) {
+        if (!AddonGameRules.enabled(world, AddonGameRules.DOMAIN_MASTERY_ENABLED)) {
+            return target.addEffect(effect);
+        }
         DomainMasteryMixin.jjkbrp$reStampIncompleteFlags(caster);
         if (effect != null && caster instanceof LivingEntity) {
             LivingEntity livingCaster = (LivingEntity)caster;
@@ -284,9 +299,12 @@ public abstract class DomainMasteryMixin {
 
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/minecraft/world/entity/LivingEntity;m_21195_(Lnet/minecraft/world/effect/MobEffect;)Z", remap=false), remap=false)
     private static boolean jjkbrp$preserveDomainEffectDuringClash(LivingEntity target, MobEffect effect, LevelAccessor world, double x, double y, double z, Entity caster) {
+        if (!AddonGameRules.enabled(world, AddonGameRules.DOMAIN_MASTERY_ENABLED)) {
+            return target.removeEffect(effect);
+        }
         if (effect == JujutsucraftModMobEffects.DOMAIN_EXPANSION.get() && target != null) {
             // Preserve the domain effect during an active clash (the original behavior).
-            if (caster instanceof LivingEntity livingCaster && DomainMasteryMixin.jjkbrp$isActiveClashPair(livingCaster, target)) {
+            if (AddonGameRules.domainClash(world) && caster instanceof LivingEntity livingCaster && DomainMasteryMixin.jjkbrp$isActiveClashPair(livingCaster, target)) {
                 JJKBRP$preserveDomainRemoval.set(Boolean.TRUE);
                 return false;
             }
@@ -322,6 +340,9 @@ public abstract class DomainMasteryMixin {
         // clash no longer has a live domain effect, so it is excluded too. This makes the win-case
         // preservation explicit instead of relying solely on the per-tick reward handler.
         if (world == null || world.isClientSide() || !(entity instanceof LivingEntity living)) {
+            return;
+        }
+        if (!AddonGameRules.domainMastery(living)) {
             return;
         }
         if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(living)) {
@@ -417,6 +438,9 @@ public abstract class DomainMasteryMixin {
         if (world.isClientSide()) {
             return;
         }
+        if (!AddonGameRules.domainMastery(caster)) {
+            return;
+        }
         CompoundTag casterNbt = caster.getPersistentData();
         int runtimeDomainId = DomainMasteryMixin.jjkbrp$resolveRuntimeDomainId(casterNbt);
         if (DomainMasteryMixin.jjkbrp$isSpecialSukunaIncompleteSureHit(caster)) {
@@ -458,7 +482,9 @@ public abstract class DomainMasteryMixin {
             }
         }
         // Apply every mastery property after the base active tick so the addon effects layer cleanly on top of the original domain behavior.
-        DomainMasteryMixin.applyPropertyEffects(world, caster);
+        if (AddonGameRules.domainPropertyEffects(caster)) {
+            DomainMasteryMixin.applyPropertyEffects(world, caster);
+        }
         DomainMasteryMixin.jjkbrp$applyIncompleteZoneOnlyBuff(caster);
         // Closed/open shrine slash uses this call-site path. Special incomplete shrine enters for
         // mastery-radius outer accent particles; its slash is emitted by SureHitShrineFx.
@@ -479,13 +505,15 @@ public abstract class DomainMasteryMixin {
                     // Open domains cache a stable center because later visuals and range checks must keep using the opening point instead of the moving caster.
                     DomainMasteryMixin.jjkbrp$cacheOpenDomainCenter((LivingEntity)domainPlayer);
                 }
-                if (DomainMasteryMixin.jjkbrp$shouldFireOpeningVFX(serverLevel, domainPlayer, openDomainActive)) {
+                if (AddonGameRules.enabled(domainPlayer, AddonGameRules.DOMAIN_OPEN_VFX_ENABLED) && DomainMasteryMixin.jjkbrp$shouldFireOpeningVFX(serverLevel, domainPlayer, openDomainActive)) {
                     // Fire the one-shot opening burst only after all center and timing state is fully prepared.
                     DomainMasteryMixin.jjkbrp$fireOpeningVFX(serverLevel, domainPlayer);
                 }
                 if (openDomainActive) {
                     // After the opening burst, keep the domain visually alive with the continuous open-domain particle and debuff loop.
-                    DomainMasteryMixin.applyOpenDomainVFX(serverLevel, caster);
+                    if (AddonGameRules.enabled(domainPlayer, AddonGameRules.DOMAIN_OPEN_VFX_ENABLED)) {
+                        DomainMasteryMixin.applyOpenDomainVFX(serverLevel, caster);
+                    }
                     // Open domains cancel themselves if the caster moves too far from the allowed operating center.
                     DomainMasteryMixin.checkOpenDomainRangeCancel(serverLevel, domainPlayer);
                 } else if (DomainAddonUtils.isIncompleteDomainState((LivingEntity)domainPlayer)) {
@@ -513,6 +541,9 @@ public abstract class DomainMasteryMixin {
 
     @Unique
     private static boolean jjkbrp$isSpecialSukunaIncompleteSureHit(LivingEntity caster) {
+        if (!AddonGameRules.sukunaIncompleteSurehit(caster)) {
+            return false;
+        }
         if (!DomainAddonUtils.isActiveSukunaIncompleteShrine(caster)) {
             return false;
         }
@@ -1392,7 +1423,7 @@ public abstract class DomainMasteryMixin {
         double shellRadius = DomainAddonUtils.getOpenDomainShellRadius((LevelAccessor)world, (Entity)player);
         double visualRange = DomainAddonUtils.getOpenDomainVisualRange((LevelAccessor)world, (Entity)player);
         // Keep self-cancel aligned with the actual open-domain shell so leaving the visible domain edge reliably cancels.
-        double cancelRange = Math.max(6.0, shellRadius);
+        double cancelRange = Math.max(6.0, shellRadius) * AddonGameRules.percent(player, AddonGameRules.DOMAIN_RANGE_CANCEL_PERCENT, 100);
         double dx = player.getX() - cx;
         double horizontalDistSq = dx * dx + (dz = player.getZ() - cz) * dz;
         if (horizontalDistSq <= cancelRange * cancelRange) {
@@ -1460,7 +1491,7 @@ public abstract class DomainMasteryMixin {
         Vec3 center = DomainAddonUtils.getDomainCenter((Entity)player);
         double baseRadius = Math.max(1.0, DomainAddonUtils.getActualDomainRadius((LevelAccessor)world, nbt));
         double leashMultiplier = 1.35;
-        double cancelRange = baseRadius * leashMultiplier;
+        double cancelRange = baseRadius * leashMultiplier * AddonGameRules.percent(player, AddonGameRules.DOMAIN_RANGE_CANCEL_PERCENT, 100);
         double dx = player.getX() - center.x;
         double horizontalDistSq = dx * dx + (dz = player.getZ() - center.z) * dz;
         if (horizontalDistSq <= cancelRange * cancelRange) {
@@ -1492,6 +1523,9 @@ public abstract class DomainMasteryMixin {
     private static void jjkbrp$applyIncompleteZoneOnlyBuff(LivingEntity caster) {
         MobEffectInstance resistance;
         if (caster == null) {
+            return;
+        }
+        if (!AddonGameRules.domainPropertyEffects(caster)) {
             return;
         }
         if (!caster.hasEffect((MobEffect)JujutsucraftModMobEffects.DOMAIN_EXPANSION.get())) {
@@ -1565,7 +1599,7 @@ public abstract class DomainMasteryMixin {
         if (lvl <= 0 || world.getGameTime() % 10L != 0L) {
             return;
         }
-        double drain = (double)lvl * DomainMasteryProperties.VICTIM_CE_DRAIN.getValuePerLevel();
+        double drain = (double)lvl * DomainMasteryProperties.VICTIM_CE_DRAIN.getValuePerLevel() * AddonGameRules.percent(caster, AddonGameRules.DOMAIN_PROPERTY_EFFECT_PERCENT, 100);
         if (caster.getPersistentData().getBoolean("jjkbrp_open_form_active") && (openDrainMultiplier = caster.getPersistentData().getDouble("jjkbrp_open_ce_drain_multiplier")) > 0.0) {
             drain *= openDrainMultiplier;
         }
@@ -1594,7 +1628,7 @@ public abstract class DomainMasteryMixin {
             DomainAddonUtils.cleanupBFBoost(caster);
             return;
         }
-        double desiredBoost = (double)lvl * 1.25;
+        double desiredBoost = (double)lvl * 1.25 * AddonGameRules.percent(caster, AddonGameRules.DOMAIN_PROPERTY_EFFECT_PERCENT, 100);
         if (Math.abs(nbt.getDouble("jjkbrp_domain_bf_bonus") - desiredBoost) > 0.01) {
             nbt.putDouble("jjkbrp_domain_bf_bonus", desiredBoost);
         }
@@ -1628,7 +1662,7 @@ public abstract class DomainMasteryMixin {
         if (maxHp <= 0.0f || hp >= maxHp) {
             return;
         }
-        float healPerTick = (float)((double)lvl * DomainMasteryProperties.RCT_HEAL_BOOST.getValuePerLevel());
+        float healPerTick = (float)((double)lvl * DomainMasteryProperties.RCT_HEAL_BOOST.getValuePerLevel() * AddonGameRules.percent(caster, AddonGameRules.DOMAIN_PROPERTY_EFFECT_PERCENT, 100));
         if (healPerTick <= 0.0f) {
             return;
         }
@@ -1648,7 +1682,7 @@ public abstract class DomainMasteryMixin {
         if (lvl <= 0 || world.getGameTime() % 20L != 0L) {
             return;
         }
-        int amp = lvl - 1;
+        int amp = Math.max(0, (int)Math.round((double)lvl * AddonGameRules.percent(caster, AddonGameRules.DOMAIN_PROPERTY_EFFECT_PERCENT, 100)) - 1);
         AABB effectBounds = DomainMasteryMixin.jjkbrp$effectBounds(effectCenter, effectRange);
         double effectRangeSq = effectRange * effectRange;
         for (LivingEntity e2 : world.getEntitiesOfClass(LivingEntity.class, effectBounds, e -> e != caster)) {
@@ -1670,7 +1704,7 @@ public abstract class DomainMasteryMixin {
         if (lvl <= 0 || world.getGameTime() % 20L != 0L) {
             return;
         }
-        int amp = lvl - 1;
+        int amp = Math.max(0, (int)Math.round((double)lvl * AddonGameRules.percent(caster, AddonGameRules.DOMAIN_PROPERTY_EFFECT_PERCENT, 100)) - 1);
         AABB effectBounds = DomainMasteryMixin.jjkbrp$effectBounds(effectCenter, effectRange);
         double effectRangeSq = effectRange * effectRange;
         for (LivingEntity e2 : world.getEntitiesOfClass(LivingEntity.class, effectBounds, e -> e != caster)) {

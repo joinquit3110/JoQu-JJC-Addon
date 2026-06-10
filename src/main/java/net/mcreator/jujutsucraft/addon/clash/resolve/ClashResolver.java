@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import javax.annotation.Nullable;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.clash.ClashRegistry;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashOutcome;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashSession;
@@ -146,6 +147,10 @@ public final class ClashResolver {
      *                   {@link ClashSession#setLastSampledTick(long)} when a sampling pass runs
      */
     public void tickSessions(ServerLevel level, long serverTick) {
+        if (!AddonGameRules.domainClash(level)) {
+            cancelSessionsForLevel(level);
+            return;
+        }
         Collection<ClashSession> active = registry.activeSessions();
         if (active.isEmpty()) {
             return;
@@ -155,6 +160,7 @@ public final class ClashResolver {
         // can mutate the registry inside the loop without CME.
         List<ClashSession> snapshot = new ArrayList<>(active);
         double mapRadius = readMapRadius(level);
+        int sampleInterval = AddonGameRules.positiveInt(level, AddonGameRules.DOMAIN_CLASH_SAMPLE_INTERVAL_TICKS, SAMPLING_INTERVAL_TICKS_DEFAULT);
 
         for (ClashSession session : snapshot) {
             // Req 14.2: idempotency guard - a session resolved earlier this tick by a
@@ -184,7 +190,7 @@ public final class ClashResolver {
             }
 
             // Step 3: sample at the configured cadence (Req 4.1 + Req 9.2).
-            if (session.remainingTicks() % SAMPLING_INTERVAL_TICKS_DEFAULT == 0) {
+            if (session.remainingTicks() % sampleInterval == 0) {
                 ParticipantSnapshot snapA = ParticipantSnapshot.capture(casterA, mapRadius);
                 ParticipantSnapshot snapB = ParticipantSnapshot.capture(casterB, mapRadius);
                 // A null snapshot means the caster lost DOMAIN_EXPANSION or died between the
@@ -258,6 +264,10 @@ public final class ClashResolver {
         if (session.resolved()) {
             return;
         }
+        if (!AddonGameRules.domainClash(level)) {
+            cancel(session, level);
+            return;
+        }
 
         // Req 14.4: cancel on dead WeakReference; no outcome, no loser effects.
         LivingEntity casterA = session.casterA.get();
@@ -282,7 +292,7 @@ public final class ClashResolver {
 
         // Req 5.2 + 5.3: select outcome using the tie threshold. Strictly-less-than means a
         // diff that equals the threshold resolves as a decisive winner, not a tie.
-        ClashOutcome outcome = selectOutcomeByPowerDiff(powerA, powerB);
+        ClashOutcome outcome = selectOutcomeByPowerDiff(powerA, powerB, tieThreshold(level));
 
         // Req 5.4 + 5.5: apply loser effects. TIE applies to both casters; decisive outcomes
         // stamp the winner's result tick via markResultTick to preserve Requirement 7.4
@@ -393,6 +403,10 @@ public final class ClashResolver {
     public void resolveDeath(ClashSession session, ServerLevel level, LivingEntity deadCaster) {
         // Req 14.2: idempotency - a session resolved earlier this tick is a no-op.
         if (session.resolved()) {
+            return;
+        }
+        if (!AddonGameRules.domainClash(level)) {
+            cancel(session, level);
             return;
         }
 
@@ -514,6 +528,26 @@ public final class ClashResolver {
         registry.remove(session.pair);
     }
 
+    public void cancelSessionsForLevel(ServerLevel level) {
+        if (level == null) {
+            return;
+        }
+        for (ClashSession session : new ArrayList<>(registry.activeSessions())) {
+            if (sessionTouchesLevel(session, level)) {
+                cancel(session, level);
+            }
+        }
+    }
+
+    private static boolean sessionTouchesLevel(ClashSession session, ServerLevel level) {
+        if (session == null || level == null) {
+            return false;
+        }
+        LivingEntity casterA = session.casterA.get();
+        LivingEntity casterB = session.casterB.get();
+        return casterA != null && casterA.level() == level || casterB != null && casterB.level() == level;
+    }
+
     /**
      * Pure tie-threshold decision helper extracted from {@link #resolveTimerExpiry}.
      *
@@ -544,11 +578,20 @@ public final class ClashResolver {
      * @return the outcome dictated by the tie threshold
      */
     static ClashOutcome selectOutcomeByPowerDiff(double powerA, double powerB) {
+        return selectOutcomeByPowerDiff(powerA, powerB, POWER_DIFF_TIE_THRESHOLD);
+    }
+
+    static ClashOutcome selectOutcomeByPowerDiff(double powerA, double powerB, double tieThreshold) {
         double diff = powerA - powerB;
-        if (Math.abs(diff) < POWER_DIFF_TIE_THRESHOLD) {
+        double threshold = Math.max(0.0D, tieThreshold);
+        if (Math.abs(diff) < threshold) {
             return ClashOutcome.TIE;
         }
         return diff >= 0.0 ? ClashOutcome.WINNER_A : ClashOutcome.WINNER_B;
+    }
+
+    private static double tieThreshold(ServerLevel level) {
+        return Math.max(0, AddonGameRules.intValue(level, AddonGameRules.DOMAIN_CLASH_TIE_THRESHOLD_PERCENT, 400)) / 100.0D;
     }
 
     /**

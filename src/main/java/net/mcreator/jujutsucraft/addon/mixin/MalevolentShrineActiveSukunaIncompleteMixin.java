@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
@@ -40,6 +41,9 @@ public abstract class MalevolentShrineActiveSukunaIncompleteMixin {
             return;
         }
         LivingEntity caster = (LivingEntity)entity;
+        if (!AddonGameRules.sukunaIncompleteSurehit(caster)) {
+            return;
+        }
         if (!jjkbrp$isSpecialIncompleteShrine(caster)) {
             return;
         }
@@ -52,7 +56,7 @@ public abstract class MalevolentShrineActiveSukunaIncompleteMixin {
         data.putBoolean("jjkbrp_sukuna_incomplete_surehit_active", true);
         data.putBoolean("jjkbrp_sukuna_incomplete_surehit_session", true);
         data.putBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain", true);
-        if (caster instanceof ServerPlayer player) {
+        if (caster instanceof ServerPlayer player && AddonGameRules.sukunaFugaReward(player)) {
             ModNetworking.fillSukunaFugaDust(player);
         }
     }

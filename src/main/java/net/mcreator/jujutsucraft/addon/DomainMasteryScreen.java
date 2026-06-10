@@ -106,6 +106,19 @@ extends Screen {
     private static final int TEXT_GOLD = 16569165;
     // Muted text color used when controls are locked.
     private static final int TEXT_LOCK = 4937059;
+    private static final int UI_PANEL_TOP = 0x09111F;
+    private static final int UI_PANEL_BOTTOM = 0x03050D;
+    private static final int UI_HEADER_TOP = 0x141D34;
+    private static final int UI_HEADER_BOTTOM = 0x07101F;
+    private static final int UI_ROW = 0x101827;
+    private static final int UI_ROW_HOVER = 0x172238;
+    private static final int UI_TEXT = 0xEAF2FF;
+    private static final int UI_TEXT_MID = 0x9CAFC6;
+    private static final int UI_TEXT_DIM = 0x5F7088;
+    private static final int UI_BLUE = 0x38BDF8;
+    private static final int UI_RED = 0xEF4444;
+    private static final int UI_GREEN = 0x22C55E;
+    private static final int UI_GOLD = 0xFBBF24;
     // Base color for the reset button.
     private static final int BTN_RESET_BG = 1013358;
     // Hover color for the reset button.
@@ -185,7 +198,7 @@ extends Screen {
      * Creates a new domain mastery screen instance and initializes its addon state.
      */
     public DomainMasteryScreen() {
-        super((Component)Component.literal((String)"\u2726 DOMAIN MASTERY \u2726"));
+        super((Component)Component.literal((String)"Domain Mastery"));
         this.openTimeMs = System.currentTimeMillis();
     }
 
@@ -194,22 +207,26 @@ extends Screen {
      */
     protected void init() {
         super.init();
-        int availW = (int)((float)this.width * 0.9f);
-        int availH = (int)((float)this.height * 0.9f);
-        this.fontScale = Math.min(1.0f, Math.min((float)availW / 640.0f, (float)availH / 682.0f));
-        this.drawW = (int)((float)PANEL_W * this.fontScale);
-        this.drawH = (int)((float)PANEL_H * this.fontScale);
-        this.drawHeaderH = (int)(154.0f * this.fontScale);
-        this.drawFooterH = (int)(56.0f * this.fontScale);
-        this.drawPropRow = (int)(82.0f * this.fontScale);
-        this.drawPropGapX = Math.max(6, (int)(16.0f * this.fontScale));
-        this.drawPropGapY = Math.max(4, (int)(12.0f * this.fontScale));
-        this.drawPropColW = (this.getPropertyAreaWidth() - this.drawPropGapX) / 2;
-        this.panelX = (this.width - this.drawW) / 2;
-        this.panelY = (this.height - this.drawH) / 2;
+        this.computeResponsiveLayout();
         this.refreshFormState();
         this.refreshMutationLockState();
         this.playUiOpenSound();
+    }
+
+    private void computeResponsiveLayout() {
+        int availW = Math.max(180, (int)((float)this.width * 0.9f));
+        int availH = Math.max(180, (int)((float)this.height * 0.9f));
+        this.fontScale = Math.min(1.0f, Math.min((float)availW / 640.0f, (float)availH / 682.0f));
+        this.drawW = Math.max(180, (int)((float)PANEL_W * this.fontScale));
+        this.drawH = Math.max(180, (int)((float)PANEL_H * this.fontScale));
+        this.drawHeaderH = Math.max(52, (int)(154.0f * this.fontScale));
+        this.drawFooterH = Math.max(28, (int)(56.0f * this.fontScale));
+        this.drawPropRow = Math.max(32, (int)(82.0f * this.fontScale));
+        this.drawPropGapX = Math.max(6, (int)(16.0f * this.fontScale));
+        this.drawPropGapY = Math.max(4, (int)(12.0f * this.fontScale));
+        this.drawPropColW = Math.max(72, (this.getPropertyAreaWidth() - this.drawPropGapX) / 2);
+        this.panelX = (this.width - this.drawW) / 2;
+        this.panelY = (this.height - this.drawH) / 2;
     }
 
     // ===== STATE REFRESH =====
@@ -269,6 +286,7 @@ extends Screen {
         if (button != 0) {
             return super.mouseClicked(mouseX, mouseY, button);
         }
+        this.computeResponsiveLayout();
         float mx = (float)mouseX;
         float my = (float)mouseY;
         // Form buttons are processed before property cards so a direct form click always wins over overlapping hover state.
@@ -399,9 +417,9 @@ extends Screen {
     // ===== PRIMARY RENDER FLOW =====
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         int i;
-        // Fade the full-screen backdrop in with the panel animation so the custom screen feels anchored instead of popping onto the client abruptly.
+        this.computeResponsiveLayout();
         int bgAlpha = (int)(170.0f * this.openAnim);
-        graphics.fill(0, 0, this.width, this.height, bgAlpha << 24);
+        this.fillVerticalGradient(graphics, 0, 0, this.width, this.height, argb(bgAlpha, 0x02040A), argb(Math.min(210, bgAlpha + 20), 0x120711));
         float mx = mouseX;
         float my = mouseY;
         this.hoveredFormBtn = false;
@@ -454,27 +472,22 @@ extends Screen {
      * @param my screen or world coordinate used by this calculation.
      */
     private void drawPanelBackground(GuiGraphics graphics, int mx, int my) {
-        float pulse = (float)(Math.sin((double)this.pulseTick * 0.5) * 0.5 + 0.5);
         int a = (int)(this.openAnim * 255.0f);
-        int glowAlpha = (int)(this.openAnim * (20.0f + pulse * 30.0f));
-        int glowCol = glowAlpha << 24 | 0x38BDF8;
-        graphics.fill(this.panelX - 5, this.panelY - 5, this.panelX + this.drawW + 5, this.panelY + this.drawH + 5, glowCol);
-        graphics.fill(this.panelX - 3, this.panelY - 3, this.panelX + this.drawW + 3, this.panelY + this.drawH + 3, glowCol >> 1);
-        int bodyCol = a << 24 | 0x7131D;
-        graphics.fill(this.panelX, this.panelY, this.panelX + this.drawW, this.panelY + this.drawH, bodyCol);
-        int hdrBg = a << 24 | 0xB1C2A;
-        graphics.fill(this.panelX, this.panelY, this.panelX + this.drawW, this.panelY + this.drawHeaderH, hdrBg);
-        int ftrBg = a << 24 | 0xA0614;
-        graphics.fill(this.panelX, this.panelY + this.drawH - this.drawFooterH, this.panelX + this.drawW, this.panelY + this.drawH, ftrBg);
-        int borderCol = a << 24 | 0x38BDF8;
-        graphics.fill(this.panelX, this.panelY, this.panelX + this.drawW, this.panelY + 2, borderCol);
-        graphics.fill(this.panelX, this.panelY + this.drawH - 2, this.panelX + this.drawW, this.panelY + this.drawH, borderCol);
-        graphics.fill(this.panelX, this.panelY, this.panelX + 2, this.panelY + this.drawH, borderCol);
-        graphics.fill(this.panelX + this.drawW - 2, this.panelY, this.panelX + this.drawW, this.panelY + this.drawH, borderCol);
-        graphics.fill(this.panelX, this.panelY + this.drawHeaderH - 1, this.panelX + this.drawW, this.panelY + this.drawHeaderH, borderCol);
-        int ftrSep = (int)(this.openAnim * 64.0f) << 24 | 0x38BDF8;
-        graphics.fill(this.panelX, this.panelY + this.drawH - this.drawFooterH, this.panelX + this.drawW, this.panelY + this.drawH - this.drawFooterH + 1, ftrSep);
-        int gridSep = (int)(this.openAnim * 37.0f) << 24 | 0x38BDF8;
+        graphics.fill(this.panelX - 2, this.panelY - 2, this.panelX + this.drawW + 2, this.panelY - 1, argb((int)(this.openAnim * 74.0f), UI_BLUE));
+        graphics.fill(this.panelX - 2, this.panelY + this.drawH + 1, this.panelX + this.drawW + 2, this.panelY + this.drawH + 2, argb((int)(this.openAnim * 66.0f), UI_RED));
+        graphics.fill(this.panelX - 2, this.panelY - 1, this.panelX - 1, this.panelY + this.drawH + 1, argb((int)(this.openAnim * 58.0f), UI_BLUE));
+        graphics.fill(this.panelX + this.drawW + 1, this.panelY - 1, this.panelX + this.drawW + 2, this.panelY + this.drawH + 1, argb((int)(this.openAnim * 58.0f), UI_RED));
+        this.fillVerticalGradient(graphics, this.panelX, this.panelY, this.panelX + this.drawW, this.panelY + this.drawH, argb(a, UI_PANEL_TOP), argb(a, UI_PANEL_BOTTOM));
+        this.fillVerticalGradient(graphics, this.panelX, this.panelY, this.panelX + this.drawW, this.panelY + this.drawHeaderH, argb((int)(this.openAnim * 248.0f), UI_HEADER_TOP), argb((int)(this.openAnim * 238.0f), UI_HEADER_BOTTOM));
+        this.fillVerticalGradient(graphics, this.panelX, this.panelY + this.drawHeaderH, this.panelX + this.drawW, this.panelY + this.drawH - this.drawFooterH, argb((int)(this.openAnim * 230.0f), 0x0C1424), argb((int)(this.openAnim * 224.0f), 0x060A14));
+        this.fillVerticalGradient(graphics, this.panelX, this.panelY + this.drawH - this.drawFooterH, this.panelX + this.drawW, this.panelY + this.drawH, argb((int)(this.openAnim * 232.0f), 0x0A1020), argb((int)(this.openAnim * 226.0f), 0x050813));
+        graphics.fill(this.panelX, this.panelY, this.panelX + this.drawW, this.panelY + 1, argb((int)(this.openAnim * 156.0f), UI_BLUE));
+        graphics.fill(this.panelX, this.panelY + this.drawH - 1, this.panelX + this.drawW, this.panelY + this.drawH, argb((int)(this.openAnim * 132.0f), UI_RED));
+        graphics.fill(this.panelX, this.panelY, this.panelX + 1, this.panelY + this.drawH, argb((int)(this.openAnim * 128.0f), UI_BLUE));
+        graphics.fill(this.panelX + this.drawW - 1, this.panelY, this.panelX + this.drawW, this.panelY + this.drawH, argb((int)(this.openAnim * 128.0f), UI_RED));
+        graphics.fill(this.panelX, this.panelY + this.drawHeaderH - 1, this.panelX + this.drawW, this.panelY + this.drawHeaderH, argb((int)(this.openAnim * 72.0f), UI_BLUE));
+        graphics.fill(this.panelX, this.panelY + this.drawH - this.drawFooterH, this.panelX + this.drawW, this.panelY + this.drawH - this.drawFooterH + 1, argb((int)(this.openAnim * 62.0f), UI_BLUE));
+        int gridSep = argb((int)(this.openAnim * 26.0f), UI_BLUE);
         int propStartX = this.getPropertyStartX();
         int propStartY = this.getPropertyStartY();
         int propGridW = this.drawPropColW * 2 + this.drawPropGapX;
@@ -494,20 +507,8 @@ extends Screen {
         Font font = this.font;
         String title = "DOMAIN MASTERY";
         int a = (int)(this.openAnim * 255.0f);
-        // Title alpha tracks open-animation progress exactly: Math.round(openAnim * 255),
-        // so it is 0 at openAnim 0 and 255 at openAnim 1.0 (Req 1.5/1.6).
         int titleAlpha = Math.round(this.openAnim * 255.0f);
-        float pulse = (float)(Math.sin((double)this.pulseTick * 0.65) * 0.5 + 0.5);
-        // Single source of header geometry: pure, Minecraft-free layout math drives the
-        // backdrop region, the title/accent/underline rects, the MASTERY/POINTS pills,
-        // and the XP bar so every layer fits, stays in bounds, and never overlaps.
         HeaderLayout layout = HeaderLayout.compute(this.fontScale, this.panelX, this.panelY, this.drawW, this.drawHeaderH);
-        this.drawHeaderBackdrop(graphics, layout.headerBounds(), a, pulse);
-        // Title layer (Restrained_Title_Style, Req 1.1/1.2): one fitted draw of the full
-        // "DOMAIN MASTERY" string with a stylized emboss treatment in at most two cohesive
-        // colors (a light base + its dark shadow/outline). No per-character coloring, no
-        // chromatic palette. The fitted scale guarantees the whole string fits inside the
-        // title rect with no truncation/clipping/substitution at every Font_Scale (Req 1.3).
         Rect titleRect = layout.title();
         float desiredTitleScale = Math.max(0.92f, this.fontScale * 1.18f);
         float titleScale = this.resolveFittedTextScale(font, title, titleRect.w(), desiredTitleScale, 0.01f);
@@ -515,19 +516,14 @@ extends Screen {
         int titleRenderH = this.getScaledTextHeight(font, titleScale);
         int titleX = titleRect.x() + (titleRect.w() - titleRenderW) / 2;
         int titleY = titleRect.y() + Math.max(0, (titleRect.h() - titleRenderH) / 2);
-        this.drawRestrainedTitle(graphics, font, title, titleX, titleY, titleAlpha, pulse, titleScale);
-        // Underline layer (Req 1.1/1.2): a single centered underline in one accent color at
-        // full alpha over the layout's underline rect. No multi-color segments or accent bars.
-        Rect underline = layout.underline();
-        if (underline.w() > 0 && underline.h() > 0) {
-            graphics.fill(underline.x(), underline.y(), underline.x() + underline.w(), underline.y() + underline.h(), titleAlpha << 24 | TITLE_ACCENT_COLOR);
-        }
+        this.drawScaledForegroundText(graphics, font, title, titleX + 1, titleY + 1, argb((int)(titleAlpha * 0.58f), 0x000000), titleScale);
+        this.drawScaledForegroundText(graphics, font, title, titleX, titleY, argb(titleAlpha, UI_TEXT), titleScale);
         int level = this.getDomainMasteryLevel();
         int pp = this.getDomainPropertyPoints();
         Rect masteryPill = layout.masteryPill();
         Rect pointsPill = layout.pointsPill();
-        this.drawHeaderStatPill(graphics, masteryPill.x(), masteryPill.y(), masteryPill.w(), masteryPill.h(), "MASTERY", "LV " + level, level >= 5 ? 0xFACC15 : 0x38BDF8);
-        this.drawHeaderStatPill(graphics, pointsPill.x(), pointsPill.y(), pointsPill.w(), pointsPill.h(), "POINTS", pp + " PP", pp > 0 ? 0x34D399 : 0x64748B);
+        this.drawHeaderStatPill(graphics, masteryPill.x(), masteryPill.y(), masteryPill.w(), masteryPill.h(), "MASTERY", "LV " + level, level >= 5 ? UI_GOLD : UI_BLUE);
+        this.drawHeaderStatPill(graphics, pointsPill.x(), pointsPill.y(), pointsPill.w(), pointsPill.h(), "POINTS", pp + " PP", pp > 0 ? UI_GREEN : 0x64748B);
         if (level >= 5) {
             xpText = "MAX XP";
         } else {
@@ -535,11 +531,8 @@ extends Screen {
             int nxt = this.getXPToNext();
             xpText = cur + " / " + nxt + " XP";
         }
-        int xpCol = (int)(this.openAnim * 255.0f) << 24 | (level >= 5 ? 16569165 : 9741240);
+        int xpCol = argb((int)(this.openAnim * 255.0f), level >= 5 ? UI_GOLD : UI_TEXT_MID);
         Rect xpBar = layout.xpBar();
-        // Center the XP label horizontally over the (now centered, button-width) XP bar and
-        // place it just above the bar, so it reads as a balanced caption instead of an
-        // orphaned label floating at the far left.
         float xpLabelScale = Math.max(0.55f, this.fontScale * 0.82f);
         int xpLabelW = this.getScaledTextWidth(font, xpText, xpLabelScale);
         int xpLabelH = this.getScaledTextHeight(font, xpLabelScale);
@@ -547,9 +540,6 @@ extends Screen {
         int xpLabelY = xpBar.y() - xpLabelH - Math.max(1, (int)(this.fontScale * 2.0f));
         this.drawScaledForegroundText(graphics, font, xpText, xpLabelX, xpLabelY, xpCol, xpLabelScale);
         this.drawXPBar(graphics, xpBar.x(), xpBar.y(), xpBar.w(), xpBar.h());
-        // Form-selector buttons and the unlocked-status text are positioned from the same
-        // HeaderLayout as the XP bar, so the XP bar keeps its >= 1px gap above the selector
-        // row (Req 1.8) and everything stays consistent at every Font_Scale.
         this.drawFormButtons(graphics, mx, my, layout);
         this.drawFormHint(graphics, layout);
     }
@@ -621,17 +611,17 @@ extends Screen {
     private void drawHeaderStatPill(GuiGraphics g, int x, int y, int w, int h, String label, String value, int accent) {
         Font font = this.font;
         int a = (int)(this.openAnim * 255.0f);
-        g.fill(x - 1, y - 1, x + w + 1, y + h + 1, (int)(this.openAnim * 75.0f) << 24 | accent);
-        g.fill(x, y, x + w, y + h, a << 24 | 0x08111F);
-        g.fill(x, y, x + Math.max(3, (int)(this.fontScale * 4.0f)), y + h, a << 24 | accent);
-        g.fill(x + Math.max(3, (int)(this.fontScale * 4.0f)), y, x + w, y + 1, (int)(this.openAnim * 120.0f) << 24 | accent);
+        g.fill(x - 1, y - 1, x + w + 1, y + h + 1, argb((int)(this.openAnim * 82.0f), accent));
+        this.fillVerticalGradient(g, x, y, x + w, y + h, argb((int)(this.openAnim * 238.0f), blend(accent, 0x0B1427, 0.18f)), argb((int)(this.openAnim * 206.0f), 0x050812));
+        g.fill(x, y, x + Math.max(3, (int)(this.fontScale * 4.0f)), y + h, argb(a, accent));
+        g.fill(x, y, x + w, y + 1, argb((int)(this.openAnim * 128.0f), accent));
         float labelScale = this.resolveFittedTextScale(font, label, Math.max(22, w - 12), 0.56f, 0.42f);
         float valueScale = this.resolveFittedTextScale(font, value, Math.max(22, w - 12), 0.88f, 0.56f);
         int textX = x + Math.max(8, (int)(this.fontScale * 10.0f));
         int labelY = y + Math.max(3, (int)(this.fontScale * 4.0f));
         int valueY = y + h - this.getScaledTextHeight(font, valueScale) - Math.max(3, (int)(this.fontScale * 4.0f));
-        this.drawScaledForegroundText(g, font, label, textX, labelY, (int)(this.openAnim * 150.0f) << 24 | 0xCBD5E1, labelScale);
-        this.drawScaledForegroundText(g, font, value, textX, valueY, a << 24 | 0xF8FAFC, valueScale);
+        this.drawScaledForegroundText(g, font, label, textX, labelY, argb((int)(this.openAnim * 170.0f), UI_TEXT_MID), labelScale);
+        this.drawScaledForegroundText(g, font, value, textX, valueY, argb(a, UI_TEXT), valueScale);
     }
 
     /**
@@ -696,25 +686,19 @@ extends Screen {
      * @param h screen or world coordinate used by this calculation.
      */
     private void drawXPBar(GuiGraphics g, int x, int y, int w, int h) {
-        Font font = this.font;
         float progress = (float)this.getXPProgress();
-        float glow = (float)(Math.sin((double)this.pulseTick * 0.8) * 0.5 + 0.5);
         int a = (int)(this.openAnim * 255.0f);
-        g.fill(x, y, x + w, y + h, -15720141);
+        g.fill(x - 1, y - 1, x + w + 1, y + h + 1, argb((int)(this.openAnim * 92.0f), UI_BLUE));
+        this.fillVerticalGradient(g, x, y, x + w, y + h, argb((int)(this.openAnim * 238.0f), 0x0B1427), argb((int)(this.openAnim * 218.0f), 0x050812));
         int fill = (int)((float)w * progress);
         if (fill > 0) {
-            int topCol = a << 24 | 0x38BDF8;
-            int botCol = a << 24 | 0x284C7;
-            int tipCol = a << 24 | 0xE0F2FE;
-            g.fill(x, y, x + fill, y + h / 2, topCol);
-            g.fill(x, y + h / 2, x + fill, y + h, botCol);
+            this.fillVerticalGradient(g, x, y, x + fill, y + h, argb(a, UI_BLUE), argb(a, 0x0284C7));
             if (fill >= 2) {
-                g.fill(x + fill - 2, y, x + fill, y + h, tipCol);
+                g.fill(x + fill - 2, y, x + fill, y + h, argb(a, 0xE0F2FE));
             }
         }
-        int border = a << 24 | 0xF4C81;
-        g.fill(x, y, x + w, y + 1, border);
-        g.fill(x, y + h - 1, x + w, y + h, border);
+        g.fill(x, y, x + w, y + 1, argb((int)(this.openAnim * 190.0f), UI_BLUE));
+        g.fill(x, y + h - 1, x + w, y + h, argb((int)(this.openAnim * 120.0f), UI_BLUE));
     }
 
     /**
@@ -744,7 +728,7 @@ extends Screen {
         int y = layout.unlockedStatus().y();
         float hintScale = this.resolveFittedTextScale(font, hint, this.drawW - Math.max(12, (int)(this.fontScale * 28.0f)), this.fontScale, 0.5f);
         int x = this.panelX + (this.drawW - this.getScaledTextWidth(font, hint, hintScale)) / 2;
-        this.drawScaledForegroundText(graphics, font, hint, x, y, (int)(this.openAnim * 255.0f) << 24 | color, hintScale);
+        this.drawScaledForegroundText(graphics, font, hint, x, y, argb((int)(this.openAnim * 235.0f), color), hintScale);
     }
 
     /**
@@ -790,18 +774,15 @@ extends Screen {
                 borderAlpha = (int)((float)a * 0.5f);
                 textAlpha = (int)((float)a * 0.6f);
             }
-            int bgCol = bgAlpha << 24 | baseColor & 0xFFFFFF;
-            int borderCol = borderAlpha << 24 | baseColor & 0xFFFFFF;
-            int textCol = textAlpha << 24 | (isSelected && !isDisabled ? -1 : (isDisabled ? -9735552 : -1906448));
-            g.fill(bx, btnY, bx + btnW, btnY + btnH, bgCol);
+            int borderCol = argb(borderAlpha, baseColor);
+            int textCol = argb(textAlpha, isSelected && !isDisabled ? UI_TEXT : (isDisabled ? UI_TEXT_DIM : UI_TEXT_MID));
+            g.fill(bx - 1, btnY - 1, bx + btnW + 1, btnY + btnH + 1, argb((int)(borderAlpha * 0.42f), baseColor));
+            this.fillVerticalGradient(g, bx, btnY, bx + btnW, btnY + btnH, argb(bgAlpha, blend(baseColor, UI_ROW_HOVER, isSelected ? 0.22f : 0.12f)), argb(Math.max(70, (int)(bgAlpha * 0.78f)), UI_ROW));
             if (isSelected) {
-                int hlCol = (int)((float)a * 0.2f) << 24 | 0xFFFFFF;
-                g.fill(bx + 2, btnY + 2, bx + btnW - 2, btnY + Math.max(2, (int)(this.fontScale * 4.0f)), hlCol);
+                g.fill(bx, btnY, bx + Math.max(3, (int)(this.fontScale * 4.0f)), btnY + btnH, argb(a, baseColor));
+                g.fill(bx, btnY, bx + btnW, btnY + 1, argb((int)(a * 0.72f), baseColor));
             }
             g.fill(bx, btnY, bx + btnW, btnY + 1, borderCol);
-            g.fill(bx, btnY + btnH - 1, bx + btnW, btnY + btnH, borderCol);
-            g.fill(bx, btnY, bx + 1, btnY + btnH, borderCol);
-            g.fill(bx + btnW - 1, btnY, bx + btnW, btnY + btnH, borderCol);
             String label = formNames[i];
             int iconSize = Math.max(11, Math.min(14, Math.round((float)btnH * 0.5f)));
             int iconGap = Math.max(4, (int)(this.fontScale * 6.0f));
@@ -818,11 +799,11 @@ extends Screen {
             int labelY = contentY + (contentH - labelH) / 2;
             this.drawScaledForegroundText(g, font, label, labelX, labelY, textCol, labelScale);
             if (!isDisabled) continue;
-            int lockCol = a << 24 | (this.masteryMutationLocked ? 16096779 : 0xEF4444);
+            int lockCol = argb(a, this.masteryMutationLocked ? UI_GOLD : UI_RED);
             g.fill(bx + btnW - 6, btnY + 4, bx + btnW - 3, btnY + btnH - 4, lockCol);
         }
         int selColor = this.selectedForm == 2 && !this.openUnlocked ? 2042167 : formColors[this.selectedForm];
-        int indicatorCol = (int)(this.openAnim * 255.0f) << 24 | selColor & 0xFFFFFF;
+        int indicatorCol = argb((int)(this.openAnim * 205.0f), selColor);
         Rect selRect = btnRects[this.selectedForm];
         int indicatorY = selRect.y() + selRect.h() + Math.max(1, (int)(this.fontScale * 3.0f));
         g.fill(selRect.x(), indicatorY, selRect.x() + selRect.w(), indicatorY + Math.max(1, (int)(this.fontScale * 2.0f)), indicatorCol);
@@ -844,7 +825,7 @@ extends Screen {
         int cardPad = Math.max(1, (int)(this.fontScale * 2.0f));
         int topStripH = Math.max(1, (int)(this.fontScale * 3.0f));
         int controlLaneW = Math.max(32, (int)(this.fontScale * 42.0f));
-        int slotSize = 18;
+        int slotSize = Math.max(12, (int)(18.0f * this.fontScale));
         int textGap = Math.max(7, (int)(this.fontScale * 8.0f));
         int valueGap = Math.max(5, (int)(this.fontScale * 5.0f));
         int headerToBarGap = Math.max(7, (int)(this.fontScale * 8.0f));
@@ -870,14 +851,18 @@ extends Screen {
             if (isHovered) {
                 this.hoveredPropIdx = i;
             }
-            int bgA = isHovered ? (locked ? 8 : 55) : (locked ? 5 : 30);
-            int cardBg = (int)((float)bgA * this.openAnim) << 24 | propColor & 0xFFFFFF;
-            g.fill(px + cardPad, py + cardPad, px + this.drawPropColW - cardPad, py + this.drawPropRow - cardPad, cardBg);
-            int stripCol = a << 24 | propColor & 0xFFFFFF;
-            g.fill(px + cardPad, py + cardPad, px + stripW, py + this.drawPropRow - cardPad, stripCol);
+            int cardLeft = px + cardPad;
+            int cardTop = py + cardPad;
+            int cardRight = px + this.drawPropColW - cardPad;
+            int cardBottom = py + this.drawPropRow - cardPad;
+            int cardTopColor = locked ? 0x0A0F1A : (isHovered ? blend(propColor, UI_ROW_HOVER, 0.18f) : blend(propColor, UI_ROW_HOVER, 0.08f));
+            int cardBottomColor = locked ? 0x050812 : UI_ROW;
+            this.fillVerticalGradient(g, cardLeft, cardTop, cardRight, cardBottom, argb((int)(this.openAnim * (isHovered ? 238.0f : 214.0f)), cardTopColor), argb((int)(this.openAnim * (isHovered ? 218.0f : 194.0f)), cardBottomColor));
+            int stripCol = argb(locked ? (int)(a * 0.34f) : a, propColor);
+            g.fill(cardLeft, cardTop, cardLeft + stripW, cardBottom, stripCol);
+            g.fill(cardLeft, cardTop, cardRight, cardTop + 1, argb((int)(this.openAnim * (isHovered ? 150.0f : 82.0f)), propColor));
             if (isHovered && !locked) {
-                int hlCol = (int)(this.openAnim * 204.0f) << 24 | propColor & 0xFFFFFF;
-                g.fill(px + stripW, py + cardPad, px + this.drawPropColW - cardPad, py + topStripH, hlCol);
+                g.fill(cardLeft + stripW, cardBottom - 1, cardRight, cardBottom, argb((int)(this.openAnim * 76.0f), propColor));
             }
             int[] minusBounds = this.getMinusBtnBounds(i);
             int[] plusBounds = this.getPlusBtnBounds(i);
@@ -886,18 +871,16 @@ extends Screen {
             int actionTop = minusBounds[1];
             int slotX = px + iconPad - 1;
             int slotY = py + cardHeaderY + 1;
-            g.fill(slotX, slotY, slotX + slotSize, slotY + slotSize, -1072687072);
-            g.fill(slotX, slotY, slotX + slotSize, slotY + 1, -10784379);
-            g.fill(slotX, slotY + slotSize - 1, slotX + slotSize, slotY + slotSize, -13945276);
-            g.fill(slotX, slotY, slotX + 1, slotY + slotSize, -10784379);
-            g.fill(slotX + slotSize - 1, slotY, slotX + slotSize, slotY + slotSize, -13945276);
-            this.drawLayeredItem(g, propItem, slotX + 1, slotY + 1, 160.0);
+            this.fillVerticalGradient(g, slotX, slotY, slotX + slotSize, slotY + slotSize, argb((int)(this.openAnim * 232.0f), 0x111A2D), argb((int)(this.openAnim * 216.0f), 0x050812));
+            g.fill(slotX, slotY, slotX + slotSize, slotY + 1, argb((int)(this.openAnim * 128.0f), propColor));
+            g.fill(slotX, slotY + slotSize - 1, slotX + slotSize, slotY + slotSize, argb((int)(this.openAnim * 78.0f), propColor));
+            this.drawLayeredItemScaled(g, propItem, slotX + 1, slotY + 1, Math.max(10, slotSize - 2), 160.0);
             int contentLeft = slotX + slotSize + textGap;
             int contentRight = minusBounds[0] - Math.max(6, (int)(this.fontScale * 8.0f));
             int headerMaxW = Math.max(24, headerRight - contentLeft);
             int valueMaxW = Math.max(24, contentRight - (px + iconPad));
             String name = this.getShortName(i);
-            int nameCol = locked ? (int)(this.openAnim * 96.0f) << 24 | 0x94A3B8 : (int)(this.openAnim * 255.0f) << 24 | 0xF1F5F9;
+            int nameCol = locked ? argb((int)(this.openAnim * 96.0f), UI_TEXT_MID) : argb((int)(this.openAnim * 255.0f), UI_TEXT);
             String tagline = this.getPropertyTagline(i);
             float nameScale = this.resolveFittedTextScale(font, name, headerMaxW, 1.0f, 0.7f);
             int nameLineH = this.getScaledTextHeight(font, nameScale);
@@ -905,22 +888,22 @@ extends Screen {
             int tagLineH = this.getScaledTextHeight(font, tagScale);
             int taglineY = headerTextY + nameLineH - 1;
             this.drawScaledForegroundText(g, font, name, contentLeft, headerTextY, nameCol, nameScale);
-            this.drawScaledForegroundText(g, font, tagline, contentLeft, taglineY, (int)(this.openAnim * 176.0f) << 24 | 0x8BA3B8, tagScale);
+            this.drawScaledForegroundText(g, font, tagline, contentLeft, taglineY, argb((int)(this.openAnim * 176.0f), UI_TEXT_MID), tagScale);
             String string = lvlText = negativeActive ? String.valueOf(effectiveLevel) : propLevel + "/" + prop.getMaxLevel();
-            int lvlCol = negativeActive ? (int)(this.openAnim * 255.0f) << 24 | 0xFF4444 : (propLevel > 0 ? (int)(this.openAnim * 255.0f) << 24 | 0xFCD34D : (int)(this.openAnim * 112.0f) << 24 | 0x94A3B8);
+            int lvlCol = negativeActive ? argb((int)(this.openAnim * 255.0f), UI_RED) : (propLevel > 0 ? argb((int)(this.openAnim * 255.0f), UI_GOLD) : argb((int)(this.openAnim * 112.0f), UI_TEXT_MID));
             this.drawRightAlignedFittedForegroundText(g, font, lvlText, headerRight, headerTextY, lvlCol, Math.max(22, controlLaneW - Math.max(6, (int)(this.fontScale * 6.0f))), 0.92f, 0.7f);
             if (locked) {
                 statText = "Unlock Lv." + prop.unlockLevel();
-                statColor = (int)(this.openAnim * 255.0f) << 24 | 0xEF4444;
+                statColor = argb((int)(this.openAnim * 255.0f), UI_RED);
             } else if (negativeActive) {
                 statText = prop.formatNegativeValue(Math.abs(effectiveLevel));
-                statColor = (int)(this.openAnim * 255.0f) << 24 | 0xFF4444;
+                statColor = argb((int)(this.openAnim * 255.0f), UI_RED);
             } else if (propLevel > 0) {
                 statText = prop.formatLevelValue(propLevel);
-                statColor = (int)(this.openAnim * 255.0f) << 24 | propColor;
+                statColor = argb((int)(this.openAnim * 255.0f), propColor);
             } else {
                 statText = prop.formatLevelValue(0);
-                statColor = (int)(this.openAnim * 80.0f) << 24 | 0x475569;
+                statColor = argb((int)(this.openAnim * 92.0f), UI_TEXT_DIM);
             }
             float statScale = this.resolveFittedTextScale(font, (String)statText, valueMaxW, 0.78f, 0.5f);
             int statLineH = this.getScaledTextHeight(font, statScale);
@@ -930,14 +913,14 @@ extends Screen {
             int maxPipY = actionTop - statLineH - valueBottomPad - barToValueGap - pipH;
             int pipY = Math.max(statTopLimit, maxPipY);
             int statY = Math.max(statTopLimit + pipH + barToValueGap, pipY + pipH + barToValueGap + Math.max(1, Math.round(this.fontScale)));
-            g.fill(pipX, pipY, pipX + barW, pipY + pipH, -14805966);
+            this.fillVerticalGradient(g, pipX, pipY, pipX + barW, pipY + pipH, argb((int)(this.openAnim * 220.0f), 0x0B1427), argb((int)(this.openAnim * 190.0f), 0x050812));
             int maxLevel = prop.getMaxLevel();
             int visibleLevel = negativeActive ? Math.min(maxLevel, Math.max(1, Math.abs(effectiveLevel))) : propLevel;
             int activeBarColor = negativeActive ? 0xFF4444 : propColor;
             for (int p = 0; p < maxLevel; ++p) {
                 int logicalIndex = negativeActive ? maxLevel - 1 - p : p;
                 int filled = logicalIndex < visibleLevel ? a : (int)((float)a * 0.125f);
-                int pipCol = filled << 24 | activeBarColor & 0xFFFFFF;
+                int pipCol = argb(filled, activeBarColor);
                 int segEnd = pipX + (p + 1) * barW / maxLevel;
                 int segStart = pipX + p * barW / maxLevel;
                 if (segEnd - segStart <= 2) {
@@ -958,25 +941,25 @@ extends Screen {
             int mbw = minusBounds[2];
             int mbh = minusBounds[3];
             if (canRefund) {
-                int minusBg = this.hoveredMinus[i] ? a << 24 | 0xEF4444 : a << 24 | 0xDC2626;
-                int minusTextCol = this.hoveredMinus[i] ? -1 : (int)((float)a * 0.9f) << 24 | 0xFFFFFF;
+                int minusBg = argb(a, this.hoveredMinus[i] ? UI_RED : 0xDC2626);
+                int minusTextCol = argb(this.hoveredMinus[i] ? a : (int)((float)a * 0.9f), UI_TEXT);
                 this.drawPropertyControlButton(g, mbx, mby, mbw, mbh, minusBg, minusTextCol, false);
             } else {
-                int disabledBg = (int)((float)a * 0.2f) << 24 | 0x333333;
-                this.drawPropertyControlButton(g, mbx, mby, mbw, mbh, disabledBg, (int)((float)a * 0.3f) << 24 | 0x888888, false);
+                int disabledBg = argb((int)((float)a * 0.2f), 0x333333);
+                this.drawPropertyControlButton(g, mbx, mby, mbw, mbh, disabledBg, argb((int)((float)a * 0.3f), UI_TEXT_DIM), false);
             }
             int pbx = plusBounds[0];
             int pby = plusBounds[1];
             int pbw = plusBounds[2];
             int pbh = plusBounds[3];
             if (canUpgrade) {
-                int plusBg = this.hoveredPlus[i] ? a << 24 | 0x10B981 : a << 24 | 0x59669;
-                int plusTextCol = this.hoveredPlus[i] ? -1 : (int)((float)a * 0.9f) << 24 | 0xFFFFFF;
+                int plusBg = argb(a, this.hoveredPlus[i] ? 0x10B981 : 0x059669);
+                int plusTextCol = argb(this.hoveredPlus[i] ? a : (int)((float)a * 0.9f), UI_TEXT);
                 this.drawPropertyControlButton(g, pbx, pby, pbw, pbh, plusBg, plusTextCol, true);
                 continue;
             }
-            int disabledBg = (int)((float)a * 0.2f) << 24 | 0x333333;
-            this.drawPropertyControlButton(g, pbx, pby, pbw, pbh, disabledBg, (int)((float)a * 0.3f) << 24 | 0x888888, true);
+            int disabledBg = argb((int)((float)a * 0.2f), 0x333333);
+            this.drawPropertyControlButton(g, pbx, pby, pbw, pbh, disabledBg, argb((int)((float)a * 0.3f), UI_TEXT_DIM), true);
         }
         this.drawSukunaSureHitOption(g);
     }
@@ -992,11 +975,11 @@ extends Screen {
         DomainMasteryProperties prop = DomainMasteryProperties.values()[this.hoveredPropIdx];
         int masteryLevel = this.getDomainMasteryLevel();
         boolean locked = prop.isLocked(masteryLevel);
-        String name = Component.translatable((String)prop.getNameKey()).getString();
-        StringBuilder descBuilder = new StringBuilder((String)(locked ? "\ud83d\udd12 Locked until Domain Mastery Lv." + prop.unlockLevel() : Component.translatable((String)prop.getDescKey()).getString()));
+        String name = this.getPropertyDisplayName(prop);
+        StringBuilder descBuilder = new StringBuilder((String)(locked ? "Locked until Domain Mastery Lv." + prop.unlockLevel() : this.getPropertyDescription(prop)));
         if (!locked && prop.supportsNegativeModify()) {
             if (this.isNegativeProperty(this.hoveredPropIdx)) {
-                descBuilder.append("\nNegative Modify active \u2022 current ").append(prop.formatNegativeValue(Math.abs(this.getEffectivePropertyLevel(prop)))).append("\nPress [+] to move back toward 0");
+                descBuilder.append("\nNegative Modify active - current ").append(prop.formatNegativeValue(Math.abs(this.getEffectivePropertyLevel(prop)))).append("\nPress [+] to move back toward 0");
             } else if (this.getPropertyLevel(prop) > 0) {
                 descBuilder.append("\nRefund to 0 before applying Negative Modify");
             } else if (this.getDomainMasteryLevel() < 5) {
@@ -1004,7 +987,7 @@ extends Screen {
             } else if (!this.canSetNegativeProperty(prop)) {
                 descBuilder.append("\nAnother property is already negative");
             } else {
-                descBuilder.append("\nPress [\u2212] to apply Negative Modify \u2022 each level grants +1 point");
+                descBuilder.append("\nPress [-] to apply Negative Modify - each level grants +1 point");
             }
         }
         ClashPowerPreview preview = this.buildClashPowerPreview(prop);
@@ -1036,29 +1019,29 @@ extends Screen {
         int propColor = this.getPropertyColor(this.hoveredPropIdx);
         g.pose().pushPose();
         g.pose().translate(0.0, 0.0, 420.0);
-        g.fill(tx, ty, tx + tw, ty + th, -268106220);
-        g.fill(tx, ty, tx + tw, ty + 1, -13058568);
-        g.fill(tx, ty + th - 1, tx + tw, ty + th, -13058568);
-        g.fill(tx, ty, tx + 1, ty + th, -13058568);
-        g.fill(tx + tw - 1, ty, tx + tw, ty + th, -13058568);
+        this.fillVerticalGradient(g, tx, ty, tx + tw, ty + th, argb(248, 0x0F1728), argb(244, 0x040711));
+        g.fill(tx, ty, tx + tw, ty + 1, argb(230, propColor));
+        g.fill(tx, ty + th - 1, tx + tw, ty + th, argb(160, propColor));
+        g.fill(tx, ty, tx + 1, ty + th, argb(130, propColor));
+        g.fill(tx + tw - 1, ty, tx + tw, ty + th, argb(130, propColor));
         g.pose().pushPose();
         g.pose().scale(tooltipScale, tooltipScale, 1.0f);
-        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), 0xFF000000 | propColor, false);
+        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), argb(255, propColor), false);
         for (int i = 0; i < descLines.size(); ++i) {
             FormattedCharSequence formattedCharSequence = (FormattedCharSequence)descLines.get(i);
             Objects.requireNonNull(font);
             Objects.requireNonNull(font);
-            g.drawString(font, formattedCharSequence, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7 + 9 + i * 9) / tooltipScale), -7035976, false);
+            g.drawString(font, formattedCharSequence, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7 + 9 + i * 9) / tooltipScale), argb(255, UI_TEXT_MID), false);
         }
         if (preview != null) {
             int py = ty + 7 + 9 + descLines.size() * 9 + 4;
             int x = Math.round((float)(tx + 10) / tooltipScale);
             int scaledPy = Math.round((float)py / tooltipScale);
-            g.drawString(font, preview.prefix, x, scaledPy, 0xFFE5E7EB, false);
+            g.drawString(font, preview.prefix, x, scaledPy, argb(255, UI_TEXT), false);
             x += font.width(preview.prefix);
             g.drawString(font, preview.delta, x, scaledPy, preview.deltaColor, false);
             x += font.width(preview.delta);
-            g.drawString(font, preview.suffix, x, scaledPy, 0xFFFCD34D, false);
+            g.drawString(font, preview.suffix, x, scaledPy, argb(255, UI_GOLD), false);
         }
         g.pose().popPose();
         g.pose().popPose();
@@ -1145,9 +1128,8 @@ extends Screen {
 
     // ===== FOOTER ACTIONS =====
     private void drawFooter(GuiGraphics g) {
-        Font font = this.font;
-        this.drawActionButton(g, this.getResetBtnBounds(), "RESET ALL", this.hoveredReset, 1013358, 1357990, true, !this.masteryMutationLocked);
-        this.drawActionButton(g, this.getCloseBtnBounds(), "\u2718  CLOSE", this.hoveredClose, 1976635, 3359061, false, true);
+        this.drawActionButton(g, this.getResetBtnBounds(), "RESET", this.hoveredReset, UI_BLUE, UI_GOLD, true, !this.masteryMutationLocked);
+        this.drawActionButton(g, this.getCloseBtnBounds(), "CLOSE", this.hoveredClose, UI_RED, UI_RED, false, true);
     }
 
     /**
@@ -1171,29 +1153,21 @@ extends Screen {
         int w = bounds[2];
         int h = bounds[3];
         int a = (int)(this.openAnim * 255.0f);
+        int accent = hovered && enabled ? hoverCol : bgCol;
         if (!enabled) {
-            fillCol = (int)((float)a * 0.22f) << 24 | 0x333333;
-            borderCol = (int)((float)a * 0.3f) << 24 | 0x555555;
-            textCol = (int)((float)a * 0.42f) << 24 | 0x9CA3AF;
-        } else if (hovered) {
-            fillCol = a << 24 | hoverCol & 0xFFFFFF;
-            borderCol = a << 24 | 0xFFFFFF;
-            textCol = -1;
+            fillCol = argb((int)((float)a * 0.22f), 0x333333);
+            borderCol = argb((int)((float)a * 0.3f), 0x555555);
+            textCol = argb((int)((float)a * 0.42f), UI_TEXT_MID);
         } else {
-            fillCol = a << 24 | bgCol & 0xFFFFFF;
-            borderCol = (int)((float)a * 0.63f) << 24 | bgCol & 0xFFFFFF;
-            textCol = (int)((float)a * 0.8f) << 24 | 0xE2E8F0;
+            fillCol = argb(a, hovered ? blend(accent, 0x070B16, 0.42f) : blend(accent, 0x070B16, 0.22f));
+            borderCol = argb(hovered ? a : (int)((float)a * 0.72f), accent);
+            textCol = argb(a, UI_TEXT);
         }
-        g.fill(x, y, x + w, y + h, fillCol);
-        if (hovered && enabled) {
-            g.fill(x + 1, y + 1, x + w - 1, y + 2, (int)((float)a * 0.19f) << 24 | 0xFFFFFF);
-        }
+        this.fillVerticalGradient(g, x, y, x + w, y + h, fillCol, argb(enabled ? (int)(a * 0.82f) : (int)(a * 0.16f), 0x02040A));
         g.fill(x, y, x + w, y + 1, borderCol);
         g.fill(x, y + h - 1, x + w, y + h, borderCol);
-        g.fill(x, y, x + 1, y + h, borderCol);
-        g.fill(x + w - 1, y, x + w, y + h, borderCol);
         if (isReset) {
-            int stripeCol = (int)((float)a * 0.38f) << 24 | 0xFFFFFF;
+            int stripeCol = argb((int)((float)a * 0.56f), accent);
             g.fill(x + 2, y + 2, x + 4, y + h - 2, stripeCol);
         }
         float textScale = this.resolveFittedTextScale(font, text, w - Math.max(8, (int)(this.fontScale * 10.0f)), 1.0f, 0.72f);
@@ -1214,30 +1188,29 @@ extends Screen {
         boolean canBuy = !this.masteryMutationLocked && this.canBuySukunaSureHit();
         int a = (int)(this.openAnim * 255.0f);
         int propColor = 0xEF4444;
-        int bgA = this.hoveredSukunaSureHit ? 55 : 30;
         int cardPad = Math.max(1, (int)(this.fontScale * 2.0f));
         int stripW = Math.max(2, (int)(this.fontScale * 5.0f));
-        int topStripH = Math.max(1, (int)(this.fontScale * 3.0f));
         int iconPad = Math.max(5, (int)(this.fontScale * 8.0f));
         int textGap = Math.max(7, (int)(this.fontScale * 8.0f));
-        int slotSize = 18;
+        int slotSize = Math.max(12, (int)(18.0f * this.fontScale));
         int controlLaneW = Math.max(32, (int)(this.fontScale * 42.0f));
-        int cardBg = (int)((float)bgA * this.openAnim) << 24 | propColor;
-        g.fill(px + cardPad, py + cardPad, px + this.drawPropColW - cardPad, py + this.drawPropRow - cardPad, cardBg);
-        int stripCol = a << 24 | propColor;
-        g.fill(px + cardPad, py + cardPad, px + stripW, py + this.drawPropRow - cardPad, stripCol);
+        int cardLeft = px + cardPad;
+        int cardTop = py + cardPad;
+        int cardRight = px + this.drawPropColW - cardPad;
+        int cardBottom = py + this.drawPropRow - cardPad;
+        this.fillVerticalGradient(g, cardLeft, cardTop, cardRight, cardBottom, argb((int)(this.openAnim * (this.hoveredSukunaSureHit ? 238.0f : 214.0f)), blend(propColor, UI_ROW_HOVER, this.hoveredSukunaSureHit ? 0.18f : 0.08f)), argb((int)(this.openAnim * (this.hoveredSukunaSureHit ? 218.0f : 194.0f)), UI_ROW));
+        int stripCol = argb(a, propColor);
+        g.fill(cardLeft, cardTop, cardLeft + stripW, cardBottom, stripCol);
+        g.fill(cardLeft, cardTop, cardRight, cardTop + 1, argb((int)(this.openAnim * (this.hoveredSukunaSureHit ? 150.0f : 82.0f)), propColor));
         if (this.hoveredSukunaSureHit) {
-            int hlCol = (int)(this.openAnim * 204.0f) << 24 | propColor;
-            g.fill(px + stripW, py + cardPad, px + this.drawPropColW - cardPad, py + topStripH, hlCol);
+            g.fill(cardLeft + stripW, cardBottom - 1, cardRight, cardBottom, argb((int)(this.openAnim * 76.0f), propColor));
         }
         int slotX = px + iconPad - 1;
         int slotY = py + Math.max(6, (int)(this.fontScale * 7.0f)) + 1;
-        g.fill(slotX, slotY, slotX + slotSize, slotY + slotSize, -1072687072);
-        g.fill(slotX, slotY, slotX + slotSize, slotY + 1, -10784379);
-        g.fill(slotX, slotY + slotSize - 1, slotX + slotSize, slotY + slotSize, -13945276);
-        g.fill(slotX, slotY, slotX + 1, slotY + slotSize, -10784379);
-        g.fill(slotX + slotSize - 1, slotY, slotX + slotSize, slotY + slotSize, -13945276);
-        this.drawLayeredItem(g, new ItemStack((ItemLike)Items.NETHER_STAR), slotX + 1, slotY + 1, 160.0);
+        this.fillVerticalGradient(g, slotX, slotY, slotX + slotSize, slotY + slotSize, argb((int)(this.openAnim * 232.0f), 0x111A2D), argb((int)(this.openAnim * 216.0f), 0x050812));
+        g.fill(slotX, slotY, slotX + slotSize, slotY + 1, argb((int)(this.openAnim * 128.0f), propColor));
+        g.fill(slotX, slotY + slotSize - 1, slotX + slotSize, slotY + slotSize, argb((int)(this.openAnim * 78.0f), propColor));
+        this.drawLayeredItemScaled(g, new ItemStack((ItemLike)Items.NETHER_STAR), slotX + 1, slotY + 1, Math.max(10, slotSize - 2), 160.0);
         int contentLeft = slotX + slotSize + textGap;
         int headerRight = px + this.drawPropColW - Math.max(7, (int)(this.fontScale * 8.0f));
         String name = "Cleave Covenant";
@@ -1245,20 +1218,20 @@ extends Screen {
         int headerMaxW = Math.max(24, headerRight - contentLeft - statusW - Math.max(5, (int)(this.fontScale * 6.0f)));
         float nameScale = this.resolveFittedTextScale(font, name, headerMaxW, 0.88f, 0.58f);
         int headerTextY = py + Math.max(6, (int)(this.fontScale * 7.0f)) + 1;
-        this.drawScaledForegroundText(g, font, name, contentLeft, headerTextY, a << 24 | 0xF1F5F9, nameScale);
-        this.drawRightAlignedFittedForegroundText(g, font, unlocked ? "ON" : "5 PP", headerRight, headerTextY, a << 24 | (unlocked ? 0xFCA5A5 : 0xFCD34D), statusW, 0.82f, 0.58f);
+        this.drawScaledForegroundText(g, font, name, contentLeft, headerTextY, argb(a, UI_TEXT), nameScale);
+        this.drawRightAlignedFittedForegroundText(g, font, unlocked ? "ON" : "5 PP", headerRight, headerTextY, argb(a, unlocked ? 0xFCA5A5 : UI_GOLD), statusW, 0.82f, 0.58f);
         int pipX = px + iconPad;
         int contentRight = px + this.drawPropColW - Math.max(8, (int)(this.fontScale * 9.0f));
         int barW = Math.max(18, contentRight - pipX);
         int pipH = Math.max(2, (int)(this.fontScale * 5.0f));
         int pipY = py + Math.max(31, (int)(this.fontScale * 34.0f));
-        g.fill(pipX, pipY, pipX + barW, pipY + pipH, -14805966);
-        g.fill(pipX + 1, pipY, pipX + barW - 1, pipY + pipH, unlocked ? a << 24 | 0xEF4444 : (int)((float)a * 0.125f) << 24 | 0xEF4444);
+        this.fillVerticalGradient(g, pipX, pipY, pipX + barW, pipY + pipH, argb((int)(this.openAnim * 220.0f), 0x0B1427), argb((int)(this.openAnim * 190.0f), 0x050812));
+        g.fill(pipX + 1, pipY, pipX + barW - 1, pipY + pipH, unlocked ? argb(a, UI_RED) : argb((int)((float)a * 0.125f), UI_RED));
         String statText = unlocked ? "Sure-hit forged" : "Costs 5 PP";
         float statScale = this.resolveFittedTextScale(font, statText, Math.max(24, contentRight - (px + iconPad)), 0.58f, 0.46f);
-        this.drawScaledForegroundText(g, font, statText, px + iconPad, pipY + pipH + Math.max(4, (int)(this.fontScale * 5.0f)), a << 24 | (unlocked ? 0xEF4444 : 0x475569), statScale);
-        this.drawSukunaSureHitTextButton(g, this.getSukunaSureHitSealBtnBounds(), "SEALED", unlocked && !this.masteryMutationLocked, 0xDC2626, 0xEF4444);
-        this.drawSukunaSureHitTextButton(g, this.getSukunaSureHitForgeBtnBounds(), "FORGE", canBuy, 0x59669, 0x10B981);
+        this.drawScaledForegroundText(g, font, statText, px + iconPad, pipY + pipH + Math.max(4, (int)(this.fontScale * 5.0f)), argb(a, unlocked ? UI_RED : UI_TEXT_DIM), statScale);
+        this.drawSukunaSureHitTextButton(g, this.getSukunaSureHitSealBtnBounds(), "SEALED", unlocked && !this.masteryMutationLocked, 0xDC2626, UI_RED);
+        this.drawSukunaSureHitTextButton(g, this.getSukunaSureHitForgeBtnBounds(), "FORGE", canBuy, 0x059669, 0x10B981);
     }
 
     private void drawSukunaSureHitTextButton(GuiGraphics g, int[] bounds, String text, boolean enabled, int baseColor, int hoverColor) {
@@ -1268,11 +1241,12 @@ extends Screen {
         int y = bounds[1];
         int w = bounds[2];
         int h = bounds[3];
-        int fill = enabled ? a << 24 | (this.hoveredSukunaSureHit ? hoverColor : baseColor) : (int)((float)a * 0.2f) << 24 | 0x333333;
-        int textCol = enabled ? -1 : (int)((float)a * 0.36f) << 24 | 0x9CA3AF;
-        g.fill(x, y, x + w, y + h, fill);
-        g.fill(x, y, x + w, y + 1, enabled ? a << 24 | 0xFCA5A5 : (int)((float)a * 0.3f) << 24 | 0x555555);
-        g.fill(x, y + h - 1, x + w, y + h, enabled ? a << 24 | 0x7F1D1D : (int)((float)a * 0.3f) << 24 | 0x555555);
+        int accent = this.hoveredSukunaSureHit ? hoverColor : baseColor;
+        int fill = enabled ? argb(a, blend(accent, 0x070B16, this.hoveredSukunaSureHit ? 0.42f : 0.24f)) : argb((int)((float)a * 0.2f), 0x333333);
+        int textCol = enabled ? argb(a, UI_TEXT) : argb((int)((float)a * 0.36f), UI_TEXT_MID);
+        this.fillVerticalGradient(g, x, y, x + w, y + h, fill, argb(enabled ? (int)(a * 0.82f) : (int)(a * 0.16f), 0x02040A));
+        g.fill(x, y, x + w, y + 1, enabled ? argb((int)(a * 0.72f), accent) : argb((int)((float)a * 0.3f), 0x555555));
+        g.fill(x, y + h - 1, x + w, y + h, enabled ? argb((int)(a * 0.45f), accent) : argb((int)((float)a * 0.3f), 0x555555));
         float scale = this.resolveFittedTextScale(font, text, w - Math.max(4, (int)(this.fontScale * 6.0f)), 0.72f, 0.5f);
         this.drawScaledForegroundText(g, font, text, x + (w - this.getScaledTextWidth(font, text, scale)) / 2, y + (h - this.getScaledTextHeight(font, scale)) / 2, textCol, scale);
     }
@@ -1302,16 +1276,16 @@ extends Screen {
         }
         g.pose().pushPose();
         g.pose().translate(0.0, 0.0, 420.0);
-        g.fill(tx, ty, tx + tw, ty + th, -268106220);
-        g.fill(tx, ty, tx + tw, ty + 1, -450095);
-        g.fill(tx, ty + th - 1, tx + tw, ty + th, -450095);
-        g.fill(tx, ty, tx + 1, ty + th, -450095);
-        g.fill(tx + tw - 1, ty, tx + tw, ty + th, -450095);
+        this.fillVerticalGradient(g, tx, ty, tx + tw, ty + th, argb(248, 0x0F1728), argb(244, 0x040711));
+        g.fill(tx, ty, tx + tw, ty + 1, argb(230, UI_RED));
+        g.fill(tx, ty + th - 1, tx + tw, ty + th, argb(160, UI_RED));
+        g.fill(tx, ty, tx + 1, ty + th, argb(130, UI_RED));
+        g.fill(tx + tw - 1, ty, tx + tw, ty + th, argb(130, UI_RED));
         g.pose().pushPose();
         g.pose().scale(tooltipScale, tooltipScale, 1.0f);
-        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), 0xFFFF5555, false);
+        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), argb(255, UI_RED), false);
         for (int i = 0; i < descLines.size(); ++i) {
-            g.drawString(font, descLines.get(i), Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 16 + i * 9) / tooltipScale), -1906448, false);
+            g.drawString(font, descLines.get(i), Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 16 + i * 9) / tooltipScale), argb(255, UI_TEXT_MID), false);
         }
         g.pose().popPose();
         g.pose().popPose();
@@ -1466,7 +1440,13 @@ extends Screen {
     }
 
     private float resolveTooltipScale(int rawWidth, int rawHeight) {
-        return 1.0f;
+        if (rawWidth <= 0 || rawHeight <= 0) {
+            return 1.0f;
+        }
+        float maxW = Math.max(80.0f, (float)this.width - 16.0f);
+        float maxH = Math.max(60.0f, (float)this.height - 16.0f);
+        float scale = Math.min(1.0f, Math.min(maxW / (float)rawWidth, maxH / (float)rawHeight));
+        return Math.max(0.55f, scale);
     }
 
     /**
@@ -1607,11 +1587,11 @@ extends Screen {
     private void drawPropertyControlButton(GuiGraphics graphics, int x, int y, int w, int h, int fillColor, int symbolColor, boolean plus) {
         graphics.pose().pushPose();
         graphics.pose().translate(0.0, 0.0, 150.0);
-        graphics.fill(x, y, x + w, y + h, fillColor);
-        graphics.fill(x, y, x + w, y + 1, -1606138812);
-        graphics.fill(x, y + h - 1, x + w, y + h, -1609494255);
-        graphics.fill(x, y, x + 1, y + h, -1606138812);
-        graphics.fill(x + w - 1, y, x + w, y + h, -1609494255);
+        int alpha = fillColor >>> 24;
+        int rgb = fillColor & 0xFFFFFF;
+        this.fillVerticalGradient(graphics, x, y, x + w, y + h, argb(alpha, blend(rgb, 0x070B16, 0.35f)), argb(Math.max(0, (int)(alpha * 0.78f)), 0x02040A));
+        graphics.fill(x, y, x + w, y + 1, argb(Math.max(0, (int)(alpha * 0.72f)), rgb));
+        graphics.fill(x, y + h - 1, x + w, y + h, argb(Math.max(0, (int)(alpha * 0.45f)), rgb));
         int centerX = x + w / 2;
         int centerY = y + h / 2;
         int arm = Math.max(2, Math.min(w, h) / 3);
@@ -1621,6 +1601,56 @@ extends Screen {
             graphics.fill(centerX - thickness, centerY - arm, centerX + thickness + 1, centerY + arm + 1, symbolColor);
         }
         graphics.pose().popPose();
+    }
+
+    private void fillVerticalGradient(GuiGraphics g, int x1, int y1, int x2, int y2, int topColor, int bottomColor) {
+        int h = y2 - y1;
+        if (h <= 0 || x2 <= x1) {
+            return;
+        }
+        int steps = Math.min(28, Math.max(1, h));
+        for (int i = 0; i < steps; i++) {
+            float t = steps <= 1 ? 0.0f : (float)i / (float)(steps - 1);
+            int yStart = y1 + i * h / steps;
+            int yEnd = y1 + (i + 1) * h / steps;
+            g.fill(x1, yStart, x2, Math.max(yStart + 1, yEnd), lerpArgb(topColor, bottomColor, t));
+        }
+    }
+
+    private static int lerpArgb(int a, int b, float t) {
+        float clamped = Math.max(0.0f, Math.min(1.0f, t));
+        int aa = a >>> 24;
+        int ar = a >> 16 & 0xFF;
+        int ag = a >> 8 & 0xFF;
+        int ab = a & 0xFF;
+        int ba = b >>> 24;
+        int br = b >> 16 & 0xFF;
+        int bg = b >> 8 & 0xFF;
+        int bb = b & 0xFF;
+        int oa = (int)(aa + (ba - aa) * clamped);
+        int or = (int)(ar + (br - ar) * clamped);
+        int og = (int)(ag + (bg - ag) * clamped);
+        int ob = (int)(ab + (bb - ab) * clamped);
+        return oa << 24 | or << 16 | og << 8 | ob;
+    }
+
+    private static int argb(int alpha, int rgb) {
+        int a = Math.max(0, Math.min(255, alpha));
+        return (a << 24) | (rgb & 0xFFFFFF);
+    }
+
+    private static int blend(int foreground, int background, float amount) {
+        float clamped = Math.max(0.0f, Math.min(1.0f, amount));
+        int fr = foreground >> 16 & 0xFF;
+        int fg = foreground >> 8 & 0xFF;
+        int fb = foreground & 0xFF;
+        int br = background >> 16 & 0xFF;
+        int bg = background >> 8 & 0xFF;
+        int bb = background & 0xFF;
+        int r = (int)(br + (fr - br) * clamped);
+        int g = (int)(bg + (fg - bg) * clamped);
+        int b = (int)(bb + (fb - bb) * clamped);
+        return r << 16 | g << 8 | b;
     }
 
     // ===== STATIC LABEL HELPERS =====
@@ -1655,6 +1685,32 @@ extends Screen {
             case 7 -> "Barrier Power";
             case 8 -> "Barrier Ref";
             default -> "???";
+        };
+    }
+
+    private String getPropertyDisplayName(DomainMasteryProperties prop) {
+        String translated = Component.translatable((String)prop.getNameKey()).getString();
+        if (translated == null || translated.isBlank() || translated.equals(prop.getNameKey())) {
+            return this.getShortName(prop.ordinal());
+        }
+        return translated;
+    }
+
+    private String getPropertyDescription(DomainMasteryProperties prop) {
+        String translated = Component.translatable((String)prop.getDescKey()).getString();
+        if (translated != null && !translated.isBlank() && !translated.equals(prop.getDescKey())) {
+            return translated;
+        }
+        return switch (prop) {
+            case VICTIM_CE_DRAIN -> "Drains cursed energy from enemy players inside your active domain radius every 0.5 seconds. Higher levels increase CE drained per tick window.";
+            case BF_CHANCE_BOOST -> "Raises your addon Black Flash chance while Domain Mastery effects are active. The runtime bonus is stored as a domain Black Flash bonus on the caster.";
+            case RCT_HEAL_BOOST -> "Heals the domain owner once per second while alive and below max health. Higher levels increase HP restored per second.";
+            case BLIND_EFFECT -> "Applies Blindness to valid enemies inside the active domain radius. The effect refreshes once per second and scales with invested level.";
+            case SLOW_EFFECT -> "Applies Movement Slowdown to valid enemies inside the active domain radius. The effect refreshes once per second and scales with invested level.";
+            case DURATION_EXTEND -> "Extends domain duration by 5 seconds per level. Negative Modify can shorten duration and grant extra property points.";
+            case RADIUS_BOOST -> "Increases the effective domain radius by 12 percent per level for addon-scaled domain checks, startup radius, active range, and clash power.";
+            case BARRIER_POWER -> "Improves barrier power and raw clash strength. It also contributes to runtime barrier scaling; Negative Modify weakens this for extra points.";
+            case BARRIER_REFINEMENT -> "Improves barrier refinement against open domains and domain clashes. Negative Modify reduces refinement for glass-cannon builds.";
         };
     }
 
@@ -2004,11 +2060,14 @@ extends Screen {
         for (FormattedCharSequence line : descLines) {
             maxW = Math.max(maxW, font.width(line));
         }
-        int tw = maxW + 20;
+        int rawTw = maxW + 20;
         Objects.requireNonNull(font);
         int n = descLines.size();
         Objects.requireNonNull(font);
-        int th = 9 + n * 9 + 16;
+        int rawTh = 9 + n * 9 + 16;
+        float tooltipScale = this.resolveTooltipScale(rawTw, rawTh);
+        int tw = Math.round(rawTw * tooltipScale);
+        int th = Math.round(rawTh * tooltipScale);
         int tx = mx + 16;
         int ty = my - th - 4;
         if (tx + tw > this.width) {
@@ -2019,21 +2078,21 @@ extends Screen {
         }
         g.pose().pushPose();
         g.pose().translate(0.0, 0.0, 420.0);
-        float tooltipScale = Math.max(0.5f, this.fontScale);
-        g.fill(tx, ty, tx + tw, ty + th, -268106220);
-        g.fill(tx, ty, tx + tw, ty + 1, -680437);
-        g.fill(tx, ty + th - 1, tx + tw, ty + th, -680437);
-        g.fill(tx, ty, tx + 1, ty + th, -680437);
-        g.fill(tx + tw - 1, ty, tx + tw, ty + th, -680437);
+        this.fillVerticalGradient(g, tx, ty, tx + tw, ty + th, argb(248, 0x0F1728), argb(244, 0x040711));
+        g.fill(tx, ty, tx + tw, ty + 1, argb(230, UI_GOLD));
+        g.fill(tx, ty + th - 1, tx + tw, ty + th, argb(160, UI_GOLD));
+        g.fill(tx, ty, tx + 1, ty + th, argb(130, UI_GOLD));
+        g.fill(tx + tw - 1, ty, tx + tw, ty + th, argb(130, UI_GOLD));
         g.pose().pushPose();
         g.pose().scale(tooltipScale, tooltipScale, 1.0f);
-        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), -680437, false);
+        g.drawString(font, name, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7) / tooltipScale), argb(255, UI_GOLD), false);
         for (int i = 0; i < descLines.size(); ++i) {
             FormattedCharSequence formattedCharSequence = (FormattedCharSequence)descLines.get(i);
             Objects.requireNonNull(font);
             Objects.requireNonNull(font);
-            g.drawString(font, formattedCharSequence, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7 + 9 + i * 9) / tooltipScale), -1906448, false);
+            g.drawString(font, formattedCharSequence, Math.round((float)(tx + 10) / tooltipScale), Math.round((float)(ty + 7 + 9 + i * 9) / tooltipScale), argb(255, UI_TEXT_MID), false);
         }
+        g.pose().popPose();
         g.pose().popPose();
     }
 

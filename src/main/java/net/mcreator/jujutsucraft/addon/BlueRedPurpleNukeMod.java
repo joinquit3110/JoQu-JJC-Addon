@@ -358,6 +358,7 @@ public class BlueRedPurpleNukeMod {
      * Initializes the addon mod, registers custom entities, subscribes Forge event listeners, and prepares the networking channel.
      */
     public BlueRedPurpleNukeMod() {
+        AddonGameRules.init();
         IEventBus modBus = FMLJavaModLoadingContext.get().getModEventBus();
         LimbEntityRegistry.ENTITIES.register(modBus);
         ModItems.ITEMS.register(modBus);
@@ -393,14 +394,14 @@ public class BlueRedPurpleNukeMod {
 
     @SubscribeEvent
     public void onPlayerChangedDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player) {
+        if (event.getEntity() instanceof ServerPlayer player && AddonGameRules.domainClash(player.level())) {
             ClashSubsystem.getInstance().onPlayerChangedDimension(player);
         }
     }
 
     @SubscribeEvent
     public void onLivingDeath(LivingDeathEvent event) {
-        if (event.getEntity() != null) {
+        if (event.getEntity() != null && AddonGameRules.domainClash(event.getEntity().level())) {
             ClashSubsystem.getInstance().onLivingDeath(event.getEntity());
         }
     }
@@ -529,6 +530,9 @@ public class BlueRedPurpleNukeMod {
         if (!(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
+        if (!AddonGameRules.enabled(player, AddonGameRules.SUKUNA_STALE_STATE_FIX_ENABLED)) {
+            return;
+        }
         // Run the reconciliation immediately at login. The shared helper restricts itself to
         // Sukuna (Req 7.6) and only writes back when stale state is present with no genuinely-
         // active shrine (Req 7.7). It returns false for other characters, in which case no
@@ -651,6 +655,9 @@ public class BlueRedPurpleNukeMod {
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
+        if (event.getServer() != null && !AddonGameRules.enabled(event.getServer().overworld(), AddonGameRules.BLACK_FLASH_ENABLED, AddonGameRules.BLACK_FLASH_BLESSING_ENABLED)) {
+            return;
+        }
         BlueRedPurpleNukeMod.tickBlackFlashBlessingWaveSessions();
     }
 
@@ -663,10 +670,17 @@ public class BlueRedPurpleNukeMod {
         if (entity.level().isClientSide()) {
             return;
         }
-        BlueRedPurpleNukeMod.handleBlueFullChargeLockTick(entity);
+        if (!AddonGameRules.addonEnabled(entity)) {
+            return;
+        }
+        if (AddonGameRules.gojoBlue(entity)) {
+            BlueRedPurpleNukeMod.handleBlueFullChargeLockTick(entity);
+        }
         // Blue entities are fully server-driven here so aim, linger, and fusion state stay authoritative.
         if (entity instanceof BlueEntity) {
-            this.handleBlueTick(entity);
+            if (AddonGameRules.gojoBlue(entity)) {
+                this.handleBlueTick(entity);
+            }
             return;
         }
         if (entity.tickCount % 40 == 0 && entity.getPersistentData().contains("addon_red_attached_orb") && !(orbId = entity.getPersistentData().getString("addon_red_attached_orb")).isEmpty() && (level = entity.level()) instanceof ServerLevel) {
@@ -691,6 +705,9 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         LivingEntity target = event.getEntity();
+        if (!AddonGameRules.blackFlash(target)) {
+            return;
+        }
         Entity attacker = event.getSource().getEntity();
         Entity direct = event.getSource().getDirectEntity();
         BlueRedPurpleNukeMod.tryConfirmBlackFlashDamageHit(target, attacker, direct, "living_attack");
@@ -702,6 +719,9 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         LivingEntity target = event.getEntity();
+        if (!AddonGameRules.blackFlash(target)) {
+            return;
+        }
         Entity attacker = event.getSource().getEntity();
         Entity direct = event.getSource().getDirectEntity();
         BlueRedPurpleNukeMod.tryConfirmBlackFlashDamageHit(target, attacker, direct, "living_hurt");
@@ -713,6 +733,9 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         LivingEntity target = event.getEntity();
+        if (!AddonGameRules.blackFlash(target)) {
+            return;
+        }
         Entity attacker = event.getSource().getEntity();
         Entity direct = event.getSource().getDirectEntity();
         BlueRedPurpleNukeMod.tryConfirmBlackFlashDamageHit(target, attacker, direct, "living_damage");
@@ -724,6 +747,9 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         if (!(event.getEntity() instanceof ServerPlayer owner) || !(event.getTarget() instanceof LivingEntity target)) {
+            return;
+        }
+        if (!AddonGameRules.blackFlash(owner)) {
             return;
         }
         BlueRedPurpleNukeMod.tryConfirmBlackFlashCombatHit(owner, target, "attack_entity");
@@ -743,6 +769,9 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         ServerPlayer player2 = (ServerPlayer)player;
+        if (!AddonGameRules.addonEnabled(player2)) {
+            return;
+        }
         boolean teleportConsumedOrSuppressesCrusher = BlueRedPurpleNukeMod.handleGojoDoubleShiftTeleport(player2);
         if (!teleportConsumedOrSuppressesCrusher) {
             BlueRedPurpleNukeMod.handleInfinityCrusher(player2);
@@ -772,6 +801,12 @@ public class BlueRedPurpleNukeMod {
      */
     private static void handleBlackFlashCharge(ServerPlayer player) {
         CompoundTag data = player.getPersistentData();
+        if (!AddonGameRules.blackFlashTiming(player)) {
+            if (data.getBoolean("addon_bf_charging") || data.getBoolean("addon_bf_guaranteed") || data.getBoolean("addon_bf_waiting_hit")) {
+                BlueRedPurpleNukeMod.clearBlackFlashRuntimeState(player);
+            }
+            return;
+        }
         boolean hasMastery = data.getBoolean("addon_bf_mastery");
         if (!hasMastery && CooldownTrackerEvents.hasAdvancement(player, "jjkblueredpurple:black_flash_mastery")) {
             data.putBoolean("addon_bf_mastery", true);
@@ -891,13 +926,17 @@ public class BlueRedPurpleNukeMod {
     }
 
     private static double getBlackFlashRequiredCharge(CompoundTag data) {
-        int flow = data == null ? 0 : Math.max(0, Math.min(BF_FLOW_MAX, data.getInt("addon_bf_flow")));
+        int flowMax = BF_FLOW_MAX;
+        int flow = data == null ? 0 : Math.max(0, Math.min(flowMax, data.getInt("addon_bf_flow")));
         // Red/Blue charge state in the base mod caps around cnt6=5.0. Keep ring start under that cap,
         // and make higher flow feel faster by shaving a small amount per confirmed Black Flash.
         return Math.max(BF_CHARGE_REQUIRED_MIN, BF_CHARGE_REQUIRED_BASE - (double)flow * BF_CHARGE_REQUIRED_REDUCTION_PER_FLOW);
     }
 
     private static void startBlackFlashTiming(ServerPlayer player, CompoundTag data) {
+        if (!AddonGameRules.blackFlashTiming(player)) {
+            return;
+        }
         String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
         if (!BF_STATE_IDLE.equals(state) || data.getBoolean("addon_bf_no_retrigger_until_cnt6_drop")) {
             return;
@@ -914,10 +953,10 @@ public class BlueRedPurpleNukeMod {
         boolean yuji = BlueRedPurpleNukeMod.isYuji(player);
         data.putLong("addon_bf_timing_nonce", data.getLong("addon_bf_timing_nonce") + 1L);
         data.putLong("addon_bf_timing_start_tick", player.serverLevel().getGameTime());
-        float basePeriod = yuji ? BF_TIMING_PERIOD_TICKS_YUJI : BF_TIMING_PERIOD_TICKS;
-        int flow = Math.max(0, Math.min(BF_FLOW_MAX, data.getInt("addon_bf_flow")));
+        float basePeriod = yuji ? (float)AddonGameRules.positiveInt(player, AddonGameRules.BLACK_FLASH_YUJI_PERIOD_TICKS, (int)BF_TIMING_PERIOD_TICKS_YUJI) : (float)AddonGameRules.positiveInt(player, AddonGameRules.BLACK_FLASH_TIMING_PERIOD_TICKS, (int)BF_TIMING_PERIOD_TICKS);
+        int flow = Math.max(0, Math.min(BlueRedPurpleNukeMod.getBlackFlashFlowMax(player), data.getInt("addon_bf_flow")));
         data.putFloat("addon_bf_timing_period_ticks", Math.max(6.0f, basePeriod - (float)flow * (yuji ? 0.65f : 0.85f)));
-        float redSize = yuji ? BF_TIMING_RED_SIZE_YUJI : BF_TIMING_RED_SIZE;
+        float redSize = (float)(yuji ? AddonGameRules.basis(player, AddonGameRules.BLACK_FLASH_YUJI_RED_SIZE_BASIS, 750) : AddonGameRules.basis(player, AddonGameRules.BLACK_FLASH_TIMING_RED_SIZE_BASIS, 450));
         data.putFloat("addon_bf_timing_red_start", BlueRedPurpleNukeMod.chooseBlackFlashRedStartAwayFromInitialNeedle(player, redSize));
         data.putFloat("addon_bf_timing_red_size", redSize);
         if (!data.getBoolean("addon_bf_charge_announced")) {
@@ -943,6 +982,9 @@ public class BlueRedPurpleNukeMod {
     }
 
     public static void resolveBlackFlashTimingRelease(ServerPlayer player, boolean releasedFromCharge, float clientNeedle, float clientElapsedTicks, long clientNonce, boolean clientTimingSuccess) {
+        if (!AddonGameRules.blackFlashTiming(player)) {
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         String state = BlueRedPurpleNukeMod.getBlackFlashState(data);
         long serverNonce = data.getLong("addon_bf_timing_nonce");
@@ -1132,12 +1174,15 @@ public class BlueRedPurpleNukeMod {
         if (player == null) {
             return false;
         }
+        if (!AddonGameRules.blackFlashTiming(player)) {
+            return false;
+        }
         if (BlueRedPurpleNukeMod.isBlackFlashFlowCooldownActive(player)) {
             return false;
         }
         CompoundTag data = player.getPersistentData();
         BlueRedPurpleNukeMod.expireBlackFlashGuaranteeIfNeeded(player, data);
-        return BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) && data.getBoolean("addon_bf_guaranteed") && data.getBoolean("addon_bf_waiting_hit") && data.contains("addon_bf_release_tick") && player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick") <= (long)BF_GUARANTEE_TIMEOUT_TICKS;
+        return BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) && data.getBoolean("addon_bf_guaranteed") && data.getBoolean("addon_bf_waiting_hit") && data.contains("addon_bf_release_tick") && player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick") <= (long)BlueRedPurpleNukeMod.getBlackFlashGuaranteeTimeoutTicks(player);
     }
 
     public static boolean consumeBlackFlashGuarantee(ServerPlayer player) {
@@ -1182,7 +1227,7 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         long age = player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick");
-        if (age < 0L || age > (long)BF_GUARANTEE_TIMEOUT_TICKS) {
+        if (age < 0L || age > (long)BlueRedPurpleNukeMod.getBlackFlashGuaranteeTimeoutTicks(player)) {
             return;
         }
         BlueRedPurpleNukeMod.confirmBlackFlashGuaranteeHit(player, source);
@@ -1282,7 +1327,7 @@ public class BlueRedPurpleNukeMod {
                 continue;
             }
             long age = candidate.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick");
-            if (age < 0L || age > (long)BF_GUARANTEE_TIMEOUT_TICKS) {
+            if (age < 0L || age > (long)BlueRedPurpleNukeMod.getBlackFlashGuaranteeTimeoutTicks(candidate)) {
                 continue;
             }
             double dist = candidate.distanceToSqr(target);
@@ -1307,7 +1352,7 @@ public class BlueRedPurpleNukeMod {
         long confirmedAge = data.contains("addon_bf_release_tick") ? player.serverLevel().getGameTime() - data.getLong("addon_bf_release_tick") : -1L;
         long lastConfirmedNonce = data.getLong("addon_bf_last_confirmed_nonce");
         boolean stateActive = BF_STATE_WAITING_HIT.equals(BlueRedPurpleNukeMod.getBlackFlashState(data)) && data.getBoolean("addon_bf_guaranteed") && data.getBoolean("addon_bf_waiting_hit") && data.contains("addon_bf_release_tick") && confirmedNonce != 0L;
-        boolean ageValid = confirmedAge >= 0L && confirmedAge <= (long)BF_GUARANTEE_TIMEOUT_TICKS;
+        boolean ageValid = confirmedAge >= 0L && confirmedAge <= (long)BlueRedPurpleNukeMod.getBlackFlashGuaranteeTimeoutTicks(player);
         if (!stateActive || !ageValid || lastConfirmedNonce == confirmedNonce) {
             return false;
         }
@@ -1343,7 +1388,7 @@ public class BlueRedPurpleNukeMod {
             return;
         }
         long age = player.serverLevel().getGameTime() - releaseTick;
-        if (age <= (long)BF_PENDING_SUCCESS_EXPIRE_TICKS) {
+        if (age <= (long)BlueRedPurpleNukeMod.getBlackFlashGuaranteeTimeoutTicks(player)) {
             return;
         }
         if (!data.getBoolean("addon_bf_guaranteed") || !data.getBoolean("addon_bf_waiting_hit") || data.getLong("addon_bf_release_tick") != releaseTick || data.getLong("addon_bf_guarantee_nonce") != guaranteeNonce) {
@@ -1362,11 +1407,26 @@ public class BlueRedPurpleNukeMod {
     }
 
 
+    private static int getBlackFlashGuaranteeTimeoutTicks(ServerPlayer player) {
+        return AddonGameRules.positiveInt(player, AddonGameRules.BLACK_FLASH_GUARANTEE_TIMEOUT_TICKS, BF_GUARANTEE_TIMEOUT_TICKS);
+    }
+
+    private static int getBlackFlashFlowMax(ServerPlayer player) {
+        return AddonGameRules.positiveInt(player, AddonGameRules.BLACK_FLASH_FLOW_MAX, BF_FLOW_MAX);
+    }
+
+    private static int getBlackFlashFlowCooldownTicks(ServerPlayer player) {
+        return AddonGameRules.nonNegativeInt(player, AddonGameRules.BLACK_FLASH_FLOW_COOLDOWN_TICKS, BF_FLOW_COOLDOWN_TICKS);
+    }
+
     public static boolean isBlackFlashFlowCooldownActive(ServerPlayer player) {
-        return player != null && player.getPersistentData().getInt("addon_bf_flow_cd") > 0;
+        return player != null && AddonGameRules.blackFlashFlow(player) && player.getPersistentData().getInt("addon_bf_flow_cd") > 0;
     }
 
     private static void tickBlackFlashFlowCooldown(ServerPlayer player) {
+        if (!AddonGameRules.blackFlashFlow(player)) {
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         int cd = data.getInt("addon_bf_flow_cd");
         if (cd > 0) {
@@ -1382,11 +1442,15 @@ public class BlueRedPurpleNukeMod {
     }
 
     private static void advanceBlackFlashFlow(ServerPlayer player, CompoundTag data) {
-        int next = Math.min(BF_FLOW_MAX, Math.max(0, data.getInt("addon_bf_flow")) + 1);
+        if (!AddonGameRules.blackFlashFlow(player)) {
+            return;
+        }
+        int flowMax = BlueRedPurpleNukeMod.getBlackFlashFlowMax(player);
+        int next = Math.min(flowMax, Math.max(0, data.getInt("addon_bf_flow")) + 1);
         data.putInt("addon_bf_flow", next);
-        if (next >= BF_FLOW_MAX) {
+        if (next >= flowMax) {
             data.putBoolean("addon_bf_sparks_blessed", true);
-            data.putInt("addon_bf_flow_cd", BF_FLOW_COOLDOWN_TICKS);
+            data.putInt("addon_bf_flow_cd", BlueRedPurpleNukeMod.getBlackFlashFlowCooldownTicks(player));
             BlueRedPurpleNukeMod.clearBlackFlashTiming(data);
             BlueRedPurpleNukeMod.grantBlackFlashFlowAdvancement(player);
             BlueRedPurpleNukeMod.playBlackFlashFlowBlessingEffects(player);
@@ -1394,9 +1458,13 @@ public class BlueRedPurpleNukeMod {
     }
 
     private static void handleBlackFlashFlowFailure(ServerPlayer player, CompoundTag data, String reason) {
+        if (!AddonGameRules.blackFlashFlow(player)) {
+            data.putInt("addon_bf_flow", 0);
+            return;
+        }
         if (data.getInt("addon_bf_flow") > 0 || data.getBoolean("addon_bf_charging") || data.getBoolean("addon_bf_guaranteed")) {
             data.putInt("addon_bf_flow", 0);
-            data.putInt("addon_bf_flow_cd", BF_FLOW_COOLDOWN_TICKS);
+            data.putInt("addon_bf_flow_cd", BlueRedPurpleNukeMod.getBlackFlashFlowCooldownTicks(player));
             data.putBoolean("addon_bf_guaranteed", false);
             data.putBoolean("addon_bf_waiting_hit", false);
             data.putBoolean("addon_bf_charging", false);
@@ -1427,6 +1495,9 @@ public class BlueRedPurpleNukeMod {
 
     private static void playBlackFlashFlowBlessingEffects(ServerPlayer player) {
         if (player == null) {
+            return;
+        }
+        if (!AddonGameRules.enabled(player, AddonGameRules.BLACK_FLASH_ENABLED, AddonGameRules.BLACK_FLASH_BLESSING_ENABLED)) {
             return;
         }
         ServerLevel level = player.serverLevel();
@@ -1817,6 +1888,9 @@ public class BlueRedPurpleNukeMod {
         if (!(redEntity instanceof RedEntity)) {
             return false;
         }
+        if (!AddonGameRules.gojoRed(redEntity)) {
+            return false;
+        }
         RedEntity re = (RedEntity)redEntity;
         if (redEntity.level().isClientSide()) {
             return false;
@@ -2020,9 +2094,9 @@ public class BlueRedPurpleNukeMod {
         // Normalize Red charge into a 0..1 ratio so range and other scaling values can be derived consistently.
         double chargeRatio = Math.max(0.0, Math.min(cnt6, 5.0) / 5.0);
         // Even weak casts travel a meaningful distance, while full charge reaches the addon maximum range cap.
-        double maxRange = 128.0 * (0.22 + 0.78 * chargeRatio);
+        double maxRange = AddonGameRules.scaled(owner, RED_MAX_RANGE_FULL * (0.22 + 0.78 * chargeRatio), AddonGameRules.GOJO_RED_RANGE_PERCENT, 100);
         int chargeTier = BlueRedPurpleNukeMod.getRedChargeTier(cnt6);
-        double speed = BlueRedPurpleNukeMod.getNormalRedSpeed(cnt6);
+        double speed = AddonGameRules.scaled(owner, BlueRedPurpleNukeMod.getNormalRedSpeed(cnt6), AddonGameRules.GOJO_RED_SPEED_PERCENT, 100);
         redEntity.getPersistentData().putBoolean("addon_red_normal_active", true);
         redEntity.getPersistentData().putBoolean("flag_start", true);
         redEntity.getPersistentData().putDouble("cnt6", cnt6);
@@ -2200,10 +2274,11 @@ public class BlueRedPurpleNukeMod {
                 serverLevel.sendParticles((ParticleOptions)new DustParticleOptions(RED_TRAIL_COLOR, 0.5f), entity.getX(), entity.getY() + (double)entity.getBbHeight() * 0.5, entity.getZ(), 2, 0.15, 0.15, 0.15, 0.0);
                 continue;
             }
-            if (dist > 5.0) continue;
+            double captureRadius = AddonGameRules.scaled(owner, RED_CAPTURE_RADIUS, AddonGameRules.GOJO_RED_RADIUS_PERCENT, 100);
+            if (dist > captureRadius) continue;
             Vec3 toOrb = orbPos.subtract(entity.position());
-            double pullStrength = 2.5 + (double)chargeTier * 0.8;
-            double closeFactor = 1.0 + (1.0 - Math.min(1.0, dist / 5.0)) * 2.0;
+            double pullStrength = AddonGameRules.scaled(owner, 2.5 + (double)chargeTier * 0.8, AddonGameRules.GOJO_RED_KNOCKBACK_PERCENT, 100);
+            double closeFactor = 1.0 + (1.0 - Math.min(1.0, dist / Math.max(0.001D, captureRadius))) * 2.0;
             Vec3 pull = toOrb.normalize().scale(pullStrength * closeFactor);
             Vec3 forward = normDir.scale(1.2 + (double)chargeTier * 0.4);
             entity.setDeltaMovement(entity.getDeltaMovement().scale(0.15).add(pull).add(forward));
@@ -2488,13 +2563,13 @@ public class BlueRedPurpleNukeMod {
     // ===== RED SHOCKWAVE SUPPORT =====
     private static void applyRedExplosionShockwave(ServerLevel serverLevel, LivingEntity redEntity, LivingEntity owner, Vec3 pos, int chargeTier, Set<UUID> excludedTargets, double distanceMultiplier, double radiusMultiplier, double knockbackMultiplier, double minimumDamage) {
         // Higher Red charge tiers widen the shockwave radius so fully committed casts punish larger groups.
-        double radius = (6.0 + (double)chargeTier * 4.0) * radiusMultiplier;
+        double radius = AddonGameRules.scaled(owner, (6.0 + (double)chargeTier * 4.0) * radiusMultiplier, AddonGameRules.GOJO_RED_RADIUS_PERCENT, 100);
         float baseDamage = switch (chargeTier) {
             case 1 -> 28.0f;
             case 2 -> 40.0f;
             default -> 54.0f;
         };
-        double normalDamageScale = BlueRedPurpleNukeMod.getNormalRedDamageScale(owner);
+        double normalDamageScale = BlueRedPurpleNukeMod.getNormalRedDamageScale(owner) * AddonGameRules.percent(owner, AddonGameRules.GOJO_RED_DAMAGE_PERCENT, 100);
         double scaledBaseDamage = Math.max((double)baseDamage * normalDamageScale * distanceMultiplier, minimumDamage);
         List<LivingEntity> targets = serverLevel.getEntitiesOfClass(LivingEntity.class, new AABB(pos, pos).inflate(radius), e -> e.isAlive() && e != redEntity && e != owner && !(e instanceof BlueEntity) && !(e instanceof RedEntity) && !(e instanceof PurpleEntity) && (excludedTargets == null || !excludedTargets.contains(e.getUUID())));
         for (LivingEntity target : targets) {
@@ -2506,7 +2581,7 @@ public class BlueRedPurpleNukeMod {
             if (hurt && owner instanceof ServerPlayer serverOwner) {
                 BlueRedPurpleNukeMod.tryConfirmBlackFlashGuaranteeHit(serverOwner, "red_shockwave_manual_explosion");
             }
-            Vec3 push = delta.normalize().scale((1.5 + (double)chargeTier * 0.5) * (0.35 + falloff) * knockbackMultiplier);
+            Vec3 push = delta.normalize().scale(AddonGameRules.scaled(owner, (1.5 + (double)chargeTier * 0.5) * (0.35 + falloff) * knockbackMultiplier, AddonGameRules.GOJO_RED_KNOCKBACK_PERCENT, 100));
             target.setDeltaMovement(target.getDeltaMovement().add(push.x, 0.35 + falloff * 0.25 * knockbackMultiplier, push.z));
         }
     }
@@ -2535,6 +2610,9 @@ public class BlueRedPurpleNukeMod {
 
     // ===== PURPLE FUSION SYSTEM =====
     private static boolean checkAndActivatePurpleNuke(LivingEntity redEntity, LivingEntity owner, ServerLevel serverLevel) {
+        if (!AddonGameRules.gojoPurpleFusion(redEntity)) {
+            return false;
+        }
         String ownerUUID = redEntity.getPersistentData().getString("OWNER_UUID");
         Level world = redEntity.level();
         Vec3 projectilePos = BlueRedPurpleNukeMod.getTrackedRedPosition(redEntity);
@@ -2550,7 +2628,10 @@ public class BlueRedPurpleNukeMod {
             if (blueCnt6 < 5.0 || !(owner instanceof Player)) continue;
             Player ownerPlayer = (Player)owner;
             double currentCE = ((JujutsucraftModVariables.PlayerVariables)ownerPlayer.getCapability((Capability)JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse((Object)new JujutsucraftModVariables.PlayerVariables())).PlayerCursePower;
-            if (currentCE < 2000.0 || (double)(ownerPlayer.getHealth() / ownerPlayer.getMaxHealth()) > 0.3) continue;
+            double ceThreshold = AddonGameRules.nonNegativeInt(ownerPlayer, AddonGameRules.GOJO_PURPLE_CE_THRESHOLD, (int)NUKE_CE_THRESHOLD);
+            double ceCost = AddonGameRules.nonNegativeInt(ownerPlayer, AddonGameRules.GOJO_PURPLE_CE_COST, (int)NUKE_CE_COST);
+            double hpThreshold = Math.max(0.0D, AddonGameRules.intValue(ownerPlayer, AddonGameRules.GOJO_PURPLE_HP_THRESHOLD_PERCENT, (int)Math.round(NUKE_HP_THRESHOLD * 100.0D))) / 100.0D;
+            if (currentCE < ceThreshold || (double)(ownerPlayer.getHealth() / ownerPlayer.getMaxHealth()) > hpThreshold) continue;
             double cx = blueEntity.getX();
             double cy = blueEntity.getY();
             double cz = blueEntity.getZ();
@@ -2596,7 +2677,7 @@ public class BlueRedPurpleNukeMod {
             if (purpleSpawned) {
                 double finalCE = currentCE;
                 ownerPlayer.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(cap -> {
-                    cap.PlayerCursePower = finalCE - 2000.0;
+                    cap.PlayerCursePower = finalCE - ceCost;
                     cap.syncPlayerVariables((Entity)ownerPlayer);
                 });
             }
@@ -2622,6 +2703,12 @@ public class BlueRedPurpleNukeMod {
         }
         ServerLevel serverLevel = (ServerLevel)world;
         CompoundTag data = player.getPersistentData();
+        if (!AddonGameRules.gojoTeleport(player)) {
+            if (data.getBoolean(GOJO_TP_PENDING)) {
+                BlueRedPurpleNukeMod.clearGojoTeleportRuntimeState(player);
+            }
+            return false;
+        }
         long now = serverLevel.getGameTime();
         int cd = data.getInt(GOJO_TP_CD);
         if (cd > 0) {
@@ -2640,7 +2727,7 @@ public class BlueRedPurpleNukeMod {
                 player.resetFallDistance();
                 BlueRedPurpleNukeMod.spawnGojoTeleportBurst(serverLevel, target.add(0.0, player.getBbHeight() * 0.5, 0.0), true);
                 serverLevel.playSound(null, BlockPos.containing((Position)target), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 1.25f, 1.35f);
-                data.putInt(GOJO_TP_CD, GOJO_TELEPORT_COOLDOWN_TICKS);
+                data.putInt(GOJO_TP_CD, AddonGameRules.nonNegativeInt(player, AddonGameRules.GOJO_TELEPORT_COOLDOWN_TICKS, GOJO_TELEPORT_COOLDOWN_TICKS));
             }
             return true;
         }
@@ -2652,6 +2739,9 @@ public class BlueRedPurpleNukeMod {
 
     public static void handleGojoShiftTapPacket(ServerPlayer player) {
         if (player == null) {
+            return;
+        }
+        if (!AddonGameRules.gojoTeleport(player)) {
             return;
         }
         Level world = player.level();
@@ -2688,6 +2778,9 @@ public class BlueRedPurpleNukeMod {
     }
 
     private static boolean isGojoTeleportTapEligible(ServerPlayer player) {
+        if (!AddonGameRules.gojoTeleport(player)) {
+            return false;
+        }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         double activeTechnique = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
         return (int)Math.round(activeTechnique) == 2
@@ -2697,6 +2790,9 @@ public class BlueRedPurpleNukeMod {
     }
 
     private static boolean tryArmGojoTeleport(ServerPlayer player, ServerLevel serverLevel, CompoundTag data, long now) {
+        if (!AddonGameRules.gojoTeleport(player)) {
+            return false;
+        }
         if (data.getBoolean(GOJO_TP_PENDING)) {
             data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, now + (long)GOJO_TELEPORT_CRUSHER_SUPPRESS_TICKS);
             return true;
@@ -2708,26 +2804,28 @@ public class BlueRedPurpleNukeMod {
             return false;
         }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
-        if (vars.PlayerCursePower < GOJO_TELEPORT_CE_COST) {
+        double ceCost = AddonGameRules.nonNegativeInt(player, AddonGameRules.GOJO_TELEPORT_CE_COST, (int)GOJO_TELEPORT_CE_COST);
+        if (vars.PlayerCursePower < ceCost) {
             return true;
         }
         Vec3 target = BlueRedPurpleNukeMod.findGojoTeleportTarget(serverLevel, player);
         if (target == null) {
             return true;
         }
-        double finalCE = vars.PlayerCursePower - GOJO_TELEPORT_CE_COST;
+        double finalCE = vars.PlayerCursePower - ceCost;
         player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(cap -> {
             cap.PlayerCursePower = finalCE;
             cap.syncPlayerVariables((Entity)player);
         });
         data.putBoolean(GOJO_TP_PENDING, true);
-        data.putLong(GOJO_TP_EXECUTE_TICK, now + (long)GOJO_TELEPORT_DELAY_TICKS);
+        int delayTicks = AddonGameRules.nonNegativeInt(player, AddonGameRules.GOJO_TELEPORT_DELAY_TICKS, GOJO_TELEPORT_DELAY_TICKS);
+        data.putLong(GOJO_TP_EXECUTE_TICK, now + (long)delayTicks);
         data.putDouble(GOJO_TP_TARGET_X, target.x);
         data.putDouble(GOJO_TP_TARGET_Y, target.y);
         data.putDouble(GOJO_TP_TARGET_Z, target.z);
         data.putFloat(GOJO_TP_YAW, player.getYRot());
         data.putFloat(GOJO_TP_PITCH, player.getXRot());
-        data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, now + (long)GOJO_TELEPORT_DELAY_TICKS + (long)GOJO_TELEPORT_CRUSHER_SUPPRESS_TICKS);
+        data.putLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL, now + (long)delayTicks + (long)GOJO_TELEPORT_CRUSHER_SUPPRESS_TICKS);
         BlueRedPurpleNukeMod.resetInfinityCrusher(player);
         BlueRedPurpleNukeMod.spawnGojoTeleportFrame(serverLevel, player, target, player.getYRot(), player.getXRot());
         BlueRedPurpleNukeMod.spawnGojoTeleportCharge(serverLevel, player.position().add(0.0, player.getBbHeight() * 0.5, 0.0), target.add(0.0, player.getBbHeight() * 0.5, 0.0));
@@ -2741,7 +2839,8 @@ public class BlueRedPurpleNukeMod {
             return null;
         }
         look = look.normalize();
-        Vec3 rayEnd = eye.add(look.scale(GOJO_TELEPORT_RANGE));
+        double range = Math.max(1.0D, AddonGameRules.intValue(player, AddonGameRules.GOJO_TELEPORT_RANGE_BLOCKS, (int)GOJO_TELEPORT_RANGE));
+        Vec3 rayEnd = eye.add(look.scale(range));
         BlockHitResult hit = serverLevel.clip(new ClipContext(eye, rayEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, (Entity)player));
         Vec3 desired = rayEnd;
         if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
@@ -2865,6 +2964,10 @@ public class BlueRedPurpleNukeMod {
     // ===== INFINITY CRUSHER =====
     private static void handleInfinityCrusher(ServerPlayer player) {
         double ct;
+        if (!AddonGameRules.infinityCrusher(player)) {
+            BlueRedPurpleNukeMod.resetInfinityCrusher(player);
+            return;
+        }
         if (player.getPersistentData().getLong(GOJO_TP_CRUSHER_SUPPRESS_UNTIL) >= player.serverLevel().getGameTime()) {
             return;
         }
@@ -2891,7 +2994,7 @@ public class BlueRedPurpleNukeMod {
         CompoundTag data = player.getPersistentData();
         int activeTicks = data.getInt("addon_infinity_crusher_ticks") + 1;
         data.putInt("addon_infinity_crusher_ticks", activeTicks);
-        double ceDrain = CRUSHER_BASE_CE_DRAIN + (double)activeTicks * CRUSHER_CE_DRAIN_GROWTH;
+        double ceDrain = AddonGameRules.scaled(player, CRUSHER_BASE_CE_DRAIN + (double)activeTicks * CRUSHER_CE_DRAIN_GROWTH, AddonGameRules.INFINITY_CRUSHER_CE_DRAIN_PERCENT, 100);
         double currentCE = vars.PlayerCursePower;
         if (currentCE < ceDrain) {
             BlueRedPurpleNukeMod.resetInfinityCrusher(player);
@@ -2905,9 +3008,9 @@ public class BlueRedPurpleNukeMod {
             cap.syncPlayerVariables((Entity)player);
         });
         double growthFactor = Math.min(1.0, (double)activeTicks / 200.0);
-        double currentRadius = CRUSHER_MIN_RADIUS + (CRUSHER_MAX_RADIUS - CRUSHER_MIN_RADIUS) * growthFactor;
+        double currentRadius = AddonGameRules.scaled(player, CRUSHER_MIN_RADIUS + (CRUSHER_MAX_RADIUS - CRUSHER_MIN_RADIUS) * growthFactor, AddonGameRules.INFINITY_CRUSHER_RADIUS_PERCENT, 100);
         double effectiveCEDrained = BlueRedPurpleNukeMod.getSoftCappedValue(totalCEDrained, CRUSHER_CE_DAMAGE_SOFT_CAP, CRUSHER_CE_DAMAGE_OVERFLOW_WEIGHT);
-        float wallDamage = (float)((double)CRUSHER_BASE_WALL_DAMAGE + growthFactor * 2.5 + effectiveCEDrained * CRUSHER_CE_DAMAGE_SCALE);
+        float wallDamage = AddonGameRules.scaled(player, (float)((double)CRUSHER_BASE_WALL_DAMAGE + growthFactor * 2.5 + effectiveCEDrained * CRUSHER_CE_DAMAGE_SCALE), AddonGameRules.INFINITY_CRUSHER_DAMAGE_PERCENT, 100);
         Vec3 center = new Vec3(player.getX(), player.getY() + (double)player.getBbHeight() * 0.5, player.getZ());
         Vec3 lookDir = player.getLookAngle().normalize();
         Vec3 auraCenter = center.add(lookDir.scale(currentRadius * 0.5));
@@ -3013,7 +3116,7 @@ public class BlueRedPurpleNukeMod {
             double dot = lookDir.x * toMobNorm.x + lookDir.y * toMobNorm.y + lookDir.z * toMobNorm.z;
             if (dot < CRUSHER_CONE_COS || !isMovingForward) continue;
             mob.getPersistentData().putInt("addon_crusher_contact_ticks", ++contactTicks);
-            if (contactTicks >= CRUSHER_HARDLOCK_THRESHOLD) {
+            if (contactTicks >= AddonGameRules.positiveInt(player, AddonGameRules.INFINITY_CRUSHER_LOCK_THRESHOLD_TICKS, CRUSHER_HARDLOCK_THRESHOLD)) {
                 mob.getPersistentData().putString("addon_crusher_lock_owner", playerUUID);
                 mob.getPersistentData().putDouble("addon_crusher_lock_x", mob.getX());
                 mob.getPersistentData().putDouble("addon_crusher_lock_y", mob.getY());
@@ -3109,6 +3212,9 @@ public class BlueRedPurpleNukeMod {
     // ===== BLUE ORB SYSTEM =====
     private void handleBlueTick(LivingEntity blueEntity) {
         boolean shouldLinger;
+        if (!AddonGameRules.gojoBlue(blueEntity)) {
+            return;
+        }
         if (blueEntity instanceof BlueEntity) {
             BlueEntity be = (BlueEntity)blueEntity;
             try {
@@ -3142,7 +3248,7 @@ public class BlueRedPurpleNukeMod {
                 }
                 BlueRedPurpleNukeMod.applyBlueLingerControl(sl, blueEntity, timer, new Vec3(lx, ly, lz));
             }
-            if (timer >= 200) {
+            if (timer >= AddonGameRules.positiveInt(blueEntity, AddonGameRules.GOJO_BLUE_LINGER_DURATION_TICKS, LINGER_DURATION)) {
                 if (level instanceof ServerLevel) {
                     BlueRedPurpleNukeMod.releaseBlueFullChargeTargets((ServerLevel)level, blueEntity);
                 }
@@ -3160,7 +3266,7 @@ public class BlueRedPurpleNukeMod {
         boolean aiming = false;
         if (circle && cnt6 >= 5.0 && !aimEnded) {
             int aimTicks = blueEntity.getPersistentData().getInt("addon_aim_ticks");
-            if (!this.isOwnerCrouching(blueEntity) || aimTicks >= 90) {
+            if (!this.isOwnerCrouching(blueEntity) || aimTicks >= AddonGameRules.positiveInt(blueEntity, AddonGameRules.GOJO_BLUE_AIM_DURATION_TICKS, BLUE_AIM_DURATION)) {
                 blueEntity.getPersistentData().putBoolean("aim_ended", true);
                 blueEntity.getPersistentData().putBoolean("addon_aim_active", false);
             } else {
@@ -3280,7 +3386,7 @@ public class BlueRedPurpleNukeMod {
         LivingEntity owner = ownerUUID.isEmpty() ? null : BlueRedPurpleNukeMod.resolveOwner(serverLevel, ownerUUID);
         double cnt6 = Math.max(blueEntity.getPersistentData().getDouble("linger_cnt6"), blueEntity.getPersistentData().getDouble("cnt6"));
         double cntFactor = 1.0 + Math.max(cnt6, 0.0) * 0.1;
-        double pullRadius = Math.max(3.5, 2.8 + cnt6 * 0.6);
+        double pullRadius = AddonGameRules.scaled(blueEntity, Math.max(3.5, 2.8 + cnt6 * 0.6), AddonGameRules.GOJO_BLUE_PULL_RADIUS_PERCENT, 100);
         if (timer <= blueEntity.getPersistentData().getInt("linger_damage_ticks")) {
             BlueRedPurpleNukeMod.applyOriginalBlueDamageTick(serverLevel, blueEntity, cnt6, orbPos);
         }
@@ -3292,7 +3398,7 @@ public class BlueRedPurpleNukeMod {
                 continue;
             }
             double falloff = 1.0 - Math.min(1.0, dist / pullRadius);
-            Vec3 pull = delta.normalize().scale((0.18 + falloff * 0.32) * cntFactor);
+            Vec3 pull = delta.normalize().scale(AddonGameRules.scaled(blueEntity, (0.18 + falloff * 0.32) * cntFactor, AddonGameRules.GOJO_BLUE_PULL_STRENGTH_PERCENT, 100));
             target.setDeltaMovement(target.getDeltaMovement().scale(0.35).add(pull));
             target.hurtMarked = true;
             if (dist < 1.4) {
@@ -3314,8 +3420,8 @@ public class BlueRedPurpleNukeMod {
     private static void applyOriginalBlueDamageTick(ServerLevel serverLevel, LivingEntity blueEntity, double cnt6, Vec3 orbPos) {
         double CNT6 = 1.0 + Math.max(cnt6, 0.0) * 0.1;
         CompoundTag data = blueEntity.getPersistentData();
-        data.putDouble("Damage", 13.0 * CNT6);
-        data.putDouble("Range", 4.0 * CNT6);
+        data.putDouble("Damage", AddonGameRules.scaled(blueEntity, 13.0 * CNT6, AddonGameRules.GOJO_BLUE_DAMAGE_PERCENT, 100));
+        data.putDouble("Range", AddonGameRules.scaled(blueEntity, 4.0 * CNT6, AddonGameRules.GOJO_BLUE_PULL_RADIUS_PERCENT, 100));
         data.putDouble("knockback", 0.0);
         RangeAttackProcedure.execute((LevelAccessor)serverLevel, orbPos.x, orbPos.y, orbPos.z, (Entity)blueEntity);
     }
@@ -3446,6 +3552,9 @@ public class BlueRedPurpleNukeMod {
 
     // ===== FULL-CHARGE BLUE VARIANT =====
     public static void handleCrouchFullChargeBlueAim(LivingEntity blueEntity) {
+        if (!AddonGameRules.gojoBlue(blueEntity)) {
+            return;
+        }
         Level level = blueEntity.level();
         if (!(level instanceof ServerLevel)) {
             return;
@@ -3461,8 +3570,8 @@ public class BlueRedPurpleNukeMod {
         }
         double ownerScale = BlueRedPurpleNukeMod.getOwnerRankDamageScale(owner);
         double rankBonus = Math.max(0.0, ownerScale - 1.0);
-        double pullRadius = BLUE_FULL_PULL_RADIUS * (1.0 + rankBonus * 0.35);
-        double pullStrength = BLUE_FULL_PULL_STRENGTH * (1.0 + rankBonus * 0.45);
+        double pullRadius = AddonGameRules.scaled(owner, BLUE_FULL_PULL_RADIUS * (1.0 + rankBonus * 0.35), AddonGameRules.GOJO_BLUE_PULL_RADIUS_PERCENT, 100);
+        double pullStrength = AddonGameRules.scaled(owner, BLUE_FULL_PULL_STRENGTH * (1.0 + rankBonus * 0.45), AddonGameRules.GOJO_BLUE_PULL_STRENGTH_PERCENT, 100);
         Player playerOwner = (Player)owner;
         Vec3 eye = playerOwner.getEyePosition(1.0f);
         Vec3 rawLook = playerOwner.getLookAngle();
@@ -3489,7 +3598,8 @@ public class BlueRedPurpleNukeMod {
         int aimTicks = blueEntity.getPersistentData().getInt("addon_aim_ticks");
         BlueRedPurpleNukeMod.emitCrouchFullChargeBlueOgEffects(serverLevel, blueEntity, newPos, aimTicks);
         BlueRedPurpleNukeMod.pullMobsWithCrouchFullChargeBlue(serverLevel, blueEntity, owner, newPos, look, pullRadius, pullStrength);
-        if (aimTicks > 0 && aimTicks % BLUE_BLOCK_BREAK_INTERVAL == 0) {
+        int blockBreakInterval = AddonGameRules.positiveInt(blueEntity, AddonGameRules.GOJO_BLUE_BLOCK_BREAK_INTERVAL_TICKS, BLUE_BLOCK_BREAK_INTERVAL);
+        if (aimTicks > 0 && aimTicks % blockBreakInterval == 0) {
             BlueRedPurpleNukeMod.applyCrouchFullChargeBlueOgBlockBreak(serverLevel, blueEntity, newPos, aimTicks);
         }
     }
@@ -3806,6 +3916,7 @@ public class BlueRedPurpleNukeMod {
         if (blockRange <= 0.5 || blockDamage <= 0.0) {
             return;
         }
+        blockRange = AddonGameRules.scaled(blueEntity, blockRange, AddonGameRules.GOJO_BLUE_PULL_RADIUS_PERCENT, 100);
         CompoundTag data = blueEntity.getPersistentData();
         boolean hadKnockback = data.contains("knockback");
         double oldKnockback = data.getDouble("knockback");

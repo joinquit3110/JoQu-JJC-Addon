@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionCreateBarrierProcedure;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.Entity;
@@ -77,6 +78,9 @@ public abstract class DomainCreateBarrierFormGuardMixin {
             return;
         }
         if (world.isClientSide()) {
+            return;
+        }
+        if (!AddonGameRules.domainForms(entity)) {
             return;
         }
         CompoundTag nbt = entity.getPersistentData();

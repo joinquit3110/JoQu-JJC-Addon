@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.procedures.AuthenticMutualLoveActiveProcedure;
@@ -35,7 +36,7 @@ public class AuthenticMutualLoveActiveMixin {
         }
         ServerPlayer player = (ServerPlayer)entity;
         LivingEntity living = (LivingEntity)entity;
-        if (!YutaCopyStore.isActiveYuta(player)) {
+        if (!AddonGameRules.yutaCopy(player) || !YutaCopyStore.isActiveYuta(player)) {
             return;
         }
         jjkbrp$clearAuthenticMutualLoveContext();
@@ -73,7 +74,7 @@ public class AuthenticMutualLoveActiveMixin {
     private static double jjkbrp$scaleAuthenticMutualLoveSwordCount(double originalCount) {
         LevelAccessor world = jjkbrp$activeWorld.get();
         Entity entity = jjkbrp$activeEntity.get();
-        if (world == null || !(entity instanceof LivingEntity) || DomainAddonUtils.isIncompleteDomainState((LivingEntity)entity)) {
+        if (world == null || !(entity instanceof LivingEntity) || !AddonGameRules.yutaDomainSword(entity) || !AddonGameRules.domainRadiusRules(world) || DomainAddonUtils.isIncompleteDomainState((LivingEntity)entity)) {
             return originalCount;
         }
         CompoundTag nbt = entity.getPersistentData();

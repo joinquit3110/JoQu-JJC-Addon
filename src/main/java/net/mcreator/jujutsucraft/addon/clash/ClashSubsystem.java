@@ -3,6 +3,7 @@ package net.mcreator.jujutsucraft.addon.clash;
 import java.util.ArrayList;
 import java.util.Objects;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.clash.detect.ClashDetector;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashSession;
 import net.mcreator.jujutsucraft.addon.clash.net.ClashSyncNetwork;
@@ -75,6 +76,10 @@ public final class ClashSubsystem {
 
     public void onServerTickEnd(ServerLevel level, long serverTick) {
         Objects.requireNonNull(level, "level");
+        if (!AddonGameRules.domainClash(level)) {
+            resolver.cancelSessionsForLevel(level);
+            return;
+        }
         detector.tick(level, serverTick);
         resolver.tickSessions(level, serverTick);
     }
@@ -101,6 +106,10 @@ public final class ClashSubsystem {
 
     public void onLivingDeath(LivingEntity entity) {
         if (entity == null || !(entity.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (!AddonGameRules.domainClash(level)) {
+            resolver.cancelSessionsForLevel(level);
             return;
         }
         for (ClashSession session : new ArrayList<>(registry.sessionsContaining(entity.getUUID()))) {

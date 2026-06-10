@@ -26,14 +26,18 @@ public final class ClientClashCache {
             return;
         }
         long normalizedTick = resolveUsableClientTick(clientTick);
-        CachedSnapshot previous = this.snapshots.get(packet.sessionId);
+        if (packet.outcome == ClashOutcome.CANCELLED) {
+            this.snapshots.remove(packet.sessionId);
+            if (this.banner != null && this.banner.sessionId.equals(packet.sessionId)) {
+                this.banner = null;
+            }
+            return;
+        }
         this.snapshots.put(packet.sessionId, new CachedSnapshot(packet, normalizedTick));
         ClashOutcome outcome = packet.outcome;
         if (outcome == ClashOutcome.WINNER_A || outcome == ClashOutcome.WINNER_B || outcome == ClashOutcome.TIE) {
             boolean localWon = outcome == ClashOutcome.TIE || outcome == ClashOutcome.WINNER_A;
             this.banner = new OutcomeBanner(packet.sessionId, outcome, localWon, normalizedTick);
-        } else if (outcome == ClashOutcome.CANCELLED && this.banner != null && this.banner.sessionId.equals(packet.sessionId)) {
-            this.banner = null;
         }
     }
 

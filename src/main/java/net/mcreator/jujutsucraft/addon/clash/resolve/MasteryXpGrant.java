@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import javax.annotation.Nullable;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.clash.model.ClashOutcome;
@@ -136,11 +137,20 @@ public final class MasteryXpGrant {
             // Req 14.5: already credited for this (session, participant) pair.
             return;
         }
+        if (!AddonGameRules.domainClashXp(player.level())) {
+            granted.add(key);
+            return;
+        }
+        double scaledXp = xp * AddonGameRules.percent(player.level(), AddonGameRules.DOMAIN_CLASH_XP_PERCENT, 100);
+        if (scaledXp <= 0.0D) {
+            granted.add(key);
+            return;
+        }
         DomainMasteryData data = player
             .getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null)
             .resolve()
             .orElse(null);
-        tryGrantXp(session.sessionId, player.getUUID(), data, xp);
+        tryGrantXp(session.sessionId, player.getUUID(), data, scaledXp);
     }
 
     /**

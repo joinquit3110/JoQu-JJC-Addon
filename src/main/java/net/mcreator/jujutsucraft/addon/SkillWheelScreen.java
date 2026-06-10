@@ -25,6 +25,8 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
+import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.LevelAccessor;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
@@ -133,6 +135,9 @@ extends Screen {
         this.openTick = mc.level != null ? mc.level.getGameTime() : 0L;
         this.selectionConfirmed = false;
         this.closing = false;
+        if (this.soundsEnabled()) {
+            this.playWheelSound(SoundEvents.ENCHANTMENT_TABLE_USE, 0.09f, 1.18f);
+        }
     }
 
     /**
@@ -148,9 +153,11 @@ extends Screen {
      */
     public void tick() {
         super.tick();
-        this.pulseTime += 0.15f;
+        if (this.animationsEnabled()) {
+            this.pulseTime += 0.15f * this.animationSpeedScale();
+        }
         if (this.confirmFlash > 0.0f) {
-            this.confirmFlash -= 0.05f;
+            this.confirmFlash = Math.max(0.0f, this.confirmFlash - 0.05f * Math.max(0.2f, this.animationSpeedScale()));
         }
     }
 
@@ -175,7 +182,9 @@ extends Screen {
             this.hoveredIndex = -1;
             this.lastHoveredTickIndex = -1;
             this.selectedIndex = -1;
-            Minecraft.getInstance().getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.BOOK_PAGE_TURN, (float)0.15f, (float)(0.95f + (float)this.currentPage * 0.04f)));
+            if (this.soundsEnabled()) {
+                this.playWheelSound(SoundEvents.BOOK_PAGE_TURN, 0.15f, 0.95f + (float)this.currentPage * 0.04f);
+            }
         }
         return true;
     }
@@ -189,8 +198,10 @@ extends Screen {
      */
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         float elapsed = System.currentTimeMillis() - this.openTime;
-        this.animProgress = Math.min(elapsed / 250.0f, 1.0f);
-        float ease = this.easeOutBack(this.animProgress);
+        LevelAccessor world = this.clientWorld();
+        boolean animations = this.effectsEnabled();
+        this.animProgress = animations ? Math.min(elapsed * this.animationSpeedScale() / 250.0f, 1.0f) : 1.0f;
+        float ease = animations ? this.easeOutBack(this.animProgress) : 1.0f;
         int cx = this.width / 2;
         int cy = this.height / 2;
         List<ModNetworking.WheelTechniqueEntry> techniques = this.currentTechniques();
@@ -216,19 +227,23 @@ extends Screen {
             this.hoveredIndex = -1;
         }
         if (this.hoveredIndex != prevHovered) {
-            if (this.hoveredIndex != -1 && !this.closing) {
-                Minecraft.getInstance().getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.BOOK_PAGE_TURN, (float)0.4f, (float)(1.0f + (float)this.hoveredIndex * 0.015f)));
+            if (this.hoveredIndex != -1 && !this.closing && this.soundsEnabled()) {
+                this.playWheelSound(SoundEvents.BOOK_PAGE_TURN, 0.4f, 1.0f + (float)this.hoveredIndex * 0.015f);
             }
             this.lastHoveredTickIndex = this.hoveredIndex;
         }
-        graphics.fill(0, 0, this.width, this.height, 0x55000000);
+        if (this.effectsEnabled()) {
+            graphics.fill(0, 0, this.width, this.height, 0x55000000);
+        }
         this.drawWheel(graphics, cx, cy, ease, techniques);
         this.drawLabels(graphics, cx, cy, ease, techniques);
         this.drawCenterInfo(graphics, cx, cy, ease, techniques);
         if (this.isMultiPage()) {
             this.drawPageIndicator(graphics, cx, cy, ease);
         }
-        this.drawConfirmFlash(graphics, cx, cy);
+        if (this.effectsEnabled()) {
+            this.drawConfirmFlash(graphics, cx, cy);
+        }
     }
 
     /**
@@ -244,6 +259,7 @@ extends Screen {
             return;
         }
         int count = techniques.size();
+        boolean showCooldownOverlay = this.effectsEnabled();
         float sliceAngle = 360.0f / (float)count;
         float currentRadius = 90.0f * ease;
         float currentInner = 35.0f * ease;
@@ -261,23 +277,23 @@ extends Screen {
             boolean isSelected = i == this.selectedIndex;
             float startAngle = -90.0f + (float)i * sliceAngle;
             float endAngle = startAngle + sliceAngle;
-            float hoverPulse = isHovered ? (float)(Math.sin(this.pulseTime * 3.0f) * 2.0 + 12.0) : 0.0f;
+            float hoverPulse = isHovered ? (this.animationsEnabled() ? (float)(Math.sin(this.pulseTime * 3.0f) * 2.0 + 12.0) : 10.0f) : 0.0f;
             float outerR = currentRadius + hoverPulse;
             int baseColor = tech.color();
             int r = baseColor >> 16 & 0xFF;
             int g = baseColor >> 8 & 0xFF;
             int b = baseColor & 0xFF;
-            if (cooldownBlocked) {
+            if (cooldownBlocked && showCooldownOverlay) {
                 int avg = (r + g + b) / 3;
                 r = (int)((double)avg * 0.22 + (double)r * 0.12);
                 g = (int)((double)avg * 0.22 + (double)g * 0.12);
                 b = (int)((double)avg * 0.22 + (double)b * 0.12);
             }
-            int alpha = cooldownBlocked ? 170 : (isHovered ? 200 : (isSelected ? 160 : 90));
+            int alpha = cooldownBlocked && showCooldownOverlay ? 170 : (isHovered ? 200 : (isSelected ? 160 : 90));
             alpha = (int)((float)alpha * ease);
             this.drawArcSlice(pose, cx, cy, currentInner, outerR, startAngle, endAngle, r, g, b, alpha);
             // Cooldown overlays darken the unavailable slice and draw a sweep arc so the player can judge remaining lockout at a glance.
-            if (cooldownBlocked && skillCooldownMax > 0) {
+            if (cooldownBlocked && showCooldownOverlay && skillCooldownMax > 0) {
                 float cdSecs;
                 float cooldownRatio = Math.max(0.0f, Math.min(1.0f, (float)skillCooldown / (float)skillCooldownMax));
                 float sweepEnd = startAngle + sliceAngle * cooldownRatio;
@@ -332,6 +348,7 @@ extends Screen {
             return;
         }
         int count = techniques.size();
+        boolean showCooldownOverlay = this.effectsEnabled();
         float sliceAngle = 360.0f / (float)count;
         float iconR = 65.0f * ease;
         Font font = Minecraft.getInstance().font;
@@ -349,7 +366,7 @@ extends Screen {
             if (((String)name).length() > 14) {
                 name = ((String)name).substring(0, 12) + "..";
             }
-            int textColor = cooldownBlocked ? -7631989 : (isHovered ? -1 : (isSelected ? tech.color() | 0xFF000000 : -5584684));
+            int textColor = cooldownBlocked && showCooldownOverlay ? -7631989 : (isHovered ? -1 : (isSelected ? tech.color() | 0xFF000000 : -5584684));
             int textAlpha = (int)((float)(textColor >> 24 & 0xFF) * ease);
             textColor = textAlpha << 24 | textColor & 0xFFFFFF;
             PoseStack pose = graphics.pose();
@@ -359,7 +376,7 @@ extends Screen {
             pose.scale(scale, scale, 1.0f);
             int textWidth = font.width((String)name);
             graphics.drawString(font, (String)name, -textWidth / 2, -4, textColor, true);
-            if (cooldownBlocked) {
+            if (cooldownBlocked && showCooldownOverlay) {
                 int cd = this.getEntryCooldownRemaining(tech);
                 float secs = (float)cd / 20.0f;
                 String timerStr = secs >= 10.0f ? String.format("%.0fs", Float.valueOf(secs)) : String.format("%.1fs", Float.valueOf(secs));
@@ -510,6 +527,42 @@ extends Screen {
         return this.getEntryCooldownRemaining(tech) > 0;
     }
 
+    private LevelAccessor clientWorld() {
+        return Minecraft.getInstance().level;
+    }
+
+    private boolean soundsEnabled() {
+        return AddonGameRules.clientEnabled(this.clientWorld(), AddonGameRules.SKILL_WHEEL_ENABLED, AddonGameRules.SKILL_WHEEL_SOUNDS_ENABLED);
+    }
+
+    private boolean effectsEnabled() {
+        return AddonGameRules.clientEnabled(this.clientWorld(), AddonGameRules.SKILL_WHEEL_ENABLED, AddonGameRules.SKILL_WHEEL_VISUAL_EFFECTS_ENABLED);
+    }
+
+    private boolean animationsEnabled() {
+        return this.effectsEnabled();
+    }
+
+    private float animationSpeedScale() {
+        return Math.max(1, AddonGameRules.clientIntValue(this.clientWorld(), AddonGameRules.SKILL_WHEEL_ANIMATION_SPEED_PERCENT, 100)) / 100.0f;
+    }
+
+    private float percentScale(GameRules.Key<GameRules.IntegerValue> rule, int fallbackPercent) {
+        return Math.max(0, AddonGameRules.clientIntValue(this.clientWorld(), rule, fallbackPercent)) / 100.0f;
+    }
+
+    private int particleCount(int baseCount) {
+        return Math.max(0, Math.round((float)baseCount * this.percentScale(AddonGameRules.SKILL_WHEEL_PARTICLE_COUNT_PERCENT, 100)));
+    }
+
+    private float soundVolume(float baseVolume) {
+        return baseVolume * this.percentScale(AddonGameRules.SKILL_WHEEL_SOUND_VOLUME_PERCENT, 100);
+    }
+
+    private void playWheelSound(SoundEvent event, float baseVolume, float pitch) {
+        Minecraft.getInstance().getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)event, (float)this.soundVolume(baseVolume), (float)pitch));
+    }
+
     /**
      * Draws arc slice as part of the addon presentation layer.
      * @param pose pose used by this method.
@@ -657,7 +710,11 @@ extends Screen {
      * @param cy screen or world coordinate used by this calculation.
      */
     private void drawConfirmFlash(GuiGraphics graphics, int cx, int cy) {
-        if (this.confirmFlash <= 0.0f) {
+        if (this.confirmFlash <= 0.0f || !this.effectsEnabled()) {
+            return;
+        }
+        int alpha = Math.max(0, Math.min(255, (int)(this.confirmFlash * 100.0f * this.animProgress)));
+        if (alpha <= 0) {
             return;
         }
         PoseStack pose = graphics.pose();
@@ -669,7 +726,6 @@ extends Screen {
         BufferBuilder buf = t.getBuilder();
         buf.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
         Matrix4f mat = pose.last().pose();
-        int alpha = (int)(this.confirmFlash * 100.0f * this.animProgress);
         buf.vertex(mat, 0.0f, 0.0f, 0.0f).color(255, 240, 200, alpha).endVertex();
         buf.vertex(mat, (float)this.width, 0.0f, 0.0f).color(255, 240, 200, alpha).endVertex();
         buf.vertex(mat, (float)this.width, (float)this.height, 0.0f).color(255, 240, 200, alpha).endVertex();
@@ -689,28 +745,29 @@ extends Screen {
         float px;
         int i;
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) {
+        if (mc.player == null || mc.level == null || !this.effectsEnabled()) {
             return;
         }
         int color = entry.color();
         float r = (float)(color >> 16 & 0xFF) / 255.0f;
         float g = (float)(color >> 8 & 0xFF) / 255.0f;
         float b = (float)(color & 0xFF) / 255.0f;
-        for (i = 0; i < 24; ++i) {
-            float angle = (float)((double)i * Math.PI * 2.0 / 24.0);
+        int dustCount = this.particleCount(24);
+        for (i = 0; i < dustCount; ++i) {
+            float angle = (float)((double)i * Math.PI * 2.0 / (double)Math.max(1, dustCount));
             float speed = 0.04f + this.rng.nextFloat() * 0.06f;
             float px2 = (float)mc.player.getX() + (float)Math.cos(angle) * 0.5f;
             float py2 = (float)mc.player.getY() + mc.player.getEyeHeight() * 0.5f;
             float pz2 = (float)mc.player.getZ() + (float)Math.sin(angle) * 0.5f;
             mc.level.addParticle((ParticleOptions)new DustParticleOptions(new Vector3f(r, g, b), 1.0f), (double)px2, (double)py2, (double)pz2, (double)((float)Math.cos(angle) * speed), (double)(this.rng.nextFloat() * 0.04f), (double)((float)Math.sin(angle) * speed));
         }
-        for (i = 0; i < 8; ++i) {
+        for (i = 0; i < this.particleCount(8); ++i) {
             px = (float)mc.player.getX() + (this.rng.nextFloat() - 0.5f) * 0.6f;
             py = (float)mc.player.getY() + mc.player.getEyeHeight() * 0.5f;
             pz = (float)mc.player.getZ() + (this.rng.nextFloat() - 0.5f) * 0.6f;
             mc.level.addParticle((ParticleOptions)ParticleTypes.ENCHANT, (double)px, (double)py, (double)pz, 0.0, (double)0.04f, 0.0);
         }
-        for (i = 0; i < 6; ++i) {
+        for (i = 0; i < this.particleCount(6); ++i) {
             px = (float)mc.player.getX() + (this.rng.nextFloat() - 0.5f) * 0.3f;
             py = (float)mc.player.getY() + mc.player.getEyeHeight() * 0.5f + this.rng.nextFloat() * 0.3f;
             pz = (float)mc.player.getZ() + (this.rng.nextFloat() - 0.5f) * 0.3f;
@@ -723,17 +780,19 @@ extends Screen {
      * @param entry entry used by this method.
      */
     private void playConfirmSound(ModNetworking.WheelTechniqueEntry entry) {
-        Minecraft mc = Minecraft.getInstance();
-        if (this.isSpiritEntry(entry)) {
-            mc.getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.WARDEN_SONIC_BOOM, (float)0.15f, (float)1.25f));
-        } else if (entry.physical()) {
-            mc.getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.CHAIN_PLACE, (float)0.18f, (float)1.45f));
-        } else if (entry.passive()) {
-            mc.getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.BEACON_ACTIVATE, (float)0.15f, (float)1.55f));
-        } else {
-            mc.getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.ENCHANTMENT_TABLE_USE, (float)0.15f, (float)1.3f));
+        if (!this.soundsEnabled()) {
+            return;
         }
-        mc.getSoundManager().play((SoundInstance)SimpleSoundInstance.forUI((SoundEvent)SoundEvents.AMETHYST_BLOCK_CHIME, (float)0.18f, (float)1.5f));
+        if (this.isSpiritEntry(entry)) {
+            this.playWheelSound(SoundEvents.WARDEN_SONIC_BOOM, 0.15f, 1.25f);
+        } else if (entry.physical()) {
+            this.playWheelSound(SoundEvents.CHAIN_PLACE, 0.18f, 1.45f);
+        } else if (entry.passive()) {
+            this.playWheelSound(SoundEvents.BEACON_ACTIVATE, 0.15f, 1.55f);
+        } else {
+            this.playWheelSound(SoundEvents.ENCHANTMENT_TABLE_USE, 0.15f, 1.3f);
+        }
+        this.playWheelSound(SoundEvents.AMETHYST_BLOCK_CHIME, 0.18f, 1.5f);
     }
 
     /**
@@ -766,7 +825,7 @@ extends Screen {
             this.onClose();
             return;
         }
-        this.confirmFlash = 1.0f;
+        this.confirmFlash = this.effectsEnabled() ? 1.0f : 0.0f;
         this.spawnConfirmParticles(tech);
         this.playConfirmSound(tech);
         if (this.isYutaCopyEntry(tech)) {

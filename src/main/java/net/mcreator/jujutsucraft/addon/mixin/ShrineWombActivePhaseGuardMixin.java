@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.Entity;
@@ -123,6 +124,9 @@ public abstract class ShrineWombActivePhaseGuardMixin {
     private static void jjkbrp$alignActivePhaseTriggerAfterCreateBarrier(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         JJKBRP$savedCnt1.remove();
         if (world.isClientSide() || entity == null) {
+            return;
+        }
+        if (!AddonGameRules.domainRadiusRules(world)) {
             return;
         }
         CompoundTag nbt = entity.getPersistentData();

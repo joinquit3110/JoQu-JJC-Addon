@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainRadiusUtils;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionOnEffectActiveTickProcedure;
@@ -38,6 +39,9 @@ public class DomainActiveTickRadiusMixin {
     private static void jjkbrp$scaleRadiusForTick(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         double radiusMul;
         if (world.isClientSide()) {
+            return;
+        }
+        if (!AddonGameRules.domainRadiusRules(world)) {
             return;
         }
         // Phase 1 NPC parity: accept any LivingEntity, not just Player.

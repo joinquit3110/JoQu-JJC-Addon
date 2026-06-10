@@ -1,5 +1,24 @@
 {
   "key.categories.jjkblueredpurple": "JoQu's JJC Addon",
   "key.jjkblueredpurple.skill_wheel": "Open Skill Wheel",
-  "key.jjkblueredpurple.domain_mastery": "Open Domain Mastery"
+  "key.jjkblueredpurple.domain_mastery": "Open Domain Mastery",
+  "key.jjkblueredpurple.addon_gamerules": "Open Addon Gamerules",
+  "jujutsucraft.domain.prop.ce_drain": "CE Drain",
+  "jujutsucraft.domain.prop.ce_drain.desc": "Drains cursed energy from enemy players inside your active domain radius every 0.5 seconds. Higher levels increase CE drained per tick window.",
+  "jujutsucraft.domain.prop.bf_chance": "Black Flash Chance",
+  "jujutsucraft.domain.prop.bf_chance.desc": "Raises your addon Black Flash chance while Domain Mastery effects are active. The runtime bonus is stored as a domain Black Flash bonus on the caster.",
+  "jujutsucraft.domain.prop.rct_heal": "RCT Heal",
+  "jujutsucraft.domain.prop.rct_heal.desc": "Heals the domain owner once per second while alive and below max health. Higher levels increase HP restored per second.",
+  "jujutsucraft.domain.prop.blind": "Blind",
+  "jujutsucraft.domain.prop.blind.desc": "Applies Blindness to valid enemies inside the active domain radius. The effect refreshes once per second and scales with invested level.",
+  "jujutsucraft.domain.prop.slow": "Slow",
+  "jujutsucraft.domain.prop.slow.desc": "Applies Movement Slowdown to valid enemies inside the active domain radius. The effect refreshes once per second and scales with invested level.",
+  "jujutsucraft.domain.prop.duration": "Duration",
+  "jujutsucraft.domain.prop.duration.desc": "Extends domain duration by 5 seconds per level. Negative Modify can shorten duration and grant extra property points.",
+  "jujutsucraft.domain.prop.radius": "Radius",
+  "jujutsucraft.domain.prop.radius.desc": "Increases the effective domain radius by 12 percent per level for addon-scaled domain checks, startup radius, active range, and clash power.",
+  "jujutsucraft.domain.prop.barrier_power": "Barrier Power",
+  "jujutsucraft.domain.prop.barrier_power.desc": "Improves barrier power and raw clash strength. It also contributes to runtime barrier scaling; Negative Modify weakens this for extra points.",
+  "jujutsucraft.domain.prop.barrier_ref": "Barrier Refinement",
+  "jujutsucraft.domain.prop.barrier_ref.desc": "Improves barrier refinement against open domains and domain clashes. Negative Modify reduces refinement for glass-cannon builds."
 }

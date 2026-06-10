@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import net.mcreator.jujutsucraft.addon.BlueRedPurpleNukeMod;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.RedEntity;
 import net.mcreator.jujutsucraft.procedures.AIRedProcedure;
@@ -34,6 +35,10 @@ public class RedEntityMixin {
             return;
         }
         LivingEntity livingRed = (LivingEntity)entity;
+        if (!AddonGameRules.gojoRed(livingRed)) {
+            AIRedProcedure.execute((LevelAccessor)world, (Entity)entity);
+            return;
+        }
         // Resolve the Red orb owner up front because addon override rules depend on the caster's current domain state.
         LivingEntity owner = DomainAddonUtils.resolveOwnerEntity(world, (Entity)livingRed);
         boolean ownerOpen = owner != null && DomainAddonUtils.isOpenDomainState(owner);
@@ -61,6 +66,9 @@ public class RedEntityMixin {
     @Unique
     private static boolean jjkblueredpurple$shouldUseAddonOverride(LivingEntity redEntity, LivingEntity owner) {
         if (!(redEntity instanceof RedEntity)) {
+            return false;
+        }
+        if (!AddonGameRules.gojoRed(redEntity)) {
             return false;
         }
         RedEntity re = (RedEntity)redEntity;

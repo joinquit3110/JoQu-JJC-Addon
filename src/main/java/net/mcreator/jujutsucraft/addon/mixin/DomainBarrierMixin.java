@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.util.Objects;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionBattleProcedure;
@@ -49,6 +50,9 @@ public abstract class DomainBarrierMixin {
         if (stale != null) {
             JJKBRP$currentCaster.remove();
         }
+        if (!AddonGameRules.domainBarrierFixes(world)) {
+            return;
+        }
         JJKBRP$currentCaster.set(entity);
     }
 
@@ -59,6 +63,10 @@ public abstract class DomainBarrierMixin {
 
     @Redirect(method={"execute"}, at=@At(value="INVOKE", target="Lnet/mcreator/jujutsucraft/procedures/DomainExpansionBattleProcedure;placeBlockSafe(Lnet/minecraft/world/level/LevelAccessor;Lnet/minecraft/core/BlockPos;Ljava/lang/String;)V", remap=false), remap=false)
     private static void jjkbrp$redirectPlaceBlock(LevelAccessor world, BlockPos pos, String blockName) {
+        if (!AddonGameRules.domainBarrierFixes(world)) {
+            DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
+            return;
+        }
         Entity caster = JJKBRP$currentCaster.get();
         if (!(caster instanceof LivingEntity)) {
             DomainBarrierMixin.placeBlockSafe(world, pos, blockName);
@@ -88,7 +96,7 @@ public abstract class DomainBarrierMixin {
 
     @Unique
     private static String jjkbrp$resolveRadiusAwareSpecialBlock(LevelAccessor world, BlockPos pos, String originalBlock, LivingEntity caster) {
-        if (world.isClientSide() || caster == null || originalBlock == null || originalBlock.isEmpty()) {
+        if (world.isClientSide() || caster == null || originalBlock == null || originalBlock.isEmpty() || !AddonGameRules.domainRadiusRules(world)) {
             return originalBlock;
         }
         CompoundTag nbt = caster.getPersistentData();

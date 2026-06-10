@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.entity.EntityItemEntity;
@@ -26,7 +27,7 @@ public class AuthenticMutualLoveProcedureMixin {
         if (!(entity instanceof ServerPlayer player) || !(entity instanceof LivingEntity living)) {
             return;
         }
-        if (!YutaCopyStore.isActiveYuta(player) || !DomainAddonUtils.isIncompleteDomainState(living)) {
+        if (!AddonGameRules.yutaDomainSword(player) || !YutaCopyStore.isActiveYuta(player) || !DomainAddonUtils.isIncompleteDomainState(living)) {
             return;
         }
         double centerX = entity.getPersistentData().getDouble("x_pos_doma");

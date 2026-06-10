@@ -32,8 +32,10 @@ import net.minecraftforge.fml.common.Mod;
 public class ClientEvents {
     private static KeyMapping SKILL_WHEEL_KEY;
     private static KeyMapping DOMAIN_MASTERY_KEY;
+    private static KeyMapping ADDON_GAMERULES_KEY;
     private static boolean wasKeyDown;
     private static boolean wasDMKeyDown;
+    private static boolean wasGameRulesKeyDown;
     private static boolean wasSneakDown;
 
     @SubscribeEvent
@@ -100,6 +102,7 @@ public class ClientEvents {
         if (mc.screen != null) {
             wasKeyDown = ClientEvents.isWheelKeyDown();
             wasDMKeyDown = ClientEvents.isDomainMasteryKeyDown();
+            wasGameRulesKeyDown = ClientEvents.isAddonGameRulesKeyDown();
             return;
         }
         boolean isDown = ClientEvents.isWheelKeyDown();
@@ -112,6 +115,11 @@ public class ClientEvents {
             ClientEvents.openDomainMastery(mc);
         }
         wasDMKeyDown = isDMDown;
+        boolean isGameRulesDown = ClientEvents.isAddonGameRulesKeyDown();
+        if (isGameRulesDown && !wasGameRulesKeyDown) {
+            ClientEvents.openAddonGameRules(mc);
+        }
+        wasGameRulesKeyDown = isGameRulesDown;
     }
 
     private static void openWheel(Minecraft mc) {
@@ -119,7 +127,7 @@ public class ClientEvents {
         if (player == null || mc.screen != null) {
             return;
         }
-        if (mc.screen instanceof SkillWheelScreen || mc.screen instanceof DomainMasteryScreen) {
+        if (mc.screen instanceof SkillWheelScreen || mc.screen instanceof DomainMasteryScreen || mc.screen instanceof AddonGameRulesScreen) {
             return;
         }
         ModNetworking.CHANNEL.sendToServer(new ModNetworking.RequestWheelPacket());
@@ -129,10 +137,20 @@ public class ClientEvents {
         if (mc.screen != null) {
             return;
         }
-        if (mc.screen instanceof DomainMasteryScreen || mc.screen instanceof SkillWheelScreen) {
+        if (mc.screen instanceof DomainMasteryScreen || mc.screen instanceof SkillWheelScreen || mc.screen instanceof AddonGameRulesScreen) {
             return;
         }
         ModNetworking.CHANNEL.sendToServer(new ModNetworking.DomainMasteryOpenPacket());
+    }
+
+    private static void openAddonGameRules(Minecraft mc) {
+        if (mc.screen != null) {
+            return;
+        }
+        if (mc.screen instanceof AddonGameRulesScreen || mc.screen instanceof DomainMasteryScreen || mc.screen instanceof SkillWheelScreen) {
+            return;
+        }
+        ModNetworking.CHANNEL.sendToServer(new ModNetworking.RequestAddonGameRulesPacket());
     }
 
     private static boolean isWheelKeyDown() {
@@ -168,6 +186,19 @@ public class ClientEvents {
         return InputConstants.isKeyDown(window, key.getValue());
     }
 
+    private static boolean isAddonGameRulesKeyDown() {
+        if (ADDON_GAMERULES_KEY == null || !ADDON_GAMERULES_KEY.getKeyConflictContext().isActive()) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getWindow() == null) {
+            return false;
+        }
+        long window = mc.getWindow().getWindow();
+        InputConstants.Key key = ADDON_GAMERULES_KEY.getKey();
+        return InputConstants.isKeyDown(window, key.getValue());
+    }
+
     @Mod.EventBusSubscriber(modid = "jjkblueredpurple", value = {Dist.CLIENT}, bus = Mod.EventBusSubscriber.Bus.MOD)
     public static class ModBusEvents {
         @SubscribeEvent
@@ -177,6 +208,8 @@ public class ClientEvents {
             event.register(SKILL_WHEEL_KEY);
             DOMAIN_MASTERY_KEY = new KeyMapping("key.jjkblueredpurple.domain_mastery", (IKeyConflictContext) KeyConflictContext.IN_GAME, InputConstants.Type.KEYSYM, 44, "key.categories.jjkblueredpurple");
             event.register(DOMAIN_MASTERY_KEY);
+            ADDON_GAMERULES_KEY = new KeyMapping("key.jjkblueredpurple.addon_gamerules", (IKeyConflictContext) KeyConflictContext.IN_GAME, InputConstants.Type.KEYSYM, 46, "key.categories.jjkblueredpurple");
+            event.register(ADDON_GAMERULES_KEY);
         }
 
         @SubscribeEvent

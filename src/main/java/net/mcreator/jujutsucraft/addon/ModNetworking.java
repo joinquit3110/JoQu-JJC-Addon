@@ -90,6 +90,10 @@ public class ModNetworking {
         CHANNEL.registerMessage(packetId++, DomainMasterySyncPacket.class, DomainMasterySyncPacket::encode, DomainMasterySyncPacket::decode, DomainMasterySyncPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
         CHANNEL.registerMessage(packetId++, GojoTeleportGhostPacket.class, GojoTeleportGhostPacket::encode, GojoTeleportGhostPacket::decode, GojoTeleportGhostPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
         CHANNEL.registerMessage(packetId++, DomainClashHudSnapshotPacket.class, DomainClashHudSnapshotPacket::encode, DomainClashHudSnapshotPacket::decode, DomainClashHudSnapshotPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, RequestAddonGameRulesPacket.class, RequestAddonGameRulesPacket::encode, RequestAddonGameRulesPacket::decode, RequestAddonGameRulesPacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
+        CHANNEL.registerMessage(packetId++, OpenAddonGameRulesPacket.class, OpenAddonGameRulesPacket::encode, OpenAddonGameRulesPacket::decode, OpenAddonGameRulesPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, SyncAddonGameRulesPacket.class, SyncAddonGameRulesPacket::encode, SyncAddonGameRulesPacket::decode, SyncAddonGameRulesPacket::handle, Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++, SetAddonGameRulePacket.class, SetAddonGameRulePacket::encode, SetAddonGameRulePacket::decode, SetAddonGameRulePacket::handle, Optional.of(NetworkDirection.PLAY_TO_SERVER));
     }
 
     // ===== TECHNIQUE SELECTION HELPERS =====
@@ -104,6 +108,9 @@ public class ModNetworking {
         if (player == null || charId != 1 || Math.round(selectId) != 7L) {
             return false;
         }
+        if (!AddonGameRules.enabled(player, AddonGameRules.SUKUNA_FUGA_REWARD_ENABLED)) {
+            return false;
+        }
         if (ModNetworking.hasSukunaFugaDustReward(player, charId, selectId)) {
             return true;
         }
@@ -112,6 +119,9 @@ public class ModNetworking {
 
     public static boolean canUseActiveSukunaIncompleteFugaOverride(ServerPlayer player, int charId, double selectId) {
         if (player == null || charId != 1 || Math.round(selectId) != 7L) {
+            return false;
+        }
+        if (!AddonGameRules.enabled(player, AddonGameRules.SUKUNA_FUGA_COOLDOWN_BYPASS_ENABLED)) {
             return false;
         }
         CompoundTag data = player.getPersistentData();
@@ -129,12 +139,18 @@ public class ModNetworking {
         if (player == null || charId != 1 || Math.round(selectId) != 7L) {
             return false;
         }
+        if (!AddonGameRules.sukunaFugaReward(player)) {
+            return false;
+        }
         CompoundTag data = player.getPersistentData();
         return data.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full");
     }
 
     public static boolean applySukunaFugaDustReward(ServerPlayer player, Entity flameArrow) {
         if (player == null || flameArrow == null) {
+            return false;
+        }
+        if (!AddonGameRules.sukunaFugaReward(player)) {
             return false;
         }
         CompoundTag ownerData = player.getPersistentData();
@@ -366,8 +382,11 @@ public class ModNetworking {
         if (player == null) {
             return;
         }
+        if (!AddonGameRules.sukunaFugaReward(player)) {
+            return;
+        }
         CompoundTag data = player.getPersistentData();
-        data.putDouble("dust_amount", DustOverlayFormat.DUST_MAX);
+        data.putDouble("dust_amount", DustOverlayFormat.DUST_MAX * AddonGameRules.percent(player, AddonGameRules.SUKUNA_FUGA_DUST_REWARD_PERCENT, 100));
         ModNetworking.syncDustOverlayFromAmount(player);
     }
 
@@ -429,6 +448,13 @@ public class ModNetworking {
      * @param player player instance involved in this operation.
      */
     public static void sendCooldownSync(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        if (!AddonGameRules.enabled(player, AddonGameRules.HUD_OVERLAYS_ENABLED, AddonGameRules.COOLDOWN_HUD_ENABLED)) {
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new CooldownSyncPacket(0, 0, 0, 0));
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         int techRemaining = ModNetworking.getTechniqueCooldownTicks(player);
         int combatRemaining = ModNetworking.getCombatCooldownTicks(player);
@@ -895,7 +921,7 @@ public class ModNetworking {
             // Domain techniques are displayed with their effective form-adjusted costs instead of the raw base value shown by the original selection state.
             if (DomainCostUtils.isDomainTechniqueSelected(after)) {
                 domainForm = DomainCostUtils.resolveEffectiveForm((Player)player);
-                domainMultiplier = DomainCostUtils.formMultiplier(domainForm);
+                domainMultiplier = DomainCostUtils.formMultiplier((Player)player, domainForm);
                 entryBaseCost = DomainCostUtils.resolveTechniqueBaseCost((Player)player, after);
                 entryFinalCost = DomainCostUtils.resolveExpectedDomainCastCost((Player)player, after);
             }
@@ -1082,10 +1108,9 @@ public class ModNetworking {
             CompoundTag rec = validRecords.get(recordIndex);
             double entryId = (double)stableYutaCopyEntryId(rec.getString("recordUuid"));
             String suffix = rec.contains("usesRemaining") ? " §b(" + rec.getInt("usesRemaining") + " uses)" : (rec.getBoolean("temporary") ? " §7(Temp)" : " §d(Perm)");
-            double cost = rec.contains("cost") ? rec.getDouble("cost") : YutaCopyStore.defaultCost(rec.getDouble("techniqueId"));
+            double cost = YutaCopyStore.effectiveCopyCost(player, rec);
             int moveSelectId = rec.contains("moveSelectId") ? rec.getInt("moveSelectId") : 5;
-            double cooldown = Math.max(rec.getDouble("COOLDOWN_TICKS"), YutaCopyStore.defaultCooldown(rec.getDouble("techniqueId"), moveSelectId));
-            int cooldownMax = (int)Math.round(cooldown);
+            int cooldownMax = Math.max(YutaCopyStore.effectiveCopyCooldownTicks(player, rec), (int)Math.round(rec.getDouble("COOLDOWN_TICKS")));
             int cooldownRemaining = YutaCopyStore.cooldownRemainingTicks(player, rec);
             cooldownMax = Math.max(cooldownMax, cooldownRemaining);
             String moveName = rec.getString("moveName");
@@ -1102,7 +1127,7 @@ public class ModNetworking {
                 cooldownRemaining = 0;
             }
             int entryColor = ModNetworking.copyEntryColor(rec, cancelState);
-            copyEntries.add(new WheelTechniqueEntry(entryId, "Rika: " + label + suffix, cost, cooldown, entryColor, false, false, -1, 0.0D, cooldownRemaining, cooldownMax));
+            copyEntries.add(new WheelTechniqueEntry(entryId, "Rika: " + label + suffix, cost, cooldownMax, entryColor, false, false, -1, 0.0D, cooldownRemaining, cooldownMax));
         }
         ModNetworking.addPaged(pages, copyEntries);
         return pages;
@@ -1115,6 +1140,14 @@ public class ModNetworking {
 
     // ===== CLIENT SYNC SENDERS =====
     public static void sendBlackFlashSync(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        if (!AddonGameRules.blackFlashHud(player.level())) {
+            long serverNowTick = player.serverLevel().getGameTime();
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashSyncPacket(0.0F, false, false, 0L, 1.0F, 0.0F, 0.0F, 0L, 0, 0, serverNowTick, Math.max(0, player.latency)));
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         float pct = (float)data.getDouble("addon_bf_chance");
         boolean mastery = data.getBoolean("addon_bf_mastery");
@@ -1138,6 +1171,13 @@ public class ModNetworking {
      * @param player player instance involved in this operation.
      */
     public static void sendNearDeathCdSync(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        if (!AddonGameRules.nearDeathHud(player.level())) {
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new NearDeathCdSyncPacket(0, 0, false));
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         int cd = data.getInt("jjkbrp_near_death_cd");
         boolean rctL3 = RCTLevel3Handler.hasAdvancement(player, "jjkblueredpurple:rct_level_3");
@@ -1150,6 +1190,9 @@ public class ModNetworking {
      * @param data data used by this method.
      */
     public static void syncDomainMasteryToClient(ServerPlayer player, DomainMasteryData data) {
+        if (player == null || !AddonGameRules.domainMastery(player)) {
+            return;
+        }
         boolean hasOpenAdvancement = ModNetworking.hasOpenBarrierAdvancement(player);
         data.setOpenBarrierAdvancementUnlocked(hasOpenAdvancement);
         data.setBlackFlashMasteryUnlocked(ModNetworking.hasBlackFlashMastery(player));
@@ -1202,6 +1245,10 @@ public class ModNetworking {
                 if (player == null) {
                     return;
                 }
+                if (!AddonGameRules.enabled(player, AddonGameRules.SKILL_WHEEL_ENABLED)) {
+                    return;
+                }
+                syncAddonGameRulesCache(player);
                 JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
                 if (vars.noChangeTechnique) {
                     return;
@@ -1252,6 +1299,9 @@ public class ModNetworking {
             ctx.enqueueWork(() -> {
                 ServerPlayer player = ctx.getSender();
                 if (player == null) {
+                    return;
+                }
+                if (!AddonGameRules.enabled(player, AddonGameRules.SKILL_WHEEL_ENABLED)) {
                     return;
                 }
                 JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
@@ -1501,6 +1551,9 @@ public class ModNetworking {
                 if (player == null) {
                     return;
                 }
+                if (!AddonGameRules.gojoTeleport(player)) {
+                    return;
+                }
                 BlueRedPurpleNukeMod.handleGojoShiftTapPacket(player);
             });
             ctx.setPacketHandled(true);
@@ -1592,7 +1645,7 @@ public class ModNetworking {
             NetworkEvent.Context ctx = ctxSupplier.get();
             ctx.enqueueWork(() -> {
                 ServerPlayer player = ctx.getSender();
-                if (player == null || !YutaCopyStore.isActiveYuta(player) || !YutaCopyStore.hasValidRikaOrDomain(player)) {
+                if (player == null || !AddonGameRules.yutaCopy(player) || !YutaCopyStore.isActiveYuta(player) || !YutaCopyStore.hasValidRikaOrDomain(player)) {
                     return;
                 }
                 if (Math.abs(pkt.entryId - (double)YUTA_SUREHIT_CLEAR_ENTRY_ID) <= 0.001D) {
@@ -1735,6 +1788,9 @@ public class ModNetworking {
             ctx.get().enqueueWork(() -> {
                 ServerPlayer sender = ((NetworkEvent.Context)ctx.get()).getSender();
                 if (sender == null) {
+                    return;
+                }
+                if (!AddonGameRules.domainMastery(sender)) {
                     return;
                 }
                 if (ModNetworking.rejectLockedDomainMasteryMutation(sender, pkt.operation)) {
@@ -1929,6 +1985,9 @@ public class ModNetworking {
             ctx.get().enqueueWork(() -> {
                 ServerPlayer sender = ((NetworkEvent.Context)ctx.get()).getSender();
                 if (sender == null) {
+                    return;
+                }
+                if (!AddonGameRules.domainMastery(sender)) {
                     return;
                 }
                 if (!ModNetworking.hasDomainExpansionAdvancement(sender)) {
@@ -2135,6 +2194,178 @@ public class ModNetworking {
         }
     }
  
+    private static boolean canManageAddonGameRules(ServerPlayer player) {
+        return player != null && player.hasPermissions(2);
+    }
+
+    private static void sendAddonGameRulesSnapshot(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new OpenAddonGameRulesPacket(AddonGameRules.snapshots(player.level())));
+    }
+
+    private static void syncAddonGameRulesCache(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new SyncAddonGameRulesPacket(AddonGameRules.snapshots(player.level())));
+    }
+
+    private static void syncAddonGameRulesCacheToAll(ServerPlayer source) {
+        if (source == null || source.server == null) {
+            return;
+        }
+        for (ServerPlayer target : source.server.getPlayerList().getPlayers()) {
+            syncAddonGameRulesCache(target);
+        }
+    }
+
+    private static void encodeRuleSnapshots(List<AddonGameRules.RuleSnapshot> rules, FriendlyByteBuf buf) {
+        List<AddonGameRules.RuleSnapshot> safeRules = rules == null ? List.of() : rules;
+        buf.writeVarInt(safeRules.size());
+        for (AddonGameRules.RuleSnapshot rule : safeRules) {
+            buf.writeUtf(rule.id(), 128);
+            buf.writeUtf(rule.fieldName(), 96);
+            buf.writeUtf(rule.tabId(), 64);
+            buf.writeUtf(rule.tabName(), 64);
+            buf.writeVarInt(rule.tabOrder());
+            buf.writeUtf(rule.label(), 128);
+            buf.writeUtf(rule.description(), 220);
+            buf.writeVarInt(rule.kind().ordinal());
+            buf.writeUtf(rule.value(), 64);
+            buf.writeUtf(rule.defaultValue(), 64);
+        }
+    }
+
+    private static List<AddonGameRules.RuleSnapshot> decodeRuleSnapshots(FriendlyByteBuf buf) {
+        int size = buf.readVarInt();
+        ArrayList<AddonGameRules.RuleSnapshot> rules = new ArrayList<>();
+        AddonGameRules.RuleKind[] kinds = AddonGameRules.RuleKind.values();
+        for (int i = 0; i < size; i++) {
+            String id = buf.readUtf(128);
+            String fieldName = buf.readUtf(96);
+            String tabId = buf.readUtf(64);
+            String tabName = buf.readUtf(64);
+            int tabOrder = buf.readVarInt();
+            String label = buf.readUtf(128);
+            String description = buf.readUtf(220);
+            int kindOrdinal = Math.max(0, Math.min(kinds.length - 1, buf.readVarInt()));
+            String value = buf.readUtf(64);
+            String defaultValue = buf.readUtf(64);
+            rules.add(new AddonGameRules.RuleSnapshot(id, fieldName, tabId, tabName, tabOrder, label, description, kinds[kindOrdinal], value, defaultValue));
+        }
+        return rules;
+    }
+
+    public static class RequestAddonGameRulesPacket {
+        public static void encode(RequestAddonGameRulesPacket pkt, FriendlyByteBuf buf) {
+        }
+
+        public static RequestAddonGameRulesPacket decode(FriendlyByteBuf buf) {
+            return new RequestAddonGameRulesPacket();
+        }
+
+        public static void handle(RequestAddonGameRulesPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> {
+                ServerPlayer player = ctx.getSender();
+                if (!canManageAddonGameRules(player)) {
+                    if (player != null) {
+                        player.displayClientMessage(Component.literal("JoQu's JJC Addon gamerule panel requires operator permission level 2."), true);
+                    }
+                    return;
+                }
+                sendAddonGameRulesSnapshot(player);
+            });
+            ctx.setPacketHandled(true);
+        }
+    }
+
+    public static class OpenAddonGameRulesPacket {
+        private final List<AddonGameRules.RuleSnapshot> rules;
+
+        public OpenAddonGameRulesPacket(List<AddonGameRules.RuleSnapshot> rules) {
+            this.rules = rules == null ? List.of() : List.copyOf(rules);
+        }
+
+        public static void encode(OpenAddonGameRulesPacket pkt, FriendlyByteBuf buf) {
+            encodeRuleSnapshots(pkt.rules, buf);
+        }
+
+        public static OpenAddonGameRulesPacket decode(FriendlyByteBuf buf) {
+            return new OpenAddonGameRulesPacket(decodeRuleSnapshots(buf));
+        }
+
+        public static void handle(OpenAddonGameRulesPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.openAddonGameRulesScreen(pkt.rules)));
+            ctx.setPacketHandled(true);
+        }
+    }
+
+    public static class SyncAddonGameRulesPacket {
+        private final List<AddonGameRules.RuleSnapshot> rules;
+
+        public SyncAddonGameRulesPacket(List<AddonGameRules.RuleSnapshot> rules) {
+            this.rules = rules == null ? List.of() : List.copyOf(rules);
+        }
+
+        public static void encode(SyncAddonGameRulesPacket pkt, FriendlyByteBuf buf) {
+            encodeRuleSnapshots(pkt.rules, buf);
+        }
+
+        public static SyncAddonGameRulesPacket decode(FriendlyByteBuf buf) {
+            return new SyncAddonGameRulesPacket(decodeRuleSnapshots(buf));
+        }
+
+        public static void handle(SyncAddonGameRulesPacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn((Dist)Dist.CLIENT, () -> () -> ClientPacketHandler.syncAddonGameRules(pkt.rules)));
+            ctx.setPacketHandled(true);
+        }
+    }
+
+    public static class SetAddonGameRulePacket {
+        private final String id;
+        private final String value;
+
+        public SetAddonGameRulePacket(String id, String value) {
+            this.id = id == null ? "" : id;
+            this.value = value == null ? "" : value;
+        }
+
+        public static void encode(SetAddonGameRulePacket pkt, FriendlyByteBuf buf) {
+            buf.writeUtf(pkt.id, 128);
+            buf.writeUtf(pkt.value, 64);
+        }
+
+        public static SetAddonGameRulePacket decode(FriendlyByteBuf buf) {
+            return new SetAddonGameRulePacket(buf.readUtf(128), buf.readUtf(64));
+        }
+
+        public static void handle(SetAddonGameRulePacket pkt, Supplier<NetworkEvent.Context> ctxSupplier) {
+            NetworkEvent.Context ctx = ctxSupplier.get();
+            ctx.enqueueWork(() -> {
+                ServerPlayer player = ctx.getSender();
+                if (!canManageAddonGameRules(player)) {
+                    if (player != null) {
+                        player.displayClientMessage(Component.literal("You do not have permission to edit JoQu's JJC Addon gamerules."), true);
+                    }
+                    return;
+                }
+                boolean changed = AddonGameRules.setRule(player.server, player.level(), pkt.id, pkt.value);
+                if (!changed) {
+                    player.displayClientMessage(Component.literal("Invalid JoQu's JJC Addon gamerule value: " + pkt.id), true);
+                } else {
+                    syncAddonGameRulesCacheToAll(player);
+                }
+                sendAddonGameRulesSnapshot(player);
+            });
+            ctx.setPacketHandled(true);
+        }
+    }
+
     /**
      * Immutable snapshot of vanilla technique selection state used while the server probes wheel entries.
      */
@@ -2178,6 +2409,9 @@ public class ModNetworking {
     }
 
     public static void sendBlackFlashFeedback(net.minecraft.server.level.ServerPlayer player, boolean success, boolean confirmedHit) {
+        if (player == null || !AddonGameRules.blackFlashHud(player.level())) {
+            return;
+        }
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new BlackFlashFeedbackPacket(success, confirmedHit));
     }
 
@@ -2217,7 +2451,7 @@ public class ModNetworking {
             NetworkEvent.Context ctx = ctxSupplier.get();
             ctx.enqueueWork(() -> {
                 ServerPlayer player = ctx.getSender();
-                if (player != null) {
+                if (player != null && AddonGameRules.blackFlashTiming(player)) {
                     BlueRedPurpleNukeMod.resolveBlackFlashTimingRelease(player, true, pkt.clientNeedle, pkt.clientElapsedTicks, pkt.timingNonce, pkt.clientTimingSuccess);
                 }
             });

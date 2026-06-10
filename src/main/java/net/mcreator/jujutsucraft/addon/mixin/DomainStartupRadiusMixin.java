@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.minecraft.nbt.CompoundTag;
@@ -37,6 +38,9 @@ public abstract class DomainStartupRadiusMixin {
     private static void jjkbrp$scalePostBarrierStartup(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         JJKBRP$originalRadius.remove();
         if (world.isClientSide()) {
+            return;
+        }
+        if (!AddonGameRules.domainRadiusRules(world)) {
             return;
         }
         if (!(entity instanceof Player)) {

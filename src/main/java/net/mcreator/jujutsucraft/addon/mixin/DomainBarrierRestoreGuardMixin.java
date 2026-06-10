@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.procedures.JujutsuBarrierUpdateTickProcedure;
 import java.util.UUID;
 import net.minecraft.nbt.CompoundTag;
@@ -38,6 +39,9 @@ public class DomainBarrierRestoreGuardMixin {
             return;
         }
         ServerLevel serverLevel = (ServerLevel)world;
+        if (!AddonGameRules.domainBarrierFixes(serverLevel)) {
+            return;
+        }
         if (DomainBarrierRestoreGuardMixin.jjkbrp$blockBelongsToLiveDomainOwner(serverLevel, x, y, z)) {
             ci.cancel();
             return;

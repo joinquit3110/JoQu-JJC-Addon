@@ -24,8 +24,24 @@ public final class ClientLimbCache {
      * @param regenProgress per-limb regeneration progress map received from the server
      */
     public static void update(int entityId, Map<LimbType, LimbState> states, Map<LimbType, Float> regenProgress) {
+        if (isIntactSnapshot(states, regenProgress)) {
+            CACHE.remove(entityId);
+            return;
+        }
         // Defensive EnumMap copies prevent later external mutation from affecting the cached snapshot.
         CACHE.put(entityId, new EntityLimbSnapshot(new EnumMap<LimbType, LimbState>(states), new EnumMap<LimbType, Float>(regenProgress)));
+    }
+
+    private static boolean isIntactSnapshot(Map<LimbType, LimbState> states, Map<LimbType, Float> regenProgress) {
+        for (LimbType type : LimbType.values()) {
+            if (states != null && states.getOrDefault((Object)type, LimbState.INTACT) != LimbState.INTACT) {
+                return false;
+            }
+            if (regenProgress != null && regenProgress.getOrDefault((Object)type, Float.valueOf(0.0f)).floatValue() > 0.0f) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

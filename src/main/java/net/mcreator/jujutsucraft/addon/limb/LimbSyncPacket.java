@@ -3,6 +3,7 @@ package net.mcreator.jujutsucraft.addon.limb;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.Supplier;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.ClientLimbCache;
 import net.mcreator.jujutsucraft.addon.limb.LimbData;
@@ -57,6 +58,23 @@ public class LimbSyncPacket {
         this.entityId = entityId;
         this.states = states;
         this.regenProgress = regenProgress;
+    }
+
+    private static LimbSyncPacket intact(int entityId) {
+        EnumMap<LimbType, LimbState> states = new EnumMap<LimbType, LimbState>(LimbType.class);
+        EnumMap<LimbType, Float> regen = new EnumMap<LimbType, Float>(LimbType.class);
+        for (LimbType type : LimbType.values()) {
+            states.put(type, LimbState.INTACT);
+            regen.put(type, Float.valueOf(0.0f));
+        }
+        return new LimbSyncPacket(entityId, states, regen);
+    }
+
+    private static LimbSyncPacket visiblePacket(LivingEntity entity, LimbData data) {
+        if (entity == null || data == null || !AddonGameRules.limbRendering(entity.level())) {
+            return intact(entity == null ? 0 : entity.getId());
+        }
+        return new LimbSyncPacket(entity.getId(), data);
     }
 
     /**
@@ -114,7 +132,7 @@ public class LimbSyncPacket {
         if (!(level instanceof ServerLevel)) {
             return;
         }
-        LimbSyncPacket packet = new LimbSyncPacket(entity.getId(), data);
+        LimbSyncPacket packet = visiblePacket(entity, data);
         ModNetworking.CHANNEL.send(PacketDistributor.TRACKING_ENTITY.with(() -> entity), (Object)packet);
     }
 
@@ -127,6 +145,6 @@ public class LimbSyncPacket {
      */
     public static void sendToPlayer(ServerPlayer target, LivingEntity entity, LimbData data) {
         SimpleChannel channel = ModNetworking.CHANNEL;
-        channel.send(PacketDistributor.PLAYER.with(() -> target), (Object)new LimbSyncPacket(entity.getId(), data));
+        channel.send(PacketDistributor.PLAYER.with(() -> target), (Object)visiblePacket(entity, data));
     }
 }

@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.PehkuiDomainScaleUtil;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionEntityOnInitialEntitySpawnProcedure;
@@ -39,6 +40,9 @@ public class DomainCleanupEntitySpawnMixin {
             return;
         }
         ServerLevel serverLevel = (ServerLevel)level;
+        if (!AddonGameRules.domainBarrierFixes(serverLevel)) {
+            return;
+        }
         LivingEntity owner = DomainAddonUtils.findMatchingLiveDomainCaster(serverLevel, cleanupEntity.position(), 4.0);
         if (owner == null) {
             return;

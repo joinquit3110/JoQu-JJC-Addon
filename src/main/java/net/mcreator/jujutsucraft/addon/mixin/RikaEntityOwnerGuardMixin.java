@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.entity.Rika2Entity;
 import net.mcreator.jujutsucraft.entity.RikaEntity;
 import net.minecraft.nbt.CompoundTag;
@@ -39,6 +40,9 @@ public class RikaEntityOwnerGuardMixin {
     @Unique
     private static void jjkbrp$restoreOwnerAndClearFriendlyTarget(Entity rika, String phase) {
         if (!(rika.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (!AddonGameRules.rikaOwnerGuard(level)) {
             return;
         }
         CompoundTag rikaData = rika.getPersistentData();

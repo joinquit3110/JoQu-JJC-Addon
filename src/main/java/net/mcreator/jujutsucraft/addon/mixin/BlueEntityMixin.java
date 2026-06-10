@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
 import net.mcreator.jujutsucraft.procedures.AIBlueProcedure;
@@ -31,6 +32,10 @@ public class BlueEntityMixin {
     private void jjkblueredpurple$redirectAIBlue(LevelAccessor world, double x, double y, double z, Entity entity) {
         Vec3 ownerVelBefore;
         double cnt1;
+        if (!AddonGameRules.gojoBlue(entity)) {
+            AIBlueProcedure.execute((LevelAccessor)world, (double)x, (double)y, (double)z, (Entity)entity);
+            return;
+        }
         LivingEntity owner = DomainAddonUtils.resolveOwnerEntity(world, entity);
         boolean ownerOpen = owner != null && DomainAddonUtils.isOpenDomainState(owner);
         boolean ownerIncomplete = owner != null && DomainAddonUtils.isIncompleteDomainState(owner);

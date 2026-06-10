@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.util.UUID;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.AIDomainExpansionEntityProcedure;
@@ -45,6 +46,9 @@ public class DomainCleanupEntityRangeMixin {
     private static void jjkbrp$overrideCleanupRadius(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         JJKBRP$originalRadius.remove();
         if (world.isClientSide() || entity == null) {
+            return;
+        }
+        if (!AddonGameRules.domainBarrierFixes(world)) {
             return;
         }
         // When the owning domain still exists, cancel cleanup entirely and keep the entity aligned to the active domain instead.

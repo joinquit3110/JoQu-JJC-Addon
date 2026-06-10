@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.limb;
 
 import java.lang.reflect.Field;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.limb.LimbCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.limb.LimbLossHandler;
@@ -75,6 +76,9 @@ public class RCTLevel3Handler {
         if (player.getServer() == null || !player.getServer().isRunning()) {
             return;
         }
+        if (!AddonGameRules.nearDeath(player)) {
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         if (data.getBoolean(KEY_FINAL_DEATH)) {
             // The follow-up death after a failed near-death should proceed normally exactly once.
@@ -108,9 +112,10 @@ public class RCTLevel3Handler {
         player.removeEffect(MobEffects.REGENERATION);
         player.removeEffect(MobEffects.ABSORPTION);
         data.putBoolean(KEY_NEAR_DEATH, true);
-        data.putInt(KEY_ND_TICKS, 20);
-        player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 0, false, false));
-        ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new NearDeathPacket(true, 20));
+        int windowTicks = AddonGameRules.positiveInt(player, AddonGameRules.NEAR_DEATH_WINDOW_TICKS, NEAR_DEATH_WINDOW);
+        data.putInt(KEY_ND_TICKS, windowTicks);
+        player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, Math.max(40, windowTicks * 2), 0, false, false));
+        ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new NearDeathPacket(true, windowTicks));
         player.displayClientMessage((Component)Component.literal((String)"\u00a7c\u00a7l\u2665 Near Death"), true);
     }
 
@@ -132,6 +137,12 @@ public class RCTLevel3Handler {
             return;
         }
         CompoundTag data = player.getPersistentData();
+        if (!AddonGameRules.nearDeath(player)) {
+            if (data.getBoolean(KEY_NEAR_DEATH)) {
+                RCTLevel3Handler.exitNearDeath(player, false);
+            }
+            return;
+        }
         int cd = data.getInt(KEY_ND_COOLDOWN);
         if (cd > 0) {
             data.putInt(KEY_ND_COOLDOWN, cd - 1);
@@ -143,7 +154,9 @@ public class RCTLevel3Handler {
             boolean rct = player.hasEffect((MobEffect)JujutsucraftModMobEffects.REVERSE_CURSED_TECHNIQUE.get());
             boolean nowCritRct = rct && hp > 0.0f && hp < maxHp * 0.1f;
             boolean prevCritRct = data.getBoolean(KEY_PREV_CRIT_RCT);
-            if (!RCTLevel3Handler.hasAdvancement(player, "jjkblueredpurple:rct_level_3") && RCTLevel3Handler.hasAdvancement(player, "jujutsucraft:reverse_cursed_technique_2") && RCTLevel3Handler.hasAdvancement(player, "jujutsucraft:sorcerer_grade_special") && prevCritRct && rct && hp >= 4.0f && player.tickCount - data.getInt("jjkbrp_last_close_call_tick") > 200) {
+            float healThreshold = AddonGameRules.nonNegativeInt(player, AddonGameRules.NEAR_DEATH_HEAL_THRESHOLD_HALF_HEARTS, 8) * 0.5f;
+            int closeCallCooldown = AddonGameRules.nonNegativeInt(player, AddonGameRules.RCT_LEVEL3_CLOSE_CALL_COOLDOWN_TICKS, CLOSE_CALL_COOLDOWN);
+            if (AddonGameRules.rctLevel3(player) && !RCTLevel3Handler.hasAdvancement(player, "jjkblueredpurple:rct_level_3") && RCTLevel3Handler.hasAdvancement(player, "jujutsucraft:reverse_cursed_technique_2") && RCTLevel3Handler.hasAdvancement(player, "jujutsucraft:sorcerer_grade_special") && prevCritRct && rct && hp >= healThreshold && player.tickCount - data.getInt("jjkbrp_last_close_call_tick") > closeCallCooldown) {
                 int closeCallCount = data.getInt(KEY_CLOSE_CALL) + 1;
                 data.putInt(KEY_CLOSE_CALL, closeCallCount);
                 data.putInt("jjkbrp_last_close_call_tick", player.tickCount);
@@ -153,7 +166,8 @@ public class RCTLevel3Handler {
             data.putBoolean(KEY_PREV_CRIT_RCT, nowCritRct);
             return;
         }
-        if (player.getHealth() >= 4.0f && player.hasEffect((MobEffect)JujutsucraftModMobEffects.REVERSE_CURSED_TECHNIQUE.get())) {
+        float healThreshold = AddonGameRules.nonNegativeInt(player, AddonGameRules.NEAR_DEATH_HEAL_THRESHOLD_HALF_HEARTS, 8) * 0.5f;
+        if (player.getHealth() >= healThreshold && player.hasEffect((MobEffect)JujutsucraftModMobEffects.REVERSE_CURSED_TECHNIQUE.get())) {
             // Reaching the heal threshold with active RCT successfully ends near-death.
             RCTLevel3Handler.exitNearDeath(player, true);
             return;
@@ -176,6 +190,9 @@ public class RCTLevel3Handler {
             data.putBoolean(KEY_FINAL_DEATH, true);
             // Failure forces a final head sever so death resolves through the limb system itself.
             LimbCapabilityProvider.get((LivingEntity)player).ifPresent(limbData -> LimbLossHandler.severLimb((LivingEntity)player, limbData, LimbType.HEAD, player.level().damageSources().generic()));
+            if (player.getHealth() > 0.0f) {
+                player.setHealth(0.0f);
+            }
         }
     }
 
@@ -187,6 +204,9 @@ public class RCTLevel3Handler {
      * @param player player being evaluated
      */
     public static void checkAndGrantRCTLevel3(ServerPlayer player) {
+        if (!AddonGameRules.rctLevel3(player)) {
+            return;
+        }
         if (RCTLevel3Handler.hasAdvancement(player, "jjkblueredpurple:rct_level_3")) {
             return;
         }
@@ -197,7 +217,8 @@ public class RCTLevel3Handler {
             return;
         }
         int count = player.getPersistentData().getInt(KEY_CLOSE_CALL);
-        if (count >= 20) {
+        int required = AddonGameRules.positiveInt(player, AddonGameRules.RCT_LEVEL3_CLOSE_CALLS_REQUIRED, RCT_L3_UNLOCK_COUNT);
+        if (count >= required) {
             RCTLevel3Handler.grantAdvancement(player, "jjkblueredpurple:rct_level_3");
             player.displayClientMessage((Component)Component.literal((String)"\u00a7b\u00a7l\u2605 RCT Mastery Unlocked! \u2605"), false);
         }
@@ -210,11 +231,13 @@ public class RCTLevel3Handler {
      * @param currentCount updated close-call count
      */
     public static void notifyCloseCall(ServerPlayer player, int currentCount) {
-        int remaining = 20 - currentCount;
-        int milestone = currentCount * 100 / 20;
-        String bar = RCTLevel3Handler.buildProgressBar(currentCount, 20);
-        // Message urgency ramps up as the player approaches the 20 close-call mastery requirement.
-        String msg = currentCount == 19 ? "\u00a7e\u2620 \u00a7fClose Call \u00a76" + currentCount + "\u00a7e/\u00a7620 \u00a7e[\u00a76" + bar + "\u00a7e] \u00a7f— \u00a7c\u2620 LAST CHANCE!" : (milestone >= 90 ? "\u00a7e\u2620 \u00a7fClose Call \u00a76" + currentCount + "\u00a7e/\u00a7620 \u00a7e[\u00a76" + bar + "\u00a7e] \u00a7f— \u00a7a" + remaining + " more!" : (milestone >= 75 ? "\u00a7e\u2620 \u00a7fClose Call \u00a76" + currentCount + "\u00a7e/\u00a7620 \u00a7e[\u00a76" + bar + "\u00a7e] \u00a7f— \u00a7e" + remaining + " more until RCT Mastery" : (milestone >= 50 ? "\u00a7e\u2620 \u00a7fClose Call \u00a76" + currentCount + "\u00a7e/\u00a7620 \u00a7e[\u00a76" + bar + "\u00a7e] \u00a7f— \u00a7e" + remaining + " more" : "\u00a7e\u2620 \u00a7fClose Call \u00a76" + currentCount + "\u00a7e/\u00a7620 \u00a7e[\u00a76" + bar + "\u00a7e]")));
+        int required = AddonGameRules.positiveInt(player, AddonGameRules.RCT_LEVEL3_CLOSE_CALLS_REQUIRED, RCT_L3_UNLOCK_COUNT);
+        int remaining = required - currentCount;
+        int milestone = currentCount * 100 / required;
+        String bar = RCTLevel3Handler.buildProgressBar(currentCount, required);
+        // Message urgency ramps up as the player approaches the close-call mastery requirement.
+        String progress = "\u00a7e\u2620 \u00a7fClose Call \u00a76" + currentCount + "\u00a7e/\u00a76" + required + " \u00a7e[\u00a76" + bar + "\u00a7e]";
+        String msg = currentCount == required - 1 ? progress + " \u00a7f— \u00a7c\u2620 LAST CHANCE!" : (milestone >= 90 ? progress + " \u00a7f— \u00a7a" + remaining + " more!" : (milestone >= 75 ? progress + " \u00a7f— \u00a7e" + remaining + " more until RCT Mastery" : (milestone >= 50 ? progress + " \u00a7f— \u00a7e" + remaining + " more" : progress)));
         player.displayClientMessage((Component)Component.literal((String)msg), false);
     }
 
@@ -255,7 +278,7 @@ public class RCTLevel3Handler {
         player.removeEffect(MobEffects.MOVEMENT_SLOWDOWN);
         ModNetworking.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), (Object)new NearDeathPacket(false, 0));
         if (survived) {
-            data.putInt(KEY_ND_COOLDOWN, 18000);
+            data.putInt(KEY_ND_COOLDOWN, AddonGameRules.nonNegativeInt(player, AddonGameRules.NEAR_DEATH_COOLDOWN_TICKS, NEAR_DEATH_COOLDOWN));
             player.displayClientMessage((Component)Component.literal((String)"\u00a7a\u2665 Reversed! \u00a7eSurvived Near-Death!"), true);
         }
         ModNetworking.sendNearDeathCdSync(player);

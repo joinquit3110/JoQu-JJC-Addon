@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.procedures.ChangeCurseEnergyProcedure;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionCreateBarrierProcedure;
@@ -28,9 +29,9 @@ public abstract class DomainCastCostMixin {
         if (entity instanceof Player) {
             Player player = (Player)entity;
             // Only scale actual cursed-energy spending; positive or neutral changes should remain untouched.
-            if (energyChange < 0.0) {
+            if (energyChange < 0.0 && AddonGameRules.domainCostRules(player)) {
                 int form = DomainCastCostMixin.jjkbrp$resolveEffectiveForm(player);
-                double multiplier = DomainCastCostMixin.jjkbrp$formMultiplier(form);
+                double multiplier = AddonGameRules.domainFormCostMultiplier(player, form);
                 adjustedChange = energyChange * multiplier;
                 double baseCost = Math.abs(energyChange);
                 double effectiveCost = Math.abs(adjustedChange);
@@ -63,11 +64,4 @@ public abstract class DomainCastCostMixin {
      * @param form form used by this method.
      * @return the resulting form multiplier value.
      */
-    private static double jjkbrp$formMultiplier(int form) {
-        return switch (form) {
-            case 2 -> 1.6;
-            case 1 -> 1.0;
-            default -> 0.55;
-        };
-    }
 }

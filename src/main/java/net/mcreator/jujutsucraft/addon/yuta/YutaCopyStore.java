@@ -7,6 +7,7 @@ import java.util.Random;
 import java.util.Collections;
 import java.util.Set;
 import java.util.UUID;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModItems;
 import net.mcreator.jujutsucraft.addon.limb.LimbType;
 import net.mcreator.jujutsucraft.entity.Rika2Entity;
@@ -100,12 +101,18 @@ public final class YutaCopyStore {
         if (!(owner instanceof ServerPlayer player)) {
             return;
         }
+        if (!AddonGameRules.yutaLimbCopy(owner)) {
+            return;
+        }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         spawnLimbCopyItem(owner, partName, vars.PlayerCurseTechnique, vars.PlayerCurseTechnique2, true, true);
     }
 
     public static void spawnLimbCopyItem(LivingEntity owner, String partName, double technique1, double technique2, boolean temporary, boolean rememberEvent) {
         if (!(owner.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (!AddonGameRules.yutaLimbCopy(owner)) {
             return;
         }
         if (!isFakeYutaSource(owner) && (isRealYutaPlayer(owner) || isRikaEntity(owner))) {
@@ -127,7 +134,7 @@ public final class YutaCopyStore {
     }
 
     public static ItemStack createLimbCopyItem(LivingEntity owner, String partName, double technique1, double technique2, boolean temporary) {
-        boolean hand = shouldCreateHand(partName);
+        boolean hand = shouldCreateHand(owner, partName);
         ItemStack stack = new ItemStack(hand ? ModItems.YUTA_HAND.get() : ModItems.YUTA_FINGER.get());
         CompoundTag tag = stack.getOrCreateTag();
         String eventId = UUID.randomUUID().toString();
@@ -140,7 +147,8 @@ public final class YutaCopyStore {
         tag.putDouble(ITEM_CT2, technique2);
         tag.putBoolean(ITEM_TEMPORARY, temporary);
         tag.putString(ITEM_KIND, hand ? "hand" : "finger");
-        tag.putDouble(ITEM_SUCCESS_CHANCE, hand ? 1.0D : 0.5D);
+        double successChance = hand ? 1.0D : 0.5D;
+        tag.putDouble(ITEM_SUCCESS_CHANCE, Math.max(0.0D, Math.min(1.0D, successChance)));
         if (owner.getPersistentData().getBoolean(YutaFakePlayerEntity.KEY_FAKE)) {
             tag.putBoolean("jjkaddon_fake_source", true);
         }
@@ -157,6 +165,7 @@ public final class YutaCopyStore {
 
     public static void spawnMobKillCopyItem(ServerPlayer yuta, LivingEntity source) {
         if (yuta == null || source == null || !(source.level() instanceof ServerLevel level) || source instanceof Player || !isYuta(yuta)) return;
+        if (!AddonGameRules.yutaMobCopy(yuta)) return;
         double ct1 = resolveCopyTechnique(source, true);
         double ct2 = resolveCopyTechnique(source, false);
         if (!isTechniqueCopyable(ct1) && !isTechniqueCopyable(ct2)) {
@@ -165,10 +174,11 @@ public final class YutaCopyStore {
         ItemStack stack = createLimbCopyItem(source, "cursed_technique", ct1, ct2, false);
         CompoundTag tag = stack.getOrCreateTag();
         tag.putBoolean("jjkaddon_mob_kill_source", true);
-        tag.putInt(ITEM_USES, MOB_COPY_USES);
+        int uses = AddonGameRules.positiveInt(yuta, AddonGameRules.YUTA_MOB_COPY_USES, MOB_COPY_USES);
+        tag.putInt(ITEM_USES, uses);
         stack.setHoverName(Component.literal(source.getName().getString() + "'s Cursed Technique Copy").withStyle(ChatFormatting.LIGHT_PURPLE));
         ListTag lore = stack.getOrCreateTagElement("display").getList("Lore", 8);
-        lore.add(StringTag.valueOf(Component.Serializer.toJson(Component.literal("Uses: " + MOB_COPY_USES).withStyle(ChatFormatting.GRAY))));
+        lore.add(StringTag.valueOf(Component.Serializer.toJson(Component.literal("Uses: " + uses).withStyle(ChatFormatting.GRAY))));
         stack.getOrCreateTagElement("display").put("Lore", lore);
         ItemEntity drop = new ItemEntity(level, source.getX(), source.getY() + 0.6D, source.getZ(), stack);
         drop.setDeltaMovement((level.random.nextDouble() - 0.5D) * 0.2D, 0.25D, (level.random.nextDouble() - 0.5D) * 0.2D);
@@ -270,9 +280,9 @@ public final class YutaCopyStore {
         CompoundTag data = victim.getPersistentData();
         ServerPlayer best = null;
         float bestDamage = 0.0F;
-        float required = victim.getMaxHealth() * (float)MOB_COPY_DAMAGE_SHARE;
         for (ServerPlayer player : victim.getServer().getPlayerList().getPlayers()) {
             if (!isYuta(player)) continue;
+            float required = victim.getMaxHealth() * (float)(MOB_COPY_DAMAGE_SHARE * AddonGameRules.percent(player, AddonGameRules.YUTA_MOB_COPY_DAMAGE_SHARE_PERCENT, 100));
             float damage = data.getFloat(MOB_COPY_DAMAGE_PREFIX + player.getUUID());
             if (damage >= required && damage > bestDamage) {
                 bestDamage = damage;
@@ -296,6 +306,9 @@ public final class YutaCopyStore {
 
     public static void onLimbRegrown(LivingEntity entity, String partName) {
         if (entity == null || entity.level().isClientSide || entity.getServer() == null) {
+            return;
+        }
+        if (!AddonGameRules.yutaCopy(entity)) {
             return;
         }
         UUID source = entity.getUUID();
@@ -339,7 +352,7 @@ public final class YutaCopyStore {
         if (yuta == null) {
             yuta = resolveYutaContributor(event.getSource().getDirectEntity());
         }
-        if (yuta == null) return;
+        if (yuta == null || !AddonGameRules.yutaMobCopy(yuta)) return;
         CompoundTag data = victim.getPersistentData();
         String key = MOB_COPY_DAMAGE_PREFIX + yuta.getUUID();
         float total = data.getFloat(key) + event.getAmount();
@@ -358,7 +371,7 @@ public final class YutaCopyStore {
             if (yuta == null) {
                 yuta = resolveBestYutaContributor(victim);
             }
-            if (yuta != null) {
+            if (yuta != null && AddonGameRules.yutaMobCopy(yuta)) {
                 spawnMobKillCopyItem(yuta, victim);
             }
             return;
@@ -396,6 +409,9 @@ public final class YutaCopyStore {
         if (!isLimbCopyItem(stack)) {
             return;
         }
+        if (!AddonGameRules.yutaLimbCopy(serverPlayer)) {
+            return;
+        }
         Entity target = event.getTarget();
         if (!isYuta(serverPlayer) || !isValidCopyStoreRika(serverPlayer, target)) {
             serverPlayer.displayClientMessage(Component.literal("§c[Rika] Only Yuta with his valid Rika can consume this."), true);
@@ -428,6 +444,10 @@ public final class YutaCopyStore {
     private static boolean consumeLimbItem(ServerPlayer owner, Entity rika, ItemStack stack) {
         if (!isLimbCopyItem(stack)) {
             owner.displayClientMessage(Component.literal("§c[Rika] Invalid limb item."), true);
+            return false;
+        }
+        if (!AddonGameRules.yutaCopy(owner)) {
+            owner.displayClientMessage(Component.literal("Rika copy is disabled."), true);
             return false;
         }
         CompoundTag tag = stack.getOrCreateTag();
@@ -465,6 +485,7 @@ public final class YutaCopyStore {
         }
         boolean guaranteedGrant = isFiveUseCatalyst(tag);
         double chance = guaranteedGrant ? 1.0D : (tag.contains(ITEM_SUCCESS_CHANCE) ? tag.getDouble(ITEM_SUCCESS_CHANCE) : 1.0D);
+        chance *= AddonGameRules.percent(owner, AddonGameRules.YUTA_COPY_SUCCESS_CHANCE_PERCENT, 100);
         String kind = tag.getString(ITEM_KIND).isBlank() ? "finger" : tag.getString(ITEM_KIND);
         if (!guaranteedGrant && RANDOM.nextDouble() > chance) {
             owner.displayClientMessage(Component.literal("§7[Rika] The " + kind + " held no usable technique this time."), false);
@@ -525,19 +546,23 @@ public final class YutaCopyStore {
     }
 
     private static boolean isFiveUseCatalyst(CompoundTag tag) {
-        return tag != null && tag.contains(ITEM_USES) && tag.getInt(ITEM_USES) == MOB_COPY_USES;
+        return tag != null && tag.contains(ITEM_USES);
     }
 
-    private static boolean shouldCreateHand(String partName) {
+    private static boolean shouldCreateHand(LivingEntity owner, String partName) {
         String part = partName == null ? "" : partName.toLowerCase();
         boolean eligible = part.contains("arm") || part.contains("hand");
         double roll = RANDOM.nextDouble();
-        boolean hand = eligible && roll < HAND_DROP_CHANCE;
+        double chance = HAND_DROP_CHANCE * AddonGameRules.percent(owner, AddonGameRules.YUTA_HAND_DROP_CHANCE_PERCENT, 100);
+        boolean hand = eligible && roll < chance;
         return hand;
     }
 
     public static void attachPlayerLimbCopyData(LivingEntity owner, String partName, Entity limbEntity) {
         if (!(owner instanceof ServerPlayer player) || limbEntity == null || isHeadPart(partName)) {
+            return;
+        }
+        if (!AddonGameRules.yutaLimbCopy(player)) {
             return;
         }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
@@ -990,7 +1015,7 @@ public final class YutaCopyStore {
     }
 
     public static boolean activateSelected(ServerPlayer player) {
-        if (!isYuta(player) || !hasValidRikaOrDomain(player)) {
+        if (!AddonGameRules.yutaCopy(player) || !isYuta(player) || !hasValidRikaOrDomain(player)) {
             player.displayClientMessage(Component.literal("§c[Rika] Rika or Authentic Mutual Love is required."), true);
             return false;
         }
@@ -998,7 +1023,7 @@ public final class YutaCopyStore {
     }
 
     public static boolean activateDomainSwordCopy(ServerPlayer player) {
-        if (!isActiveYuta(player) || !hasValidRikaOrDomain(player)) {
+        if (!AddonGameRules.yutaDomainSword(player) || !isActiveYuta(player) || !hasValidRikaOrDomain(player)) {
             player.displayClientMessage(Component.literal("§c[Rika] Authentic Mutual Love or Rika is required."), true);
             return false;
         }
@@ -1022,6 +1047,9 @@ public final class YutaCopyStore {
     }
 
     private static boolean activateRecord(ServerPlayer player, Optional<CompoundTag> opt, boolean fromDomainSword) {
+        if (!AddonGameRules.yutaCopy(player) || (fromDomainSword && !AddonGameRules.yutaDomainSword(player))) {
+            return false;
+        }
         if (player.getPersistentData().getDouble("skill") != 0.0D) {
             player.displayClientMessage(Component.literal("§c[Rika] Finish your current technique first."), true);
             return false;
@@ -1036,8 +1064,8 @@ public final class YutaCopyStore {
             player.displayClientMessage(Component.literal("§e[Rika] This copied technique has no uses remaining."), true);
             return false;
         }
-        int cooldownTicks = normalizedCooldown(rec);
-        double cost = normalizedCost(rec);
+        int cooldownTicks = effectiveCopyCooldownTicks(player, rec);
+        double cost = effectiveCopyCost(player, rec);
         long now = player.level().getGameTime();
         String cooldownKey = cooldownKey(rec);
         boolean copiedTenShadows = isCopiedTenShadowsRecord(rec);
@@ -1428,6 +1456,9 @@ public final class YutaCopyStore {
     @SubscribeEvent
     public static void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide || !(event.player instanceof ServerPlayer player)) return;
+        if (!AddonGameRules.yutaCopy(player)) {
+            return;
+        }
         claimNearbyPlayerLimb(player);
         if (isActiveYuta(player)) {
             cleanupVanillaPlayerCopy(player);            tickCopiedTenShadowsCooldown(player);
@@ -1470,7 +1501,7 @@ public final class YutaCopyStore {
         for (CompoundTag rec : validRecords(player)) {
             if (!recordUuid.equals(rec.getString("recordUuid"))) continue;
             long now = player.level().getGameTime();
-            player.getPersistentData().putLong(cooldownKey(rec), now + (long)normalizedCooldown(rec));
+            player.getPersistentData().putLong(cooldownKey(rec), now + (long)effectiveCopyCooldownTicks(player, rec));
             clearCopiedTenShadowsPending(player, recordUuid);
             return;
         }
@@ -1479,7 +1510,7 @@ public final class YutaCopyStore {
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onItemToss(ItemTossEvent event) {
-        if (!(event.getPlayer() instanceof ServerPlayer) || !isAddonDomainSword(event.getEntity().getItem())) {
+        if (!(event.getPlayer() instanceof ServerPlayer player) || !AddonGameRules.yutaDomainSword(player) || !isAddonDomainSword(event.getEntity().getItem())) {
             return;
         }
         event.getEntity().discard();
@@ -1508,7 +1539,7 @@ public final class YutaCopyStore {
     }
 
     private static void claimNearbyPlayerLimb(ServerPlayer player) {
-        if (!isYuta(player) || !(player.level() instanceof ServerLevel level)) return;
+        if (!isYuta(player) || !(player.level() instanceof ServerLevel level) || !AddonGameRules.yutaLimbCopy(player)) return;
         for (Entity entity : level.getEntities(player, player.getBoundingBox().inflate(1.7D), e -> e.getPersistentData().getBoolean(ITEM_PLAYER_LIMB_PENDING))) {
             CompoundTag data = entity.getPersistentData();
             ItemStack stack = new ItemStack("hand".equals(data.getString("copy_" + ITEM_KIND)) ? ModItems.YUTA_HAND.get() : ModItems.YUTA_FINGER.get());
@@ -1527,7 +1558,7 @@ public final class YutaCopyStore {
     }
 
     public static void bridgeAuthenticMutualLove(LevelAccessor world, double x, double y, double z, Entity entity) {
-        if (!(entity instanceof ServerPlayer player)) return;
+        if (!(entity instanceof ServerPlayer player) || !AddonGameRules.yutaCopy(player) || !AddonGameRules.yutaDomainSword(player)) return;
         if (Math.abs(entity.getPersistentData().getDouble("skill_domain") - 5.0D) > 0.001D) return;
         clearSureHit(player);
         List<CompoundTag> candidates = new ArrayList<>();
@@ -1619,6 +1650,20 @@ public final class YutaCopyStore {
             base = Math.max(base, 450.0D);
         }
         return base;
+    }
+
+    public static int effectiveCopyCooldownTicks(ServerPlayer player, CompoundTag rec) {
+        if (rec == null) {
+            return 1;
+        }
+        return Math.max(1, (int)Math.round(normalizedCooldown(rec) * AddonGameRules.percent(player, AddonGameRules.YUTA_COPY_COOLDOWN_PERCENT, 100)));
+    }
+
+    public static double effectiveCopyCost(ServerPlayer player, CompoundTag rec) {
+        if (rec == null) {
+            return 0.0D;
+        }
+        return normalizedCost(rec) * AddonGameRules.percent(player, AddonGameRules.YUTA_COPY_COST_PERCENT, 100);
     }
 
     private static int normalizedCooldown(CompoundTag rec) {

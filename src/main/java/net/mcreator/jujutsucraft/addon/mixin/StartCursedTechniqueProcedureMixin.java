@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.util.UUID;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.addon.util.DomainCostUtils;
@@ -50,6 +51,9 @@ public class StartCursedTechniqueProcedureMixin {
             return;
         }
         Player player = (Player)entity;
+        if (!AddonGameRules.domainMastery(player)) {
+            return;
+        }
         player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).ifPresent(vars -> {
             // Non-domain techniques should keep the original startup flow, so all preview keys are cleared and the mixin exits early.
             if (!DomainCostUtils.isDomainTechniqueSelected(vars)) {
@@ -60,7 +64,7 @@ public class StartCursedTechniqueProcedureMixin {
             double baseCost = DomainCostUtils.resolveTechniqueBaseCost(player, vars);
             // Preview the real form-adjusted domain cost here so both the cast gate and the UI can reference the same authoritative value.
             double expectedCost = DomainCostUtils.resolveExpectedDomainCastCost(player, vars);
-            boolean incompleteForm = DomainCostUtils.resolveEffectiveForm(player) == 0;
+            boolean incompleteForm = AddonGameRules.domainForms(player) && DomainCostUtils.resolveEffectiveForm(player) == 0;
             vars.PlayerSelectCurseTechniqueCost = baseCost;
             vars.syncPlayerVariables((Entity)player);
             player.getPersistentData().putDouble("jjkbrp_domain_cast_cost_preview", expectedCost);
@@ -94,6 +98,9 @@ public class StartCursedTechniqueProcedureMixin {
             return;
         }
         ServerPlayer player = (ServerPlayer)entity;
+        if (!AddonGameRules.domainMastery(player)) {
+            return;
+        }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         ModNetworking.captureActiveSkillCooldown(player, vars);
         // Post-process the captured cooldown because incomplete domains are intentionally capped at a much shorter recovery window.
@@ -111,8 +118,9 @@ public class StartCursedTechniqueProcedureMixin {
         }
         nbt.remove("jjkbrp_pending_incomplete_cd_tune");
         boolean changedNow = false;
-        changedNow |= StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(player, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME.get(), 600);
-        if ((changedNow |= StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(player, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME_COMBAT.get(), 600)) || player.server == null) {
+        int maxCooldown = AddonGameRules.nonNegativeInt(player, AddonGameRules.DOMAIN_INCOMPLETE_COOLDOWN_CAP_TICKS, JJKBRP$INCOMPLETE_DOMAIN_COOLDOWN_TICKS);
+        changedNow |= StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(player, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME.get(), maxCooldown);
+        if ((changedNow |= StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(player, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME_COMBAT.get(), maxCooldown)) || player.server == null) {
             return;
         }
         UUID playerId = player.getUUID();
@@ -126,8 +134,9 @@ public class StartCursedTechniqueProcedureMixin {
             if (retryPlayer == null) {
                 return;
             }
-            StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(retryPlayer, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME.get(), 600);
-            StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(retryPlayer, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME_COMBAT.get(), 600);
+            int retryMaxCooldown = AddonGameRules.nonNegativeInt(retryPlayer, AddonGameRules.DOMAIN_INCOMPLETE_COOLDOWN_CAP_TICKS, JJKBRP$INCOMPLETE_DOMAIN_COOLDOWN_TICKS);
+            StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(retryPlayer, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME.get(), retryMaxCooldown);
+            StartCursedTechniqueProcedureMixin.jjkbrp$clampCooldown(retryPlayer, (MobEffect)JujutsucraftModMobEffects.COOLDOWN_TIME_COMBAT.get(), retryMaxCooldown);
         }));
     }
 

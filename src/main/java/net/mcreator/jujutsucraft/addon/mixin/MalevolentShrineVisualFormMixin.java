@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.util.PlayerShrineRiseController;
 import net.minecraft.server.level.ServerLevel;
@@ -34,6 +35,9 @@ public abstract class MalevolentShrineVisualFormMixin {
             remap = false
     )
     private static float jjkbrp$forceShrineVisualHealth(LivingEntity living) {
+        if (!AddonGameRules.domainForms(living)) {
+            return living.getHealth();
+        }
         int form = MalevolentShrineVisualFormMixin.jjkbrp$resolveLockedDomainForm(living);
         if (form == DomainMasteryData.FORM_INCOMPLETE) {
             return JJKBRP$FORCED_INCOMPLETE_VISUAL_HEALTH;
@@ -50,6 +54,9 @@ public abstract class MalevolentShrineVisualFormMixin {
             remap = false
     )
     private static float jjkbrp$forceShrineVisualMaxHealth(LivingEntity living) {
+        if (!AddonGameRules.domainForms(living)) {
+            return living.getMaxHealth();
+        }
         int form = MalevolentShrineVisualFormMixin.jjkbrp$resolveLockedDomainForm(living);
         if (form == DomainMasteryData.FORM_INCOMPLETE
                 || form == DomainMasteryData.FORM_CLOSED
@@ -73,7 +80,7 @@ public abstract class MalevolentShrineVisualFormMixin {
             double z,
             Entity caster
     ) {
-        if (caster instanceof Player player && MalevolentShrineVisualFormMixin.jjkbrp$isShrineDomain(player.getPersistentData())) {
+        if (caster instanceof Player player && AddonGameRules.domainForms(player) && MalevolentShrineVisualFormMixin.jjkbrp$isShrineDomain(player.getPersistentData())) {
             PlayerShrineRiseController.prepareSpawn(level, spawned, player, MalevolentShrineVisualFormMixin.jjkbrp$resolveLockedDomainForm(player));
         }
         return level.addFreshEntity(spawned);

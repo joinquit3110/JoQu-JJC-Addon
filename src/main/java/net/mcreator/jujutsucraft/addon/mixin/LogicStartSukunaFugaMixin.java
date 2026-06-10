@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
 import net.mcreator.jujutsucraft.network.JujutsucraftModVariables;
 import net.mcreator.jujutsucraft.procedures.LogicStartProcedure;
@@ -18,6 +19,9 @@ public abstract class LogicStartSukunaFugaMixin {
             return;
         }
         ServerPlayer player = (ServerPlayer)entity;
+        if (!AddonGameRules.sukunaFugaCooldownBypass(player)) {
+            return;
+        }
         JujutsucraftModVariables.PlayerVariables vars = player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         int charId = (int)Math.round(vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique);
         if (!cir.getReturnValueZ() && ModNetworking.canUseSukunaIncompleteFugaOverride(player, charId, vars.PlayerSelectCurseTechnique)) {

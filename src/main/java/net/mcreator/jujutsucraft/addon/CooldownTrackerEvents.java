@@ -80,77 +80,84 @@ public class CooldownTrackerEvents {
         }
         ServerPlayer player2 = (ServerPlayer)player;
         CompoundTag data = player2.getPersistentData();
-        CooldownTrackerEvents.handleSukunaIncompleteSureHitReward(player2, data);
-        CooldownTrackerEvents.tickStaleStateReconcile(player2, data);
-        int bfCd = data.getInt("jjkbrp_bf_cd");
-        if (bfCd > 0) {
-            data.putInt("jjkbrp_bf_cd", bfCd - 1);
+        if (AddonGameRules.sukunaIncompleteSurehit(player2) || AddonGameRules.sukunaFugaReward(player2)) {
+            CooldownTrackerEvents.handleSukunaIncompleteSureHitReward(player2, data);
         }
-        // Build the live Black Flash chance multiplier from advancements, effects, character bonuses, and current risk state.
-        double bonusMultiplier = 1.0;
-        if (player2.hasEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get())) {
-            amp2 = player2.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get()).getAmplifier();
-            bonusMultiplier += 2.0 + (double)amp2;
+        if (AddonGameRules.enabled(player2, AddonGameRules.SUKUNA_STALE_STATE_FIX_ENABLED)) {
+            CooldownTrackerEvents.tickStaleStateReconcile(player2, data);
         }
-        if (player2.hasEffect((MobEffect)JujutsucraftModMobEffects.DEEP_CONCENTRATION.get())) {
-            amp2 = player2.getEffect((MobEffect)JujutsucraftModMobEffects.DEEP_CONCENTRATION.get()).getAmplifier();
-            bonusMultiplier += 75.0 + 5.0 * (double)(amp2 + 1);
-        }
-        if (hasBfExperience = CooldownTrackerEvents.hasAdvancement(player2, "jujutsucraft:black_flash")) {
-            bonusMultiplier += 1.0;
-        }
-        if (player2.hasEffect((MobEffect)JujutsucraftModMobEffects.SPECIAL.get()) && (amp = player2.getEffect((MobEffect)JujutsucraftModMobEffects.SPECIAL.get()).getAmplifier()) > 0) {
-            bonusMultiplier += 5.0;
-        }
-        JujutsucraftModVariables.PlayerVariables vars = player2.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
-        double activeTech = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
-        boolean bl = isYuji = (int)Math.round(activeTech) == 21;
-        if (isYuji) {
-            bonusMultiplier += 3.0;
-        }
-        float hp = player2.getHealth();
-        float maxHp = player2.getMaxHealth();
-        double hpFactor = 1.0 - (double)Math.max(hp, 1.0f) / (double)Math.max(maxHp, 1.0f);
-        // Convert the accumulated multiplier into a bounded percentage curve so bonuses scale smoothly instead of linearly exploding.
-        double basePercent = (1.0 - Math.pow(0.9988, bonusMultiplier * (1.0 + hpFactor * 2.0))) * 100.0;
-        boolean hasMastery = data.getBoolean("addon_bf_mastery");
-        long lastCombatTick = data.getLong("addon_bf_last_combat_tick");
-        boolean inCombat = (long)player2.tickCount - lastCombatTick < 100L;
-        double combatBonus = data.getDouble("addon_bf_combat_bonus");
-        double rate = 0.004;
-        if (hasBfExperience) {
-            rate *= 1.2;
-        }
-        if (hasMastery) {
-            rate *= 1.4;
-        }
-        if (isYuji) {
-            rate *= 1.6;
-        }
-        double combatMax = isYuji ? 28.0 : 15.0;
-        double percentCap = isYuji ? 30.0 : 15.0;
-        // Combat gradually ramps the proc rate up, then decays it once the player falls out of the recent-combat window.
-        combatBonus = inCombat ? Math.min(combatMax, combatBonus + rate) : Math.max(0.0, combatBonus - 0.06);
-        data.putDouble("addon_bf_combat_bonus", combatBonus);
-        double domainBonus = Math.max(0.0, data.getDouble("jjkbrp_domain_bf_bonus"));
-        double bfPercent = basePercent + combatBonus + domainBonus;
-        if (bfPercent > percentCap) {
-            bfPercent = percentCap;
-        }
-        data.putDouble("addon_bf_chance", bfPercent);
-        if (!hasMastery) {
-            if (CooldownTrackerEvents.hasAdvancement(player2, "jjkblueredpurple:black_flash_mastery")) {
-                data.putBoolean("addon_bf_mastery", true);
-                hasMastery = true;
-            } else {
-                int threshold;
-                int totalHits = data.getInt("addon_bf_total_hits");
-                threshold = isYuji ? BF_MASTERY_THRESHOLD_YUJI : BF_MASTERY_THRESHOLD;
-                // Mastery unlocks automatically after enough successful Black Flash-related combat milestones, with a lower threshold for Yuji.
-                if (totalHits >= threshold) {
+        if (AddonGameRules.blackFlash(player2)) {
+            int bfCd = data.getInt("jjkbrp_bf_cd");
+            if (bfCd > 0) {
+                data.putInt("jjkbrp_bf_cd", bfCd - 1);
+            }
+            // Build the live Black Flash chance multiplier from advancements, effects, character bonuses, and current risk state.
+            double bonusMultiplier = 1.0;
+            if (player2.hasEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get())) {
+                amp2 = player2.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get()).getAmplifier();
+                bonusMultiplier += 2.0 + (double)amp2;
+            }
+            if (player2.hasEffect((MobEffect)JujutsucraftModMobEffects.DEEP_CONCENTRATION.get())) {
+                amp2 = player2.getEffect((MobEffect)JujutsucraftModMobEffects.DEEP_CONCENTRATION.get()).getAmplifier();
+                bonusMultiplier += 75.0 + 5.0 * (double)(amp2 + 1);
+            }
+            if (hasBfExperience = CooldownTrackerEvents.hasAdvancement(player2, "jujutsucraft:black_flash")) {
+                bonusMultiplier += 1.0;
+            }
+            if (player2.hasEffect((MobEffect)JujutsucraftModMobEffects.SPECIAL.get()) && (amp = player2.getEffect((MobEffect)JujutsucraftModMobEffects.SPECIAL.get()).getAmplifier()) > 0) {
+                bonusMultiplier += 5.0;
+            }
+            JujutsucraftModVariables.PlayerVariables vars = player2.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
+            double activeTech = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
+            boolean bl = isYuji = (int)Math.round(activeTech) == 21;
+            if (isYuji) {
+                bonusMultiplier += 3.0;
+            }
+            float hp = player2.getHealth();
+            float maxHp = player2.getMaxHealth();
+            double hpFactor = 1.0 - (double)Math.max(hp, 1.0f) / (double)Math.max(maxHp, 1.0f);
+            // Convert the accumulated multiplier into a bounded percentage curve so bonuses scale smoothly instead of linearly exploding.
+            double basePercent = (1.0 - Math.pow(0.9988, bonusMultiplier * (1.0 + hpFactor * 2.0))) * 100.0;
+            boolean hasMastery = data.getBoolean("addon_bf_mastery");
+            long lastCombatTick = data.getLong("addon_bf_last_combat_tick");
+            boolean inCombat = (long)player2.tickCount - lastCombatTick < 100L;
+            double combatBonus = data.getDouble("addon_bf_combat_bonus");
+            double rate = 0.004;
+            if (hasBfExperience) {
+                rate *= 1.2;
+            }
+            if (hasMastery) {
+                rate *= 1.4;
+            }
+            if (isYuji) {
+                rate *= 1.6;
+            }
+            double combatMax = isYuji ? 28.0 : 15.0;
+            double percentCap = isYuji ? 30.0 : 15.0;
+            // Combat gradually ramps the proc rate up, then decays it once the player falls out of the recent-combat window.
+            combatBonus = inCombat ? Math.min(combatMax, combatBonus + rate) : Math.max(0.0, combatBonus - 0.06);
+            data.putDouble("addon_bf_combat_bonus", combatBonus);
+            double domainBonus = Math.max(0.0, data.getDouble("jjkbrp_domain_bf_bonus"));
+            double bfPercent = (basePercent + combatBonus + domainBonus) * AddonGameRules.percent(player2, AddonGameRules.BLACK_FLASH_PROC_CHANCE_PERCENT, 100);
+            if (bfPercent > percentCap) {
+                bfPercent = percentCap;
+            }
+            data.putDouble("addon_bf_chance", bfPercent);
+            if (AddonGameRules.enabled(player2, AddonGameRules.BLACK_FLASH_ENABLED, AddonGameRules.BLACK_FLASH_MASTERY_ENABLED) && !hasMastery) {
+                if (CooldownTrackerEvents.hasAdvancement(player2, "jjkblueredpurple:black_flash_mastery")) {
                     data.putBoolean("addon_bf_mastery", true);
-                    CooldownTrackerEvents.grantAdvancement(player2, "jjkblueredpurple:black_flash_mastery");
-                    player2.displayClientMessage((Component)Component.literal((String)"\u00a7d\u00a7l\u2605 Black Flash Mastery Achieved! \u2605"), false);
+                    hasMastery = true;
+                } else {
+                    int threshold;
+                    int totalHits = data.getInt("addon_bf_total_hits");
+                    int baseThreshold = isYuji ? BF_MASTERY_THRESHOLD_YUJI : BF_MASTERY_THRESHOLD;
+                    threshold = Math.max(1, (int)Math.round(baseThreshold * AddonGameRules.percent(player2, AddonGameRules.BLACK_FLASH_MASTERY_THRESHOLD_PERCENT, 100)));
+                    // Mastery unlocks automatically after enough successful Black Flash-related combat milestones, with a lower threshold for Yuji.
+                    if (totalHits >= threshold) {
+                        data.putBoolean("addon_bf_mastery", true);
+                        CooldownTrackerEvents.grantAdvancement(player2, "jjkblueredpurple:black_flash_mastery");
+                        player2.displayClientMessage((Component)Component.literal((String)"\u00a7d\u00a7l\u2605 Black Flash Mastery Achieved! \u2605"), false);
+                    }
                 }
             }
         }
@@ -160,12 +167,14 @@ public class CooldownTrackerEvents {
         if (player2.tickCount % 20 == 0) {
             ModNetworking.sendNearDeathCdSync(player2);
         }
-        if (player2.tickCount % 40 == 0) {
+        if (player2.tickCount % 40 == 0 && AddonGameRules.rctLevel3(player2)) {
             RCTLevel3Handler.checkAndGrantRCTLevel3(player2);
         }
     }
 
     private static void handleSukunaIncompleteSureHitReward(ServerPlayer player, CompoundTag data) {
+        boolean surehitEnabled = AddonGameRules.sukunaIncompleteSurehit(player);
+        boolean rewardEnabled = AddonGameRules.sukunaFugaReward(player);
         boolean sessionActive = data.getBoolean("jjkbrp_sukuna_incomplete_surehit_session");
         // The live DOMAIN_EXPANSION effect is the ground truth for "the shrine is still up".
         // It is far more stable than the full composite isActiveSukunaIncompleteShrine
@@ -174,6 +183,19 @@ public class CooldownTrackerEvents {
         boolean liveDomain = DomainAddonUtils.hasLiveDomainEffect(player);
         boolean domainActive = DomainAddonUtils.isActiveSukunaIncompleteShrine(player);
         boolean rewardFlag = data.getBoolean("jjkbrp_sukuna_fuga_dust_locked_full");
+
+        if (!surehitEnabled) {
+            data.remove("jjkbrp_sukuna_incomplete_surehit_session");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
+            data.remove("jjkbrp_sukuna_incomplete_surehit_active");
+            data.remove("jjkbrp_sukuna_incomplete_fuga_used");
+            data.remove("jjkbrp_sukuna_incomplete_end_grace");
+            if (rewardEnabled && rewardFlag) {
+                ModNetworking.clearSukunaFugaCooldown(player);
+                ModNetworking.syncDustOverlayFromAmount(player);
+            }
+            return;
+        }
 
         // Req 2.1, 2.2, 2.4: LATCH surehit while the shrine session is established AND a live
         // domain effect is still present. Re-assert all three flags every tick so a transient
@@ -196,12 +218,14 @@ public class CooldownTrackerEvents {
             // whole domain, mirroring how Closed/Open domains render their barrier/VFX.
             SureHitShrineFx.tick(player, data);
             // Req 4.3, 4.4: keep Fuga's cooldown effects absent whenever the reward flag is set.
-            if (rewardFlag) {
+            if (rewardEnabled && rewardFlag) {
                 ModNetworking.clearSukunaFugaCooldown(player);
             }
             // Req 5.7, 6.5: re-sync the overlay from the REAL dust_amount (no refill to full),
             // independent of base-mod domain-end overlay clearing.
-            ModNetworking.syncDustOverlayFromAmount(player);
+            if (rewardEnabled) {
+                ModNetworking.syncDustOverlayFromAmount(player);
+            }
             return;
         }
 
@@ -228,7 +252,7 @@ public class CooldownTrackerEvents {
             // Grace exhausted: the domain has genuinely ended.
             data.remove("jjkbrp_sukuna_incomplete_end_grace");
             boolean usedFugaDuringDomain = data.getBoolean("jjkbrp_sukuna_incomplete_fuga_used");
-            if (data.getBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain") && !usedFugaDuringDomain) {
+            if (rewardEnabled && data.getBoolean("jjkbrp_sukuna_incomplete_surehit_had_domain") && !usedFugaDuringDomain) {
                 // Domain just ended with surehit and Fuga unused: grant the one-time reward.
                 // This is a GRANT moment, so dust is filled once here (consistent with the
                 // DomainExpireBarrierFixMixin domain-end path); steady-state ticks only re-sync.
@@ -241,7 +265,7 @@ public class CooldownTrackerEvents {
             data.remove("jjkbrp_sukuna_incomplete_surehit_had_domain");
             data.remove("jjkbrp_sukuna_incomplete_surehit_active");
             data.remove("jjkbrp_sukuna_incomplete_fuga_used");
-        } else if (rewardFlag) {
+        } else if (rewardEnabled && rewardFlag) {
             // Req 4.3, 4.4: persisted reward past domain end — re-clear the Fuga cooldown effects
             // every tick so they stay absent for the full Unstable duration.
             ModNetworking.clearSukunaFugaCooldown(player);
@@ -338,6 +362,9 @@ public class CooldownTrackerEvents {
         Entity attacker = event.getSource().getDirectEntity();
         if (attacker instanceof ServerPlayer) {
             sp = (ServerPlayer)attacker;
+            if (!AddonGameRules.blackFlash(sp)) {
+                return;
+            }
             sp.getPersistentData().putLong("addon_bf_last_combat_tick", (long)sp.tickCount);
             MobEffectInstance zone = sp.getEffect((MobEffect)JujutsucraftModMobEffects.ZONE.get());
             boolean bfJustProcced = zone != null && zone.getDuration() >= 5990;
@@ -345,7 +372,7 @@ public class CooldownTrackerEvents {
             if (bfJustProcced) {
                 int currentNdCd;
                 // A confirmed Black Flash proc shaves time off the near-death cooldown so clutch plays feed back into survival tools.
-                if (!rangedHandled && (currentNdCd = sp.getPersistentData().getInt("jjkbrp_near_death_cd")) > 0) {
+                if (!rangedHandled && AddonGameRules.nearDeath(sp) && (currentNdCd = sp.getPersistentData().getInt("jjkbrp_near_death_cd")) > 0) {
                     int newCd = Math.max(0, currentNdCd - 120);
                     sp.getPersistentData().putInt("jjkbrp_near_death_cd", newCd);
                 }

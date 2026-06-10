@@ -4,6 +4,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.limb.LimbEntityRegistry;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -47,6 +48,10 @@ public final class YutaFakePlayerCommands {
     private static int spawn(CommandContext<CommandSourceStack> ctx, boolean rct) {
         CommandSourceStack source = ctx.getSource();
         ServerLevel level = source.getLevel();
+        if (!AddonGameRules.yutaFakePlayer(level)) {
+            source.sendFailure(Component.literal("Yuta fake player spawning is disabled by gamerule."));
+            return 0;
+        }
         double techniqueId = DoubleArgumentType.getDouble(ctx, "techniqueId");
         YutaFakePlayerEntity fake = new YutaFakePlayerEntity(LimbEntityRegistry.YUTA_FAKE_PLAYER.get(), level);
         Vec3 pos = source.getPosition();

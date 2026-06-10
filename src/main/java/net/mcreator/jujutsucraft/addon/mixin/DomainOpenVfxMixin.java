@@ -1,6 +1,7 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
 import java.lang.reflect.Method;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.mixin.DomainMasteryMixin;
 import net.mcreator.jujutsucraft.procedures.DomainExpansionCreateBarrierProcedure;
 import net.minecraft.nbt.CompoundTag;
@@ -39,6 +40,9 @@ public class DomainOpenVfxMixin {
             return;
         }
         ServerLevel serverLevel = (ServerLevel)world;
+        if (!AddonGameRules.domainOpenVfx(serverLevel)) {
+            return;
+        }
         if (!(entity instanceof Player)) {
             return;
         }

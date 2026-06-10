@@ -3,6 +3,7 @@ package net.mcreator.jujutsucraft.addon.mixin;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryProperties;
 import net.mcreator.jujutsucraft.addon.ModNetworking;
@@ -63,6 +64,9 @@ public class DomainExpireBarrierFixMixin {
         if (world.isClientSide()) {
             return;
         }
+        if (!AddonGameRules.domainBarrierFixes(world)) {
+            return;
+        }
         CompoundTag nbt = entity.getPersistentData();
         nbt.putBoolean("jjkbrp_preserve_domain_runtime", nbt.getBoolean("Cover"));
         boolean failedBeforeHook = nbt.getBoolean("Failed");
@@ -106,6 +110,12 @@ public class DomainExpireBarrierFixMixin {
         }
         LivingEntity caster = (LivingEntity)entity;
         CompoundTag nbt = caster.getPersistentData();
+        boolean barrierFixes = AddonGameRules.domainBarrierFixes(world);
+        boolean domainMasteryEnabled = AddonGameRules.domainMastery(caster);
+        boolean sukunaRewardEnabled = AddonGameRules.sukunaFugaReward(caster);
+        if (!barrierFixes && !domainMasteryEnabled && !sukunaRewardEnabled) {
+            return;
+        }
         boolean forceClosedCleanup = nbt.getBoolean("jjkbrp_force_closed_cleanup");
         boolean failedBeforeHook = nbt.getBoolean("jjkbrp_was_failed");
         boolean defeatedBeforeHook = nbt.getBoolean("jjkbrp_was_domain_defeated");
@@ -119,7 +129,7 @@ public class DomainExpireBarrierFixMixin {
         }
 
         DomainExpireBarrierFixMixin.jjkbrp$clearTransientExpireState(nbt, false);
-        if (forceClosedCleanup) {
+        if (barrierFixes && forceClosedCleanup) {
             boolean rearmedDomainDefeated = defeatedBeforeHook || !failedBeforeHook;
             nbt.putBoolean("Failed", failedBeforeHook);
             nbt.putBoolean("DomainDefeated", rearmedDomainDefeated);
@@ -139,51 +149,53 @@ public class DomainExpireBarrierFixMixin {
             cy = casterAnchorY;
             cz = casterAnchorZ;
         }
-        List<DomainExpansionEntityEntity> entities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(cx - 1.5, cy - 1.5, cz - 1.5, cx + 1.5, cy + 1.5, cz + 1.5), e -> true);
-        if (entities.isEmpty()) {
-            double searchRange = 3.0;
-            if (nbt.contains("jjkbrp_base_domain_radius")) {
-                searchRange = nbt.getDouble("jjkbrp_base_domain_radius");
-                double radiusMul = nbt.getDouble("jjkbrp_radius_multiplier");
-                if (Math.abs(radiusMul) < 1.0E-4) {
-                    radiusMul = 1.0;
+        if (barrierFixes) {
+            List<DomainExpansionEntityEntity> entities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(cx - 1.5, cy - 1.5, cz - 1.5, cx + 1.5, cy + 1.5, cz + 1.5), e -> true);
+            if (entities.isEmpty()) {
+                double searchRange = 3.0;
+                if (nbt.contains("jjkbrp_base_domain_radius")) {
+                    searchRange = nbt.getDouble("jjkbrp_base_domain_radius");
+                    double radiusMul = nbt.getDouble("jjkbrp_radius_multiplier");
+                    if (Math.abs(radiusMul) < 1.0E-4) {
+                        radiusMul = 1.0;
+                    }
+                    searchRange *= Math.max(0.5, radiusMul);
                 }
-                searchRange *= Math.max(0.5, radiusMul);
+                entities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(cx - searchRange, cy - searchRange, cz - searchRange, cx + searchRange, cy + searchRange, cz + searchRange), e -> true);
             }
-            entities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(cx - searchRange, cy - searchRange, cz - searchRange, cx + searchRange, cy + searchRange, cz + searchRange), e -> true);
-        }
-        if (!entities.isEmpty()) {
-            DomainExpansionEntityEntity domainEnt = entities.stream()
-                    .filter(e -> DomainExpireBarrierFixMixin.jjkbrp$isCleanupOwnedBy(e, caster))
-                    .min(Comparator.comparingDouble(e -> e.distanceToSqr(cx, cy, cz)))
-                    .orElse(null);
-            if (domainEnt != null && !clashDefeatCleanup) {
-                // Clash loser expiry can overlap the winner center; delayed guarded sweeps below are safer than waking a nearby cleanup entity.
-                domainEnt.getPersistentData().putBoolean("Break", true);
-                domainEnt.getPersistentData().putDouble("cnt_life2", 0.0);
-                CompoundTag domainNBT = domainEnt.getPersistentData();
-                domainNBT.putDouble("range", finalRestoreRadius);
+            if (!entities.isEmpty()) {
+                DomainExpansionEntityEntity domainEnt = entities.stream()
+                        .filter(e -> DomainExpireBarrierFixMixin.jjkbrp$isCleanupOwnedBy(e, caster))
+                        .min(Comparator.comparingDouble(e -> e.distanceToSqr(cx, cy, cz)))
+                        .orElse(null);
+                if (domainEnt != null && !clashDefeatCleanup) {
+                    // Clash loser expiry can overlap the winner center; delayed guarded sweeps below are safer than waking a nearby cleanup entity.
+                    domainEnt.getPersistentData().putBoolean("Break", true);
+                    domainEnt.getPersistentData().putDouble("cnt_life2", 0.0);
+                    CompoundTag domainNBT = domainEnt.getPersistentData();
+                    domainNBT.putDouble("range", finalRestoreRadius);
+                }
+            } else if (!clashDefeatCleanup) {
+                double searchCx = cx;
+                double searchCy = cy;
+                double searchCz = cz;
+                double finalSearchRange = Math.max(1.0, finalRestoreRadius);
+                // If no cleanup entity is available immediately, retry a few ticks later and spawn a fallback cleanup entity if necessary.
+                sl.getServer().tell(new TickTask(sl.getServer().getTickCount() + 5, () -> {
+                    DomainExpansionEntityEntity spawned;
+                    List<DomainExpansionEntityEntity> retryEntities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(searchCx - finalSearchRange, searchCy - finalSearchRange, searchCz - finalSearchRange, searchCx + finalSearchRange, searchCy + finalSearchRange, searchCz + finalSearchRange), e -> true);
+                    if (retryEntities.isEmpty() && (spawned = DomainExpireBarrierFixMixin.jjkbrp$spawnCleanupEntity(sl, searchCx, searchCy, searchCz, finalSearchRange)) != null) {
+                        retryEntities = List.of(spawned);
+                    }
+                    for (DomainExpansionEntityEntity ent : retryEntities) {
+                        ent.getPersistentData().putBoolean("Break", true);
+                        ent.getPersistentData().putDouble("cnt_life2", 0.0);
+                        ent.getPersistentData().putDouble("range", finalSearchRange);
+                    }
+                }));
             }
-        } else if (!clashDefeatCleanup) {
-            double searchCx = cx;
-            double searchCy = cy;
-            double searchCz = cz;
-            double finalSearchRange = Math.max(1.0, finalRestoreRadius);
-            // If no cleanup entity is available immediately, retry a few ticks later and spawn a fallback cleanup entity if necessary.
-            sl.getServer().tell(new TickTask(sl.getServer().getTickCount() + 5, () -> {
-                DomainExpansionEntityEntity spawned;
-                List<DomainExpansionEntityEntity> retryEntities = sl.getEntitiesOfClass(DomainExpansionEntityEntity.class, new AABB(searchCx - finalSearchRange, searchCy - finalSearchRange, searchCz - finalSearchRange, searchCx + finalSearchRange, searchCy + finalSearchRange, searchCz + finalSearchRange), e -> true);
-                if (retryEntities.isEmpty() && (spawned = DomainExpireBarrierFixMixin.jjkbrp$spawnCleanupEntity(sl, searchCx, searchCy, searchCz, finalSearchRange)) != null) {
-                    retryEntities = List.of(spawned);
-                }
-                for (DomainExpansionEntityEntity ent : retryEntities) {
-                    ent.getPersistentData().putBoolean("Break", true);
-                    ent.getPersistentData().putDouble("cnt_life2", 0.0);
-                    ent.getPersistentData().putDouble("range", finalSearchRange);
-                }
-            }));
         }
-        if (clashDefeatCleanup) {
+        if (barrierFixes && clashDefeatCleanup) {
             DomainExpireBarrierFixMixin.jjkbrp$clearClashDefeatExpireState(nbt);
             return;
         }
@@ -205,7 +217,7 @@ public class DomainExpireBarrierFixMixin {
         // skips the grant. The grant itself is idempotent (a boolean reward flag, a fixed dust fill
         // to 200, and an idempotent cooldown clear), so the reward is granted exactly once and the
         // surehit flags are cleared exactly once regardless of ordering.
-        if (entity instanceof ServerPlayer) {
+        if (sukunaRewardEnabled && entity instanceof ServerPlayer) {
             ServerPlayer sp = (ServerPlayer)entity;
             // "A surehit domain was active" is carried by the session/had_domain flags (set together
             // at activation and re-asserted per tick while the shrine is live). Mirror the per-tick
@@ -271,12 +283,12 @@ public class DomainExpireBarrierFixMixin {
         nbt.remove("jjkbrp_caster_y_at_cast");
         nbt.remove("jjkbrp_caster_z_at_cast");
         nbt.remove("jjkbrp_barrier_refinement");
-        if (forceClosedCleanup) {
+        if (barrierFixes && forceClosedCleanup) {
             DomainExpireBarrierFixMixin.jjkbrp$scheduleForceClosedCleanupFlagClear(sl, caster.getUUID(), 80);
         } else {
             nbt.remove("jjkbrp_force_closed_cleanup");
         }
-        if (caster instanceof Player) {
+        if (AddonGameRules.domainPropertyEffects(caster) && caster instanceof Player) {
             Player player = (Player)caster;
             player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY, null).ifPresent(data -> {
                 if (data.getPropertyLevel(DomainMasteryProperties.RCT_HEAL_BOOST) >= DomainMasteryProperties.RCT_HEAL_BOOST.getMaxLevel()) {
@@ -290,7 +302,7 @@ public class DomainExpireBarrierFixMixin {
         // tick-34 trigger again. Set by ShrineWombActivePhaseGuardMixin when it remaps cnt1
         // to 34 on the real end-of-build tick.
         nbt.remove("jjkbrp_active_phase_trigger_fired");
-        if (!hadOpenForm || hadBarrierBlocks) {
+        if (barrierFixes && (!hadOpenForm || hadBarrierBlocks)) {
             double sweepRadius = finalRestoreRadius;
             if (!nbt.contains("x_pos_doma")) {
                 sweepRadius = Math.max(sweepRadius, 16.0);
@@ -299,7 +311,7 @@ public class DomainExpireBarrierFixMixin {
             DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, caster.getUUID().toString(), 20);
             DomainExpireBarrierFixMixin.jjkbrp$scheduleFinalRestoreSweep(sl, cx, cy, cz, sweepRadius, casterAnchorX, casterAnchorY, casterAnchorZ, hasCasterAnchor, caster.getUUID().toString(), 60);
         }
-        if (nbt.getBoolean("jjkbrp_adopted_barrier")) {
+        if (barrierFixes && nbt.getBoolean("jjkbrp_adopted_barrier")) {
             double acx = nbt.getDouble("jjkbrp_adopted_cx");
             double acy = nbt.getDouble("jjkbrp_adopted_cy");
             double acz = nbt.getDouble("jjkbrp_adopted_cz");

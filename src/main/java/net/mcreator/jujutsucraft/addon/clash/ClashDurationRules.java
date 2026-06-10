@@ -1,6 +1,8 @@
 package net.mcreator.jujutsucraft.addon.clash;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.util.DomainForm;
+import net.minecraft.world.level.LevelAccessor;
 
 public final class ClashDurationRules {
     private ClashDurationRules() {
@@ -28,6 +30,11 @@ public final class ClashDurationRules {
             return 260;
         }
         return 300;
+    }
+
+    public static int durationTicks(LevelAccessor world, DomainForm a, DomainForm b) {
+        int override = AddonGameRules.nonNegativeInt(world, AddonGameRules.DOMAIN_CLASH_DURATION_TICKS, 0);
+        return override > 0 ? override : durationTicks(a, b);
     }
 
     private static boolean has(DomainForm a, DomainForm b, DomainForm x, DomainForm y) {

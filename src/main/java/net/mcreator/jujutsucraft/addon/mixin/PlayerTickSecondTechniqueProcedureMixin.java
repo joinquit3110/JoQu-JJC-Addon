@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.yuta.YutaCopyStore;
 import net.mcreator.jujutsucraft.init.JujutsucraftModItems;
 import net.mcreator.jujutsucraft.procedures.PlayerTickSecondTechniqueProcedure;
@@ -20,7 +21,7 @@ public class PlayerTickSecondTechniqueProcedureMixin {
     private static void jjkbrp$blockActiveYutaLoudspeakerSecondTechnique(LevelAccessor world, double x, double y, double z, Entity entity, CallbackInfo ci) {
         if (entity instanceof ServerPlayer) {
             ServerPlayer player = (ServerPlayer)entity;
-            if (YutaCopyStore.isActiveYuta(player) && (player.getMainHandItem().is(JujutsucraftModItems.LOUDSPEAKER.get()) || player.getOffhandItem().is(JujutsucraftModItems.LOUDSPEAKER.get()))) {
+            if (AddonGameRules.yutaCopy(player) && YutaCopyStore.isActiveYuta(player) && (player.getMainHandItem().is(JujutsucraftModItems.LOUDSPEAKER.get()) || player.getOffhandItem().is(JujutsucraftModItems.LOUDSPEAKER.get()))) {
                 YutaCopyStore.cleanupVanillaPlayerCopy(player);
                 ci.cancel();
             }

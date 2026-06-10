@@ -3,6 +3,7 @@ package net.mcreator.jujutsucraft.addon.mixin;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.DomainExpansionEntityEntity;
@@ -45,8 +46,13 @@ public abstract class DomainExpansionBattleMixin {
         if (player.level().isClientSide()) {
             return;
         }
+        if (!AddonGameRules.domainMastery(player)) {
+            return;
+        }
         // Normalize cleanup entities on both entry and exit so battle ticks never leave behind duplicate or stale cleanup markers.
-        DomainExpansionBattleMixin.jjkbrp$normalizeCleanupEntities(world, player);
+        if (AddonGameRules.domainBarrierFixes(world)) {
+            DomainExpansionBattleMixin.jjkbrp$normalizeCleanupEntities(world, player);
+        }
         player.getCapability(DomainMasteryCapabilityProvider.DOMAIN_MASTERY_CAPABILITY).ifPresent(data -> player.getPersistentData().putInt("jjkbrp_domain_form_runtime", data.getDomainTypeSelected()));
     }
 
@@ -67,6 +73,9 @@ public abstract class DomainExpansionBattleMixin {
         }
         Player player = (Player)entity;
         if (player.level().isClientSide()) {
+            return;
+        }
+        if (!AddonGameRules.domainBarrierFixes(world)) {
             return;
         }
         // Normalize cleanup entities on both entry and exit so battle ticks never leave behind duplicate or stale cleanup markers.

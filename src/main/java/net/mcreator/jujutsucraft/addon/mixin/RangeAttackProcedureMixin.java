@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementProgress;
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.BlueRedPurpleNukeMod;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
 import net.mcreator.jujutsucraft.entity.BlueEntity;
@@ -112,17 +113,20 @@ public class RangeAttackProcedureMixin {
         if (entity == null) {
             return;
         }
+        if (!AddonGameRules.addonEnabled(world)) {
+            return;
+        }
         CompoundTag data = entity.getPersistentData();
         LivingEntity domainStateSource = RangeAttackProcedureMixin.jjkblueredpurple$resolveDomainStateSource(world, entity, data);
         CompoundTag domainStateData = domainStateSource != null ? domainStateSource.getPersistentData() : data;
         boolean sourceOpen = domainStateSource != null && DomainAddonUtils.isOpenDomainState(domainStateSource);
         // Incomplete domains intentionally lose sure-hit behavior, so the entire ranged attack procedure is cancelled before the base logic can fire.
-        if (RangeAttackProcedureMixin.jjkblueredpurple$isIncompleteDomainAttack(world, entity, data)) {
+        if (domainStateSource != null && AddonGameRules.domainForms(domainStateSource) && RangeAttackProcedureMixin.jjkblueredpurple$isIncompleteDomainAttack(world, entity, data)) {
             RangeAttackProcedureMixin.jjkblueredpurple$replayIncompleteShrineVisualHit(world, x, y, z, entity, data, domainStateSource);
             ci.cancel();
             return;
         }
-        if (data.getBoolean("DomainAttack") && RangeAttackProcedureMixin.jjkblueredpurple$isSpecialSukunaIncompleteSureHit(domainStateSource) && !data.getBoolean("jjkbrp_sukuna_incomplete_surehit_corrected")) {
+        if (data.getBoolean("DomainAttack") && domainStateSource != null && AddonGameRules.sukunaIncompleteSurehit(domainStateSource) && RangeAttackProcedureMixin.jjkblueredpurple$isSpecialSukunaIncompleteSureHit(domainStateSource) && !data.getBoolean("jjkbrp_sukuna_incomplete_surehit_corrected")) {
             CompoundTag ownerNbt = domainStateSource.getPersistentData();
             Vec3 center = DomainAddonUtils.getDomainCenter((Entity)domainStateSource);
             double range = RangeAttackProcedureMixin.jjkblueredpurple$getSukunaIncompleteSureHitRange(world, domainStateSource);
@@ -138,11 +142,11 @@ public class RangeAttackProcedureMixin {
         // Temporarily swap the shared domain radius so all downstream range checks operate on the mastery-scaled radius instead of the global default.
         RangeAttackProcedureMixin.jjkblueredpurple$scaleDomainAttackRadius(world, entity);
         JJKBRP$protectedOwner.remove();
-        if (entity instanceof PurpleEntity && (ownerPlayer = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, data.getString("OWNER_UUID"))) != null && RangeAttackProcedureMixin.jjkblueredpurple$isInfinityActive(ownerPlayer) && !ownerPlayer.isInvulnerable()) {
+        if (entity instanceof PurpleEntity && (ownerPlayer = RangeAttackProcedureMixin.jjkblueredpurple$resolvePlayerOwner(world, data.getString("OWNER_UUID"))) != null && AddonGameRules.gojoPurpleFusion(ownerPlayer) && RangeAttackProcedureMixin.jjkblueredpurple$isInfinityActive(ownerPlayer) && !ownerPlayer.isInvulnerable()) {
             ownerPlayer.setInvulnerable(true);
             JJKBRP$protectedOwner.set(ownerPlayer);
         }
-        if (data.getBoolean("DomainAttack") && sourceOpen && !data.getBoolean("jjkbrp_surehit_corrected")) {
+        if (data.getBoolean("DomainAttack") && sourceOpen && domainStateSource != null && AddonGameRules.domainForms(domainStateSource) && !data.getBoolean("jjkbrp_surehit_corrected")) {
             double surehitMul = domainStateData.getDouble("jjkbrp_open_surehit_multiplier");
             double ceMul = domainStateData.getDouble("jjkbrp_open_ce_drain_multiplier");
             if (surehitMul <= 0.0) {
@@ -199,7 +203,7 @@ public class RangeAttackProcedureMixin {
         }
         int bfCd = data.getInt(KEY_BF_CD);
         // The addon suppresses or boosts `cnt6` only for the current execution window, then restores the original value on return.
-        if (!data.getBoolean(KEY_CNT6_SUPPRESSED)) {
+        if (AddonGameRules.blackFlash(entity) && !data.getBoolean(KEY_CNT6_SUPPRESSED)) {
             double liveCnt6 = data.getDouble("cnt6");
             double domainBonus = Math.max(0.0, data.getDouble("jjkbrp_domain_bf_bonus"));
             ServerPlayer guaranteeOwner = RangeAttackProcedureMixin.jjkblueredpurple$resolveGuaranteedBlackFlashOwner(world, entity, data);
@@ -268,7 +272,7 @@ public class RangeAttackProcedureMixin {
             data.remove(KEY_RANK_DAMAGE_BACKUP);
             data.putBoolean(KEY_RANK_DAMAGE_APPLIED, false);
         }
-        if (entity instanceof LivingEntity) {
+        if (entity instanceof LivingEntity && AddonGameRules.blackFlash(entity)) {
             boolean bfJustProcced;
             LivingEntity le = (LivingEntity)entity;
             ServerPlayer forcedOwner = RangeAttackProcedureMixin.jjkblueredpurple$resolveForcedBlackFlashOwner(world, data);
@@ -291,7 +295,7 @@ public class RangeAttackProcedureMixin {
                 ServerPlayer progressPlayer = forcedOwner != null ? forcedOwner : (le instanceof ServerPlayer ? (ServerPlayer)le : null);
                 RangeAttackProcedureMixin.jjkblueredpurple$notifyBlackFlashProgress(progressPlayer, newTotalHits);
                 int ndCd = counterData.getInt("jjkbrp_near_death_cd");
-                if (ndCd > 0) {
+                if (ndCd > 0 && AddonGameRules.nearDeath(procSource)) {
                     counterData.putInt("jjkbrp_near_death_cd", Math.max(0, ndCd - 600));
                 }
                 // Apply the short ranged Black Flash cooldown only to random/addon-boosted procs. Timed guaranteed Black Flash must ignore this cooldown.
@@ -323,7 +327,7 @@ public class RangeAttackProcedureMixin {
     @Unique
     private static void jjkblueredpurple$scaleDomainAttackRadius(LevelAccessor world, Entity entity) {
         JJKBRP$scaledDomainRadiusOriginal.remove();
-        if (world.isClientSide() || entity == null) {
+        if (world.isClientSide() || entity == null || !AddonGameRules.domainRadiusRules(world)) {
             return;
         }
         LivingEntity radiusSource = DomainAddonUtils.resolveOwnerEntity(world, entity);
@@ -374,6 +378,9 @@ public class RangeAttackProcedureMixin {
             return false;
         }
         LivingEntity domainStateSource = RangeAttackProcedureMixin.jjkblueredpurple$resolveDomainStateSource(world, entity, data);
+        if (domainStateSource == null || !AddonGameRules.domainForms(domainStateSource)) {
+            return false;
+        }
         if (RangeAttackProcedureMixin.jjkblueredpurple$isSpecialSukunaIncompleteSureHit(domainStateSource)) {
             return false;
         }
@@ -382,6 +389,9 @@ public class RangeAttackProcedureMixin {
 
     @Unique
     private static boolean jjkblueredpurple$isSpecialSukunaIncompleteSureHit(LivingEntity domainStateSource) {
+        if (domainStateSource == null || !AddonGameRules.sukunaIncompleteSurehit(domainStateSource)) {
+            return false;
+        }
         if (!DomainAddonUtils.isActiveSukunaIncompleteShrine(domainStateSource)) {
             return false;
         }
@@ -398,7 +408,7 @@ public class RangeAttackProcedureMixin {
         }
         double baseRadius = DomainAddonUtils.getActualDomainRadius(world, domainStateSource.getPersistentData());
         double openMultiplier = Math.max(2.5, domainStateSource.getPersistentData().getDouble("jjkbrp_open_range_multiplier"));
-        return baseRadius * openMultiplier;
+        return baseRadius * openMultiplier * AddonGameRules.percent(world, AddonGameRules.SUKUNA_INCOMPLETE_SUREHIT_RANGE_PERCENT, 100);
     }
 
     @Unique
@@ -424,7 +434,7 @@ public class RangeAttackProcedureMixin {
 
     @Unique
     private static boolean jjkblueredpurple$isShrineDomainSource(LivingEntity domainStateSource) {
-        if (!(domainStateSource instanceof Player)) {
+        if (!(domainStateSource instanceof Player) || !AddonGameRules.sukunaIncompleteSurehit(domainStateSource)) {
             return false;
         }
         CompoundTag nbt = domainStateSource.getPersistentData();
@@ -573,6 +583,9 @@ public class RangeAttackProcedureMixin {
     @Unique
     private static void jjkblueredpurple$applyRankDamageScale(LevelAccessor world, Entity entity, CompoundTag data) {
         if (data == null || entity == null || data.getBoolean(KEY_RANK_DAMAGE_APPLIED) || !data.contains("Damage")) {
+            return;
+        }
+        if (!AddonGameRules.enabled(world, AddonGameRules.GOJO_ENABLED, AddonGameRules.GOJO_RANK_DAMAGE_SCALING_ENABLED)) {
             return;
         }
         if (entity instanceof RedEntity || entity instanceof BlueEntity || entity instanceof PurpleEntity) {
@@ -768,6 +781,9 @@ public class RangeAttackProcedureMixin {
         if (player == null || player.level().isClientSide()) {
             return;
         }
+        if (!AddonGameRules.enabled(player, AddonGameRules.BLACK_FLASH_ENABLED, AddonGameRules.BLACK_FLASH_MASTERY_ENABLED)) {
+            return;
+        }
         CompoundTag data = player.getPersistentData();
         if (data.getBoolean("addon_bf_mastery") || RangeAttackProcedureMixin.jjkblueredpurple$hasAdvancement(player, "jjkblueredpurple:black_flash_mastery")) {
             return;
@@ -813,7 +829,8 @@ public class RangeAttackProcedureMixin {
     private static int jjkblueredpurple$getBlackFlashMasteryThreshold(ServerPlayer player) {
         JujutsucraftModVariables.PlayerVariables vars = (JujutsucraftModVariables.PlayerVariables)player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         double activeTech = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
-        return (int)Math.round(activeTech) == 21 ? 200 : 500;
+        int base = (int)Math.round(activeTech) == 21 ? 200 : 500;
+        return Math.max(1, (int)Math.round(base * AddonGameRules.percent(player, AddonGameRules.BLACK_FLASH_MASTERY_THRESHOLD_PERCENT, 100)));
     }
 
     /**

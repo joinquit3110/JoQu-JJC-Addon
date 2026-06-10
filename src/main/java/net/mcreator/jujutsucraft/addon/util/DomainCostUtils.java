@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.util;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.init.JujutsucraftModItems;
 import net.mcreator.jujutsucraft.init.JujutsucraftModMobEffects;
@@ -79,6 +80,10 @@ public final class DomainCostUtils {
         };
     }
 
+    public static double formMultiplier(Player player, int form) {
+        return AddonGameRules.domainFormCostMultiplier(player, form);
+    }
+
     /**
      * Resolves the base technique cost before the domain form multiplier is applied.
      *
@@ -134,6 +139,6 @@ public final class DomainCostUtils {
      */
     public static double resolveExpectedDomainCastCost(Player player, JujutsucraftModVariables.PlayerVariables vars) {
         double baseCost = DomainCostUtils.resolveTechniqueBaseCost(player, vars);
-        return Math.max(0.0, baseCost * DomainCostUtils.formMultiplier(DomainCostUtils.resolveEffectiveForm(player)));
+        return Math.max(0.0, baseCost * DomainCostUtils.formMultiplier(player, DomainCostUtils.resolveEffectiveForm(player)));
     }
 }

@@ -1,5 +1,6 @@
 package net.mcreator.jujutsucraft.addon.mixin;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.DomainMasteryCapabilityProvider;
 import net.mcreator.jujutsucraft.addon.DomainMasteryData;
 import net.mcreator.jujutsucraft.addon.util.DomainAddonUtils;
@@ -35,6 +36,9 @@ public class DomainEffectStartDurationMixin {
         }
         Player player = (Player)entity;
         if (player.level().isClientSide()) {
+            return;
+        }
+        if (!AddonGameRules.domainDurationRules(player)) {
             return;
         }
         CompoundTag nbt = player.getPersistentData();
@@ -77,7 +81,7 @@ public class DomainEffectStartDurationMixin {
         double openDurationMultiplier;
         boolean openEffect;
         int baseDuration = DomainEffectStartDurationMixin.jjkbrp$resolveBaseDurationTicks(player);
-        int finalDuration = data.resolveFinalDurationTicks(baseDuration);
+        int finalDuration = Math.max(1, (int)Math.round((double)data.resolveFinalDurationTicks(baseDuration) * AddonGameRules.percent(player, AddonGameRules.DOMAIN_DURATION_PERCENT, 100)));
         boolean bl = openEffect = liveInstance != null && liveInstance.getAmplifier() > 0 || player.getPersistentData().getBoolean("jjkbrp_open_form_active");
         if (openEffect && (openDurationMultiplier = player.getPersistentData().getDouble("jjkbrp_open_duration_multiplier")) > 0.0) {
             finalDuration = Math.max(1, (int)Math.round((double)finalDuration * openDurationMultiplier));

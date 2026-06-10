@@ -2,6 +2,7 @@ package net.mcreator.jujutsucraft.addon.clash;
 
 import java.util.Objects;
 
+import net.mcreator.jujutsucraft.addon.AddonGameRules;
 import net.mcreator.jujutsucraft.addon.clash.detect.ClashDetector;
 import net.mcreator.jujutsucraft.addon.clash.resolve.ClashResolver;
 import net.minecraft.server.MinecraftServer;
@@ -86,6 +87,10 @@ public final class ClashTickHandler {
         }
         long serverTick = server.getTickCount();
         for (ServerLevel level : server.getAllLevels()) {
+            if (!AddonGameRules.domainClash(level)) {
+                resolver.cancelSessionsForLevel(level);
+                continue;
+            }
             detector.tick(level, serverTick);
             resolver.tickSessions(level, serverTick);
         }

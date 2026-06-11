@@ -823,13 +823,13 @@ public class RangeAttackProcedureMixin {
     /**
      * Resolves the current player's Black Flash mastery threshold, including Yuji's reduced requirement.
      * @param player player instance involved in this operation.
-     * @return 200 for Yuji, otherwise 500.
+     * @return 50 for Yuji, otherwise 100.
      */
     @Unique
     private static int jjkblueredpurple$getBlackFlashMasteryThreshold(ServerPlayer player) {
         JujutsucraftModVariables.PlayerVariables vars = (JujutsucraftModVariables.PlayerVariables)player.getCapability(JujutsucraftModVariables.PLAYER_VARIABLES_CAPABILITY, null).orElse(new JujutsucraftModVariables.PlayerVariables());
         double activeTech = vars.SecondTechnique ? vars.PlayerCurseTechnique2 : vars.PlayerCurseTechnique;
-        int base = (int)Math.round(activeTech) == 21 ? 200 : 500;
+        int base = (int)Math.round(activeTech) == 21 ? 50 : 100;
         return Math.max(1, (int)Math.round(base * AddonGameRules.percent(player, AddonGameRules.BLACK_FLASH_MASTERY_THRESHOLD_PERCENT, 100)));
     }
 
